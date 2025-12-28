@@ -3,7 +3,6 @@ package my.cheysoff.feature_auth
 import android.content.res.Configuration
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,16 +11,17 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.material3.Text
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -29,10 +29,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.fragment.app.FragmentActivity
 import my.cheysoff.core_ui.theme.NotesTheme
 
 @Composable
-fun AuthScreen() {
+fun AuthScreen(
+    state: AuthScreenState,
+    onIntentReceived: (AuthScreenIntent) -> Unit,
+) {
+    // todo fix status bar
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background
@@ -45,7 +50,11 @@ fun AuthScreen() {
             contentScale = ContentScale.Crop
         )
 
-        Column(modifier = Modifier.fillMaxSize().padding(4.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(vertical = 16.dp)
+        ) {
             Column(
                 modifier = Modifier
                     .weight(1f)
@@ -81,29 +90,53 @@ fun AuthScreen() {
                     color = MaterialTheme.colorScheme.onBackground
                 )
             }
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth(),
-                verticalArrangement = Arrangement.Bottom,
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                AuthButton(
-                    text = "Login with Biometrics",
-                    iconRes = R.drawable.fingerprint,
-                    onClick = { /* TODO */ }
-                )
-                Text(
-                    text = "or",
-                    style = MaterialTheme.typography.titleMedium,
-                    textAlign = TextAlign.Center,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-                AuthButton(
-                    text = "Login with Pin",
-                    iconRes = R.drawable.pin_code,
-                    onClick = { /* TODO */ }
-                )
-            }
+            AuthOptions(
+                state,
+                onIntentReceived
+            )
+        }
+    }
+}
+
+@Composable
+private fun AuthOptions(
+    state: AuthScreenState,
+    onIntentReceived: (AuthScreenIntent) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        if (state.areBiometricsEnabled) {
+            AuthButton(
+                text = "Login with Biometrics",
+                iconRes = R.drawable.fingerprint,
+                onClick = {
+                    (context as? FragmentActivity)?.let { activity ->
+                        onIntentReceived(AuthScreenIntent.BiometricsLoginClickIntent(activity))
+                    }
+                }
+            )
+        }
+
+        if (state.areBiometricsEnabled && state.isPinEnabled) {
+            Text(
+                text = "or",
+                style = MaterialTheme.typography.titleMedium,
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+        }
+
+        if (state.isPinEnabled) {
+            AuthButton(
+                text = "Login with Pin",
+                iconRes = R.drawable.pin_code,
+                onClick = { onIntentReceived(AuthScreenIntent.PinLoginClickIntent) }
+            )
         }
     }
 }
@@ -144,12 +177,13 @@ private fun AuthButton(
     }
 }
 
-@Preview(showBackground = true, showSystemUi = true,
+@Preview(
+    showBackground = true, showSystemUi = true,
     uiMode = Configuration.UI_MODE_NIGHT_NO
 )
 @Composable
 fun AuthScreenPreview() {
     NotesTheme(darkTheme = false) {
-        AuthScreen()
+        AuthScreen(AuthScreenState(), {})
     }
 }

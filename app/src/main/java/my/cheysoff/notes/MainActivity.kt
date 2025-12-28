@@ -1,43 +1,31 @@
 package my.cheysoff.notes
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.fragment.app.FragmentActivity
+import androidx.hilt.navigation.compose.hiltViewModel
+import dagger.hilt.android.AndroidEntryPoint
 import my.cheysoff.core_ui.theme.NotesTheme
 import my.cheysoff.feature_auth.AuthScreen
+import my.cheysoff.feature_auth.AuthViewModel
 
-class MainActivity : ComponentActivity() {
+// TODO: Change to ComponentActivity once biometric prompt issue is resolved.
+// Using FragmentActivity as a workaround for biometrics.
+// See issue: https://issuetracker.google.com/issues/178855209
+@AndroidEntryPoint
+class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            NotesTheme {
-                AuthScreen()
+            NotesTheme(darkTheme = false) {
+                val viewModel: AuthViewModel = hiltViewModel()
+                val state by viewModel.state.collectAsState()
+                AuthScreen(state = state, onIntentReceived = viewModel::processIntent)
             }
         }
-    }
-}
-
-@Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-    Text(
-        text = "Hello $name!",
-        modifier = modifier
-    )
-}
-
-@Preview(showBackground = true)
-@Composable
-fun GreetingPreview() {
-    NotesTheme {
-        Greeting("Android")
     }
 }
