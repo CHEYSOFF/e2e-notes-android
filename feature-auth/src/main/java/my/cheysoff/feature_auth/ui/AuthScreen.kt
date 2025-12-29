@@ -30,6 +30,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
+import my.cheysoff.core_ui.theme.LocalSpacing
 import my.cheysoff.core_ui.theme.NotesTheme
 import my.cheysoff.feature_auth.R
 import my.cheysoff.feature_auth.model.AuthScreenIntent
@@ -40,6 +41,8 @@ fun AuthScreen(
     state: AuthScreenState,
     onIntentReceived: (AuthScreenIntent) -> Unit,
 ) {
+    val spacing = LocalSpacing.current
+
     // todo fix status bar
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -56,7 +59,9 @@ fun AuthScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(vertical = 16.dp)
+                .padding(
+                    vertical = spacing.screenVertical, horizontal = spacing.screenHorizontal
+                )
         ) {
             Column(
                 modifier = Modifier
@@ -70,7 +75,7 @@ fun AuthScreen(
                     contentDescription = "Application Logo",
                     modifier = Modifier
                         .size(120.dp)
-                        .padding(bottom = 24.dp),
+                        .padding(bottom = spacing.logoBottomMargin),
                     colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.primary),
                 )
                 Text(
@@ -88,14 +93,12 @@ fun AuthScreen(
                     },
                     style = MaterialTheme.typography.titleLarge,
                     textAlign = TextAlign.Center,
-                    modifier = Modifier
-                        .padding(top = 8.dp),
+                    modifier = Modifier.padding(top = spacing.interItemSpacingVertical),
                     color = MaterialTheme.colorScheme.onBackground
                 )
             }
             AuthOptions(
-                state,
-                onIntentReceived
+                state, onIntentReceived
             )
         }
     }
@@ -108,10 +111,11 @@ private fun AuthOptions(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val spacing = LocalSpacing.current
     Column(
         modifier = modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        verticalArrangement = Arrangement.spacedBy(spacing.buttonGroupSpacing)
     ) {
         if (state.areBiometricsEnabled) {
             AuthButton(
@@ -121,8 +125,7 @@ private fun AuthOptions(
                     (context as? FragmentActivity)?.let { activity ->
                         onIntentReceived(AuthScreenIntent.BiometricsLoginClickIntent(activity))
                     }
-                }
-            )
+                })
         }
 
         if (state.areBiometricsEnabled && state.isPinEnabled) {
@@ -138,8 +141,7 @@ private fun AuthOptions(
             AuthButton(
                 text = "Login with Pin",
                 iconRes = R.drawable.pin_code,
-                onClick = { onIntentReceived(AuthScreenIntent.PinLoginClickIntent) }
-            )
+                onClick = { onIntentReceived(AuthScreenIntent.PinLoginClickIntent) })
         }
     }
 }
@@ -151,11 +153,12 @@ private fun AuthButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val spacing = LocalSpacing.current
     Button(
         onClick = onClick,
         modifier = modifier
             .fillMaxWidth()
-            .padding(12.dp),
+            .padding(horizontal = spacing.buttonContentPadding),
         colors = ButtonDefaults.buttonColors(
             containerColor = MaterialTheme.colorScheme.primary,
             contentColor = MaterialTheme.colorScheme.onPrimary
@@ -172,8 +175,7 @@ private fun AuthButton(
             Image(
                 painter = painterResource(id = iconRes),
                 contentDescription = text,
-                modifier = Modifier
-                    .padding(start = 8.dp),
+                modifier = Modifier.padding(start = spacing.interItemSpacingHorizontal),
                 colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.onPrimary),
             )
         }
