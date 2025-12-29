@@ -1,4 +1,4 @@
-package my.cheysoff.feature_auth
+package my.cheysoff.feature_auth.util
 
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat

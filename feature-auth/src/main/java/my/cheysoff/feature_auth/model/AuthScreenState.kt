@@ -1,6 +1,6 @@
-package my.cheysoff.feature_auth
+package my.cheysoff.feature_auth.model
 
-data class AuthScreenState (
+data class AuthScreenState(
     val hasAccount: Boolean = false,
     val areBiometricsEnabled: Boolean = false,
     val isPinEnabled: Boolean = false,
