@@ -1,4 +1,4 @@
-package my.cheysoff.feature_auth
+package my.cheysoff.feature_auth.ui
 
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.ViewModel
@@ -9,6 +9,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import my.cheysoff.core_crypto.domain.AuthRepository
 import my.cheysoff.core_crypto.domain.BiometricAuthenticationStatus
+import my.cheysoff.feature_auth.model.AuthScreenIntent
+import my.cheysoff.feature_auth.model.AuthScreenState
+import my.cheysoff.feature_auth.util.BiometricAuthManager
 import javax.inject.Inject
 
 @HiltViewModel

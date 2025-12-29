@@ -1,4 +1,4 @@
-package my.cheysoff.feature_auth
+package my.cheysoff.feature_auth.ui
 
 import android.content.res.Configuration
 import androidx.annotation.DrawableRes
@@ -31,6 +31,9 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
 import my.cheysoff.core_ui.theme.NotesTheme
+import my.cheysoff.feature_auth.R
+import my.cheysoff.feature_auth.model.AuthScreenIntent
+import my.cheysoff.feature_auth.model.AuthScreenState
 
 @Composable
 fun AuthScreen(

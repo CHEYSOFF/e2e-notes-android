@@ -1,4 +1,4 @@
-package my.cheysoff.notes
+package my.cheysoff.notes.ui
 
 import android.os.Bundle
 import androidx.activity.compose.setContent
@@ -9,8 +9,8 @@ import androidx.fragment.app.FragmentActivity
 import androidx.hilt.navigation.compose.hiltViewModel
 import dagger.hilt.android.AndroidEntryPoint
 import my.cheysoff.core_ui.theme.NotesTheme
-import my.cheysoff.feature_auth.AuthScreen
-import my.cheysoff.feature_auth.AuthViewModel
+import my.cheysoff.feature_auth.ui.AuthScreen
+import my.cheysoff.feature_auth.ui.AuthViewModel
 
 // TODO: Change to ComponentActivity once biometric prompt issue is resolved.
 // Using FragmentActivity as a workaround for biometrics.
