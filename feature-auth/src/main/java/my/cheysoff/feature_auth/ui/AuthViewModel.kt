@@ -4,8 +4,10 @@ import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import my.cheysoff.core_crypto.domain.AuthRepository
 import my.cheysoff.core_crypto.domain.BiometricAuthenticationStatus
@@ -14,12 +16,19 @@ import my.cheysoff.feature_auth.model.AuthScreenState
 import my.cheysoff.feature_auth.util.BiometricAuthManager
 import javax.inject.Inject
 
+sealed class AuthEvent {
+    object NavigationToNotesList : AuthEvent()
+}
+
 @HiltViewModel
 class AuthViewModel @Inject constructor(
     private val authRepository: AuthRepository
 ) : ViewModel() {
     private val _state = MutableStateFlow(AuthScreenState(areBiometricsEnabled = true)) // todo fix
     val state = _state.asStateFlow()
+
+    private val _events = Channel<AuthEvent>(Channel.BUFFERED)
+    val events = _events.receiveAsFlow()
 
     fun processIntent(intent: AuthScreenIntent) {
         when (intent) {
@@ -55,8 +64,8 @@ class AuthViewModel @Inject constructor(
                 onSuccess = {
                     viewModelScope.launch {
                         _state.emit(_state.value.copy(isLoading = false))
+                        _events.send(AuthEvent.NavigationToNotesList)
                     }
-                    // todo navigator
                 },
                 onFailed = {
                     viewModelScope.launch {

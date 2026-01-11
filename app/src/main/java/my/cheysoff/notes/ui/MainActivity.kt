@@ -3,14 +3,10 @@ package my.cheysoff.notes.ui
 import android.os.Bundle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.fragment.app.FragmentActivity
-import androidx.hilt.navigation.compose.hiltViewModel
 import dagger.hilt.android.AndroidEntryPoint
 import my.cheysoff.core_ui.theme.NotesTheme
-import my.cheysoff.feature_auth.ui.AuthScreen
-import my.cheysoff.feature_auth.ui.AuthViewModel
+import my.cheysoff.notes.navigation.AppNavHost
 
 // TODO: Change to ComponentActivity once biometric prompt issue is resolved.
 // Using FragmentActivity as a workaround for biometrics.
@@ -21,10 +17,8 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            NotesTheme(darkTheme = false) {
-                val viewModel: AuthViewModel = hiltViewModel()
-                val state by viewModel.state.collectAsState()
-                AuthScreen(state = state, onIntentReceived = viewModel::processIntent)
+            NotesTheme(darkTheme = false) { // todo add light theme
+                AppNavHost()
             }
         }
     }
