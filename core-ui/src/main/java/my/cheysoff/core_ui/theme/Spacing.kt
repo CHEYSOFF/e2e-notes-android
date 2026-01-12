@@ -7,6 +7,7 @@ import androidx.compose.ui.unit.dp
 @Immutable
 data class Spacing(
     // --- Primitive Scale ---
+    val none: Dp = 0.dp,
     val xs: Dp = 4.dp,
     val s: Dp = 8.dp,
     val m: Dp = 16.dp,
@@ -19,7 +20,7 @@ data class Spacing(
     val screenHorizontal: Dp = m,
 
     /** Vertical padding applied to the top and bottom edges of a screen's content. */
-    val screenVertical: Dp = m,
+    val screenVertical: Dp = none,
 
     /** Spacing used between small elements inside a larger component, like a card. */
     val insideCardItemSpacing: Dp = xs,
