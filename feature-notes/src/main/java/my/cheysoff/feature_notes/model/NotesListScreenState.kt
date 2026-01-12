@@ -1,11 +1,11 @@
 package my.cheysoff.feature_notes.model
 
-import my.cheysoff.core_domain.FolderPreview
-import my.cheysoff.core_domain.NotePreview
+import androidx.compose.runtime.Immutable
 
+@Immutable
 data class NotesListScreenState(
-    val folderPreviews: List<FolderPreview> = emptyList(),
-    val notePreviews: List<NotePreview> = emptyList(),
+    val folderPreviews: List<FolderPreviewUi> = emptyList(),
+    val notePreviews: List<NotePreviewUi> = emptyList(),
     val isLoading: Boolean = true,
     val error: String? = null
 )
