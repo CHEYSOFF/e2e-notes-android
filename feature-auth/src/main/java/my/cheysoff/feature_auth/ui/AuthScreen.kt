@@ -14,7 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -43,11 +43,9 @@ fun AuthScreen(
 ) {
     val spacing = LocalSpacing.current
 
-    // todo fix status bar
-    Surface(
+    Scaffold(
         modifier = Modifier.fillMaxSize(),
-        color = MaterialTheme.colorScheme.background
-    ) {
+    ) { innerPadding ->
         Image(
             painter = painterResource(id = R.drawable.background),
             contentDescription = "Background",
@@ -59,6 +57,7 @@ fun AuthScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .padding(innerPadding)
                 .padding(
                     vertical = spacing.screenVertical, horizontal = spacing.screenHorizontal
                 )
