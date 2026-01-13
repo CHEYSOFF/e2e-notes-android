@@ -5,7 +5,7 @@ import my.cheysoff.core_domain.NotePreview
 
 @Immutable
 data class NotePreviewUi(
-    val id: String = java.util.UUID.randomUUID().toString(),
+    val id: String = java.util.UUID.randomUUID().toString(), // todo introduce stable ids
     val title: String,
     val content: String,
 )
