@@ -14,7 +14,7 @@ import androidx.compose.ui.platform.LocalContext
 
 
 val LocalSpacing = staticCompositionLocalOf { Spacing() }
-
+val LocalRadii = staticCompositionLocalOf { Radii() }
 private val DarkColorScheme = darkColorScheme( // todo: change colors
     primary = Purple80,
     secondary = PurpleGrey80,
@@ -82,9 +82,11 @@ fun NotesTheme(
     }
 
     val spacing = Spacing()
+    val radii = Radii()
 
     CompositionLocalProvider(
-        LocalSpacing provides spacing
+        LocalSpacing provides spacing,
+        LocalRadii provides radii
     ) {
         MaterialTheme(
             colorScheme = colorScheme,

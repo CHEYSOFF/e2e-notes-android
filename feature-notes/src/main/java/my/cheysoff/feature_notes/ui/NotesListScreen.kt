@@ -42,6 +42,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import my.cheysoff.core_ui.theme.LocalRadii
 import my.cheysoff.core_ui.theme.LocalSpacing
 import my.cheysoff.feature_notes.R
 import my.cheysoff.feature_notes.model.FolderPreviewUi
@@ -193,10 +194,11 @@ private fun FolderPreview(
     painter: androidx.compose.ui.graphics.painter.Painter
 ) {
     val spacing = LocalSpacing.current
+    val radii = LocalRadii.current
     Column(
         modifier = Modifier
             .width(FolderSize)
-            .clip(RoundedCornerShape(12.dp)) // todo think about rounded corners in theme
+            .clip(RoundedCornerShape(radii.medium))
             .clickable { /* TODO */ }
             .padding(spacing.insideCardItemSpacing),
         horizontalAlignment = Alignment.CenterHorizontally,
