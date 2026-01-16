@@ -41,16 +41,14 @@ import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
 import my.cheysoff.core_ui.theme.LocalRadii
 import my.cheysoff.core_ui.theme.LocalSpacing
+import my.cheysoff.feature_notes.LocalNoteDimensions
 import my.cheysoff.feature_notes.R
 import my.cheysoff.feature_notes.model.FolderPreviewUi
 import my.cheysoff.feature_notes.model.NotePreviewUi
 import my.cheysoff.feature_notes.model.NotesListScreenState
 
-private val FolderIcon = R.drawable.folder
-private val FolderSize = 100.dp
 
 @Composable
 fun NotesListScreen(state: NotesListScreenState) {
@@ -134,7 +132,7 @@ fun FoldersSection(folderPreviews: List<FolderPreviewUi>) {
     )
 
     val folderPainter =
-        rememberVectorPainter(image = ImageVector.vectorResource(id = FolderIcon))
+        rememberVectorPainter(image = ImageVector.vectorResource(id = R.drawable.folder))
 
     Column(
         modifier = Modifier
@@ -195,9 +193,11 @@ private fun FolderPreview(
 ) {
     val spacing = LocalSpacing.current
     val radii = LocalRadii.current
+    val dimensions = LocalNoteDimensions.current
+
     Column(
         modifier = Modifier
-            .width(FolderSize)
+            .width(dimensions.folderIconSize)
             .clip(RoundedCornerShape(radii.medium))
             .clickable { /* TODO */ }
             .padding(spacing.insideCardItemSpacing),
@@ -206,7 +206,7 @@ private fun FolderPreview(
         Image(
             painter = painter,
             contentDescription = "Folder icon",
-            modifier = Modifier.size(FolderSize),
+            modifier = Modifier.size(dimensions.folderIconSize),
         )
         Text(
             text = folderPreview.name,
@@ -220,9 +220,10 @@ private fun FolderPreview(
 @Composable
 private fun NotePreview(notePreview: NotePreviewUi) {
     val spacing = LocalSpacing.current
+    val dimensions = LocalNoteDimensions.current
 
     Card(
-        modifier = Modifier.heightIn(max = 300.dp), // todo move to theme
+        modifier = Modifier.heightIn(max = dimensions.noteCardMaxHeight),
         colors = CardColors(
             MaterialTheme.colorScheme.surface,
             MaterialTheme.colorScheme.onSurface,
