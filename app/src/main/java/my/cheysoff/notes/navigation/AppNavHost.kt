@@ -12,8 +12,8 @@ import androidx.navigation.compose.rememberNavController
 import my.cheysoff.feature_auth.ui.AuthEvent
 import my.cheysoff.feature_auth.ui.AuthScreen
 import my.cheysoff.feature_auth.ui.AuthViewModel
-import my.cheysoff.feature_notes.ui.NotesListScreen
-import my.cheysoff.feature_notes.ui.NotesViewModel
+import my.cheysoff.feature_notes.ui.list.NotesListScreen
+import my.cheysoff.feature_notes.ui.list.NotesListViewModel
 
 @Composable
 fun AppNavHost(
@@ -47,7 +47,7 @@ fun AppNavHost(
 
         // Notes feature
         composable("notes") {
-            val viewModel: NotesViewModel = hiltViewModel()
+            val viewModel: NotesListViewModel = hiltViewModel()
             val state by viewModel.state.collectAsState()
 
             NotesListScreen(state = state)
