@@ -25,7 +25,10 @@
       <SelectionState runConfigName="NotesListScreenPreview">
         <option name="selectionMode" value="DROPDOWN" />
       </SelectionState>
-      <SelectionState runConfigName="AuthScreenPreview (1)">
+      <SelectionState runConfigName="PinButton">
+        <option name="selectionMode" value="DROPDOWN" />
+      </SelectionState>
+      <SelectionState runConfigName="BackButton">
         <option name="selectionMode" value="DROPDOWN" />
       </SelectionState>
     </selectionStates>

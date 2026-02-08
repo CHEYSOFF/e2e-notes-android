@@ -1,4 +1,4 @@
-package my.cheysoff.feature_notes.ui
+package my.cheysoff.feature_notes.ui.list
 
 import androidx.lifecycle.ViewModel
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -11,7 +11,7 @@ import my.cheysoff.feature_notes.model.toUi
 import javax.inject.Inject
 
 @HiltViewModel
-class NotesViewModel @Inject constructor() : ViewModel() {
+class NotesListViewModel @Inject constructor() : ViewModel() {
     private val _state = MutableStateFlow(
         NotesListScreenState(
             folderPreviews = List(10) { index ->
