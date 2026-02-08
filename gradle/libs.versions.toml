@@ -16,6 +16,7 @@ biometric = "1.4.0-alpha05"
 materialIconsExtended = "1.7.8"
 navigationCompose = "2.8.5"
 material3 = "1.4.0"
+runtimeSaveable = "1.10.2"
 
 [libraries]
 androidx-compose-material-icons-extended = { module = "androidx.compose.material:material-icons-extended", version.ref = "materialIconsExtended" }
@@ -41,6 +42,7 @@ hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-com
 androidx-biometric = { group = "androidx.biometric", name = "biometric-compose", version.ref = "biometric" }
 androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigationCompose" }
 androidx-material3 = { group = "androidx.compose.material3", name = "material3", version.ref = "material3" }
+androidx-compose-runtime-saveable = { group = "androidx.compose.runtime", name = "runtime-saveable", version.ref = "runtimeSaveable" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
