@@ -1,4 +1,4 @@
-package my.cheysoff.feature_notes.ui
+package my.cheysoff.feature_notes.ui.list
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -33,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.layout.layout
@@ -189,7 +190,7 @@ fun FoldersSection(folderPreviews: List<FolderPreviewUi>) {
 @Composable
 private fun FolderPreview(
     folderPreview: FolderPreviewUi,
-    painter: androidx.compose.ui.graphics.painter.Painter
+    painter: Painter
 ) {
     val spacing = LocalSpacing.current
     val radii = LocalRadii.current
