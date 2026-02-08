@@ -43,6 +43,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,7 +65,7 @@ fun SingleNoteScreen() {
     val focusManager = LocalFocusManager.current
     val isImeVisible = WindowInsets.isImeVisible
 
-    LaunchedEffect(isImeVisible) {
+    LaunchedEffect(isImeVisible) { // todo: fix keyboard hide on configuration changes
         if (!isImeVisible) {
             focusManager.clearFocus()
         }
@@ -95,8 +96,8 @@ fun SingleNoteScreen() {
 
 @Composable
 fun NoteEditor(modifier: Modifier = Modifier) {
-    var title by remember { mutableStateOf("") }
-    var content by remember { mutableStateOf("") }
+    var title by rememberSaveable { mutableStateOf("") }
+    var content by rememberSaveable { mutableStateOf("") }
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
 
