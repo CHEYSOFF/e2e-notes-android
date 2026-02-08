@@ -62,12 +62,12 @@ fun NoteEditor(modifier: Modifier = Modifier) {
             value = title,
             onValueChange = { title = it },
             modifier = Modifier.fillMaxWidth(),
-            placeholder = { 
+            placeholder = {
                 Text(
-                    text = "Title", 
+                    text = "Title",
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                ) 
+                )
             },
             textStyle = MaterialTheme.typography.titleMedium,
             colors = TextFieldDefaults.colors(
@@ -86,12 +86,12 @@ fun NoteEditor(modifier: Modifier = Modifier) {
             value = content,
             onValueChange = { content = it },
             modifier = Modifier.fillMaxWidth(),
-            placeholder = { 
+            placeholder = {
                 Text(
-                    text = "Note", 
+                    text = "Note",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
-                ) 
+                )
             },
             textStyle = MaterialTheme.typography.bodyMedium,
             colors = TextFieldDefaults.colors(
@@ -114,7 +114,7 @@ private fun ScreenTopBar() {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = spacing.topBarHorizontal),
+            .padding(horizontal = spacing.screenHorizontal),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {

@@ -45,7 +45,4 @@ data class Spacing(
 
     /** Spacing between a series of related buttons or interactive elements. */
     val buttonGroupSpacing: Dp = xs,
-
-    /** Horizontal padding for the top bar items. */
-    val topBarHorizontal: Dp = s,
 )
