@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -40,11 +42,8 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
@@ -54,18 +53,24 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.lifecycle.SavedStateHandle
 import my.cheysoff.core_ui.theme.LocalRadii
 import my.cheysoff.core_ui.theme.LocalSpacing
 import my.cheysoff.core_ui.theme.NotesTheme
+import my.cheysoff.feature_notes.model.single.SingleNoteIntent
+import my.cheysoff.feature_notes.model.single.SingleNoteScreenState
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun SingleNoteScreen() {
+fun SingleNoteScreen(
+    state: SingleNoteScreenState,
+    onIntent: (SingleNoteIntent) -> Unit
+) {
     val spacing = LocalSpacing.current
     val focusManager = LocalFocusManager.current
     val isImeVisible = WindowInsets.isImeVisible
 
-    LaunchedEffect(isImeVisible) { // todo: fix keyboard hide on configuration changes
+    LaunchedEffect(isImeVisible) {
         if (!isImeVisible) {
             focusManager.clearFocus()
         }
@@ -75,11 +80,18 @@ fun SingleNoteScreen() {
         modifier = Modifier
             .fillMaxSize()
             .imePadding(),
-        topBar = { ScreenTopBar() },
+        topBar = {
+            ScreenTopBar(
+                isPinned = state.isPinned,
+                onIntent = onIntent
+            )
+        },
         bottomBar = { ScreenBottomBar() },
         containerColor = MaterialTheme.colorScheme.background
     ) { paddingValues ->
         NoteEditor(
+            state = state,
+            onIntent = onIntent,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
@@ -95,18 +107,20 @@ fun SingleNoteScreen() {
 }
 
 @Composable
-fun NoteEditor(modifier: Modifier = Modifier) {
-    var title by rememberSaveable { mutableStateOf("") }
-    var content by rememberSaveable { mutableStateOf("") }
+fun NoteEditor(
+    state: SingleNoteScreenState,
+    onIntent: (SingleNoteIntent) -> Unit,
+    modifier: Modifier = Modifier
+) {
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
-
+    // todo: fix text visibility while typing via keyboard in horizontal mode
     Column(
         modifier = modifier.focusable()
     ) {
         TextField(
-            value = title,
-            onValueChange = { title = it },
+            value = state.title,
+            onValueChange = { onIntent(SingleNoteIntent.TitleChanged(it)) },
             modifier = Modifier.fillMaxWidth(),
             placeholder = {
                 Text(
@@ -136,8 +150,8 @@ fun NoteEditor(modifier: Modifier = Modifier) {
         )
 
         TextField(
-            value = content,
-            onValueChange = { content = it },
+            value = state.content,
+            onValueChange = { onIntent(SingleNoteIntent.ContentChanged(it)) },
             modifier = Modifier.fillMaxWidth(),
             placeholder = {
                 Text(
@@ -171,17 +185,21 @@ fun NoteEditor(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun ScreenTopBar() {
+private fun ScreenTopBar(
+    isPinned: Boolean,
+    onIntent: (SingleNoteIntent) -> Unit
+) {
     val spacing = LocalSpacing.current
     Row(
         modifier = Modifier
+            .windowInsetsPadding(WindowInsets.statusBars)
             .fillMaxWidth()
             .padding(horizontal = spacing.screenHorizontal),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
         // Left
-        BackButton()
+        BackButton(onClick = { onIntent(SingleNoteIntent.BackClicked) })
 
         // Middle
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -202,7 +220,8 @@ private fun ScreenTopBar() {
             NoteIconButton(
                 icon = Icons.Outlined.PushPin,
                 contentDescription = "Pin",
-                onClick = { /*TODO*/ }
+                onClick = { onIntent(SingleNoteIntent.TogglePin) },
+                tint = if (isPinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
             )
             NoteIconButton(
                 icon = Icons.Outlined.MoreVert,
@@ -282,9 +301,9 @@ private fun NoteIconButton(
 }
 
 @Composable
-private fun BackButton() {
+private fun BackButton(onClick: () -> Unit) {
     TextButton(
-        onClick = { /*TODO*/ }, colors = ButtonDefaults.textButtonColors(
+        onClick = onClick, colors = ButtonDefaults.textButtonColors(
             contentColor = MaterialTheme.colorScheme.onSurface
         )
     ) {
@@ -298,7 +317,11 @@ private fun BackButton() {
 @Preview(showBackground = true)
 @Composable
 private fun SingleNoteScreenPreview() {
+    val viewModel = remember { SingleNoteViewModel(SavedStateHandle()) }
     NotesTheme {
-        SingleNoteScreen()
+        SingleNoteScreen(
+            state = viewModel.state.collectAsState().value,
+            onIntent = { intent -> viewModel.onIntent(intent) }
+        )
     }
 }
