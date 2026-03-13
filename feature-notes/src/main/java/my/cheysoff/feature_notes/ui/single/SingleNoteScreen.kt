@@ -2,7 +2,6 @@ package my.cheysoff.feature_notes.ui.single
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -74,7 +73,7 @@ fun SingleNoteScreen(
     state: SingleNoteScreenState,
     onIntent: (SingleNoteIntent) -> Unit
 ) {
-    val spacing = LocalSpacing.current
+    LocalSpacing.current
     val focusManager = LocalFocusManager.current
     val isImeVisible = WindowInsets.isImeVisible
 
@@ -119,7 +118,7 @@ fun NoteEditor(
     val keyboardController = LocalSoftwareKeyboardController.current
     val scrollState = rememberScrollState()
     val focusRequester = remember { FocusRequester() }
-    
+
     // todo: fix text visibility while typing via keyboard in horizontal mode
     Column(
         modifier = modifier
@@ -129,8 +128,8 @@ fun NoteEditor(
                 indication = null
             ) {
                 focusRequester.requestFocus()
+                keyboardController?.show()
             }
-            .focusable()
     ) {
         TextField(
             value = state.title,
@@ -200,7 +199,7 @@ fun NoteEditor(
                 }
             )
         )
-        
+
         Spacer(modifier = Modifier.height(100.dp))
     }
 }
