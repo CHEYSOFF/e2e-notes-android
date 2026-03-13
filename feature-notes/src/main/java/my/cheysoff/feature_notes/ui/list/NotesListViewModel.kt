@@ -1,17 +1,26 @@
-package my.cheysoff.feature_notes.ui
+package my.cheysoff.feature_notes.ui.list
 
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.launch
 import my.cheysoff.core_domain.FolderPreview
 import my.cheysoff.core_domain.NotePreview
-import my.cheysoff.feature_notes.model.NotesListScreenState
-import my.cheysoff.feature_notes.model.toUi
+import my.cheysoff.feature_notes.model.list.NotesListIntent
+import my.cheysoff.feature_notes.model.list.NotesListScreenState
+import my.cheysoff.feature_notes.model.list.toUi
 import javax.inject.Inject
 
+sealed class NotesListEvent {
+    data class NavigateToNote(val noteId: String) : NotesListEvent()
+}
+
 @HiltViewModel
-class NotesViewModel @Inject constructor() : ViewModel() {
+class NotesListViewModel @Inject constructor() : ViewModel() {
     private val _state = MutableStateFlow(
         NotesListScreenState(
             folderPreviews = List(10) { index ->
@@ -59,4 +68,23 @@ class NotesViewModel @Inject constructor() : ViewModel() {
         )
     )
     val state = _state.asStateFlow()
+
+    private val _events = Channel<NotesListEvent>(Channel.BUFFERED)
+    val events = _events.receiveAsFlow()
+
+    fun onIntent(intent: NotesListIntent) {
+        when (intent) {
+            is NotesListIntent.NoteClicked -> {
+                viewModelScope.launch {
+                    _events.send(NotesListEvent.NavigateToNote(intent.noteId))
+                }
+            }
+            is NotesListIntent.FolderClicked -> {
+                // TODO
+            }
+            is NotesListIntent.AddNoteClicked -> {
+                // TODO
+            }
+        }
+    }
 }
