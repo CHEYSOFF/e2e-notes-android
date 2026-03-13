@@ -1,4 +1,4 @@
-package my.cheysoff.feature_notes.model
+package my.cheysoff.feature_notes.model.list
 
 import androidx.compose.runtime.Immutable
 

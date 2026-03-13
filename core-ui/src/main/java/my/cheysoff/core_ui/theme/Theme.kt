@@ -47,8 +47,6 @@ private val LightColorScheme = lightColorScheme(
     // SECONDARY (supporting actions)
     secondary = Emerald,
     onSecondary = Graphite,
-    secondaryContainer = Honeydew,
-    onSecondaryContainer = Graphite,
 
     // BACKGROUND & SURFACE
     background = BrightSnow,
@@ -56,6 +54,7 @@ private val LightColorScheme = lightColorScheme(
 
     surface = White,
     onSurface = Graphite,
+    surfaceContainer = Honeydew,
     surfaceVariant = DarkPlatinum,
     onSurfaceVariant = Graphite,
 
