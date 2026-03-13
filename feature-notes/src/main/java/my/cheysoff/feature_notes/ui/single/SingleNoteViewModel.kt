@@ -22,7 +22,7 @@ sealed class SingleNoteEvent {
 class SingleNoteViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
-    private val noteId: String? = savedStateHandle["noteId"]
+    private val noteId: String? = savedStateHandle["noteId"] // todo use id
     private val _state = MutableStateFlow(SingleNoteScreenState())
     val state = _state.asStateFlow()
 

@@ -8,17 +8,21 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
@@ -31,6 +35,7 @@ import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.StrikethroughS
 import androidx.compose.material.icons.outlined.TextFields
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FabPosition
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
@@ -47,12 +52,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusDirection
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.SavedStateHandle
 import my.cheysoff.core_ui.theme.LocalRadii
 import my.cheysoff.core_ui.theme.LocalSpacing
@@ -86,7 +94,8 @@ fun SingleNoteScreen(
                 onIntent = onIntent
             )
         },
-        bottomBar = { ScreenBottomBar() },
+        floatingActionButton = { ScreenBottomBar() },
+        floatingActionButtonPosition = FabPosition.Center,
         containerColor = MaterialTheme.colorScheme.background
     ) { paddingValues ->
         NoteEditor(
@@ -95,13 +104,6 @@ fun SingleNoteScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(horizontal = spacing.screenHorizontal)
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null
-                ) {
-                    focusManager.clearFocus()
-                }
         )
     }
 }
@@ -112,16 +114,30 @@ fun NoteEditor(
     onIntent: (SingleNoteIntent) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val spacing = LocalSpacing.current
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
+    val scrollState = rememberScrollState()
+    val focusRequester = remember { FocusRequester() }
+    
     // todo: fix text visibility while typing via keyboard in horizontal mode
     Column(
-        modifier = modifier.focusable()
+        modifier = modifier
+            .verticalScroll(scrollState)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) {
+                focusRequester.requestFocus()
+            }
+            .focusable()
     ) {
         TextField(
             value = state.title,
             onValueChange = { onIntent(SingleNoteIntent.TitleChanged(it)) },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = spacing.screenHorizontal),
             placeholder = {
                 Text(
                     text = "Title",
@@ -152,7 +168,10 @@ fun NoteEditor(
         TextField(
             value = state.content,
             onValueChange = { onIntent(SingleNoteIntent.ContentChanged(it)) },
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = spacing.screenHorizontal)
+                .focusRequester(focusRequester),
             placeholder = {
                 Text(
                     text = "Note",
@@ -181,6 +200,8 @@ fun NoteEditor(
                 }
             )
         )
+        
+        Spacer(modifier = Modifier.height(100.dp))
     }
 }
 
@@ -233,53 +254,42 @@ private fun ScreenTopBar(
 }
 
 @Composable
-private fun ScreenBottomBar() {
-    val spacing = LocalSpacing.current
+private fun ScreenBottomBar() { // todo fix weird nav bar bug when opening keyboard with 80% text
     val radii = LocalRadii.current
 
     Row(
         modifier = Modifier
-            .fillMaxWidth()
-            .padding(
-                horizontal = spacing.screenHorizontal,
-                vertical = spacing.buttonContentPadding
+            .background(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f),
+                shape = RoundedCornerShape(radii.max)
             ),
-        horizontalArrangement = Arrangement.Center
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            modifier = Modifier
-                .background(
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    shape = RoundedCornerShape(radii.max)
-                ),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            NoteIconButton(
-                icon = Icons.Outlined.TextFields,
-                contentDescription = "Typography",
-                onClick = { /*TODO*/ }
-            )
-            NoteIconButton(
-                icon = Icons.AutoMirrored.Outlined.List,
-                contentDescription = "List",
-                onClick = { /*TODO*/ }
-            )
-            NoteIconButton(
-                icon = Icons.Outlined.StrikethroughS,
-                contentDescription = "Strikethrough",
-                onClick = { /*TODO*/ }
-            )
-            NoteIconButton(
-                icon = Icons.Outlined.FormatUnderlined,
-                contentDescription = "Underline",
-                onClick = { /*TODO*/ }
-            )
-            NoteIconButton(
-                icon = Icons.Outlined.FormatItalic,
-                contentDescription = "Italic",
-                onClick = { /*TODO*/ }
-            )
-        }
+        NoteIconButton(
+            icon = Icons.Outlined.TextFields,
+            contentDescription = "Typography",
+            onClick = { /*TODO*/ }
+        )
+        NoteIconButton(
+            icon = Icons.AutoMirrored.Outlined.List,
+            contentDescription = "List",
+            onClick = { /*TODO*/ }
+        )
+        NoteIconButton(
+            icon = Icons.Outlined.StrikethroughS,
+            contentDescription = "Strikethrough",
+            onClick = { /*TODO*/ }
+        )
+        NoteIconButton(
+            icon = Icons.Outlined.FormatUnderlined,
+            contentDescription = "Underline",
+            onClick = { /*TODO*/ }
+        )
+        NoteIconButton(
+            icon = Icons.Outlined.FormatItalic,
+            contentDescription = "Italic",
+            onClick = { /*TODO*/ }
+        )
     }
 }
 
