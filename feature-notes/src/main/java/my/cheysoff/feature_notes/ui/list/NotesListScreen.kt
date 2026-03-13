@@ -1,4 +1,4 @@
-package my.cheysoff.feature_notes.ui
+package my.cheysoff.feature_notes.ui.list
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
@@ -33,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.layout.layout
@@ -45,13 +46,17 @@ import my.cheysoff.core_ui.theme.LocalRadii
 import my.cheysoff.core_ui.theme.LocalSpacing
 import my.cheysoff.feature_notes.LocalNoteDimensions
 import my.cheysoff.feature_notes.R
-import my.cheysoff.feature_notes.model.FolderPreviewUi
-import my.cheysoff.feature_notes.model.NotePreviewUi
-import my.cheysoff.feature_notes.model.NotesListScreenState
+import my.cheysoff.feature_notes.model.list.FolderPreviewUi
+import my.cheysoff.feature_notes.model.list.NotePreviewUi
+import my.cheysoff.feature_notes.model.list.NotesListIntent
+import my.cheysoff.feature_notes.model.list.NotesListScreenState
 
 
 @Composable
-fun NotesListScreen(state: NotesListScreenState) {
+fun NotesListScreen(
+    state: NotesListScreenState,
+    onIntent: (NotesListIntent) -> Unit
+) {
     val spacing = LocalSpacing.current
 
     Scaffold(
@@ -74,7 +79,10 @@ fun NotesListScreen(state: NotesListScreenState) {
                 span = StaggeredGridItemSpan.FullLine,
                 contentType = "folders_section"
             ) {
-                FoldersSection(state.folderPreviews)
+                FoldersSection(
+                    folderPreviews = state.folderPreviews,
+                    onFolderClick = { id -> onIntent(NotesListIntent.FolderClicked(id)) }
+                )
             }
             item(span = StaggeredGridItemSpan.FullLine) {
                 Text(
@@ -88,8 +96,11 @@ fun NotesListScreen(state: NotesListScreenState) {
                 items = state.notePreviews,
                 key = { it.id },
                 contentType = { "note_preview" }
-            ) {
-                NotePreview(it)
+            ) { note ->
+                NotePreview(
+                    notePreview = note,
+                    onClick = { onIntent(NotesListIntent.NoteClicked(note.id)) }
+                )
             }
         }
     }
@@ -118,7 +129,10 @@ fun Modifier.fillWidthOfParent(parentPadding: Dp) = this.then( // todo reconside
 )
 
 @Composable
-fun FoldersSection(folderPreviews: List<FolderPreviewUi>) {
+fun FoldersSection(
+    folderPreviews: List<FolderPreviewUi>,
+    onFolderClick: (String) -> Unit
+) {
     val spacing = LocalSpacing.current
 
     val pages =
@@ -178,7 +192,11 @@ fun FoldersSection(folderPreviews: List<FolderPreviewUi>) {
             ) {
                 pageItems.forEach { folder ->
                     key(folder.id) {
-                        FolderPreview(folder, folderPainter)
+                        FolderPreview(
+                            folderPreview = folder,
+                            painter = folderPainter,
+                            onClick = { onFolderClick(folder.id) }
+                        )
                     }
                 }
             }
@@ -189,7 +207,8 @@ fun FoldersSection(folderPreviews: List<FolderPreviewUi>) {
 @Composable
 private fun FolderPreview(
     folderPreview: FolderPreviewUi,
-    painter: androidx.compose.ui.graphics.painter.Painter
+    painter: Painter,
+    onClick: () -> Unit
 ) {
     val spacing = LocalSpacing.current
     val radii = LocalRadii.current
@@ -199,7 +218,7 @@ private fun FolderPreview(
         modifier = Modifier
             .width(dimensions.folderIconSize)
             .clip(RoundedCornerShape(radii.medium))
-            .clickable { /* TODO */ }
+            .clickable(onClick = onClick)
             .padding(spacing.insideCardItemSpacing),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -218,7 +237,10 @@ private fun FolderPreview(
 }
 
 @Composable
-private fun NotePreview(notePreview: NotePreviewUi) {
+private fun NotePreview(
+    notePreview: NotePreviewUi,
+    onClick: () -> Unit
+) {
     val spacing = LocalSpacing.current
     val dimensions = LocalNoteDimensions.current
 
@@ -230,7 +252,7 @@ private fun NotePreview(notePreview: NotePreviewUi) {
             MaterialTheme.colorScheme.surface,
             MaterialTheme.colorScheme.onSurface
         ),
-        onClick = { /* TODO */ }
+        onClick = onClick
     ) {
         Column(
             modifier = Modifier.padding(spacing.insideCardItemSpacing),
