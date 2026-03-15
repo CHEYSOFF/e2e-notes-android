@@ -1,4 +1,4 @@
-package my.cheysoff.core_domain
+package my.cheysoff.core_domain.model
 
 import java.util.UUID
 
