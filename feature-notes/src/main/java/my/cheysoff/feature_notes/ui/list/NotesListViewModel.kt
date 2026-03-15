@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.repository.NotesRepository
+import my.cheysoff.feature_notes.model.list.BottomBarItem
 import my.cheysoff.feature_notes.model.list.NotesListIntent
 import my.cheysoff.feature_notes.model.list.NotesListScreenState
 import my.cheysoff.feature_notes.model.list.toUi
@@ -58,10 +59,18 @@ class NotesListViewModel @Inject constructor(
                 createNewNote()
             }
 
-            NotesListIntent.AllNotesClicked -> { /* TODO */ }
-            NotesListIntent.CalendarClicked -> { /* TODO */ }
-            NotesListIntent.ProfileClicked -> { /* TODO */ }
-            NotesListIntent.SearchClicked -> { /* TODO */ }
+            NotesListIntent.AllNotesClicked -> {
+                _state.update { it.copy(selectedBottomBarItem = BottomBarItem.ALL_NOTES) }
+            }
+            NotesListIntent.CalendarClicked -> {
+                _state.update { it.copy(selectedBottomBarItem = BottomBarItem.CALENDAR) }
+            }
+            NotesListIntent.ProfileClicked -> {
+                _state.update { it.copy(selectedBottomBarItem = BottomBarItem.PROFILE) }
+            }
+            NotesListIntent.SearchClicked -> {
+                _state.update { it.copy(selectedBottomBarItem = BottomBarItem.SEARCH) }
+            }
         }
     }
 
