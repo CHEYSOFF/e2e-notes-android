@@ -4,7 +4,9 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filterNotNull
@@ -35,17 +37,24 @@ class SingleNoteViewModel @Inject constructor(
     private val _events = Channel<SingleNoteEvent>(Channel.BUFFERED)
     val events = _events.receiveAsFlow()
 
+    private var saveJob: Job? = null
+
     init {
         noteId?.let { id ->
             notesRepository.getNoteById(id)
                 .filterNotNull()
                 .onEach { note ->
-                    _state.update {
-                        it.copy(
-                            title = note.title,
-                            content = note.content,
-                            isPinned = note.isPinned
-                        )
+                    _state.update { currentState ->
+                        if (currentState.isUITheSame(note)) {
+                            currentState
+                        } else {
+                            currentState.copy(
+                                title = note.title,
+                                content = note.content,
+                                isPinned = note.isPinned,
+                                folderId = note.folderId
+                            )
+                        }
                     }
                 }
                 .launchIn(viewModelScope)
@@ -55,15 +64,18 @@ class SingleNoteViewModel @Inject constructor(
     fun onIntent(intent: SingleNoteIntent) {
         when (intent) {
             is SingleNoteIntent.TitleChanged -> {
-                updateNote { it.copy(title = intent.title) }
+                _state.update { it.copy(title = intent.title) }
+                saveNote(debounce = true)
             }
 
             is SingleNoteIntent.ContentChanged -> {
-                updateNote { it.copy(content = intent.content) }
+                _state.update { it.copy(content = intent.content) }
+                saveNote(debounce = true)
             }
 
             is SingleNoteIntent.TogglePin -> {
-                updateNote { it.copy(isPinned = !it.isPinned) }
+                _state.update { it.copy(isPinned = !it.isPinned) }
+                saveNote(debounce = false)
             }
 
             is SingleNoteIntent.MoreClicked -> {
@@ -78,16 +90,30 @@ class SingleNoteViewModel @Inject constructor(
         }
     }
 
-    private fun updateNote(update: (Note) -> Note) {
-        val currentNote = Note(
-            id = noteId ?: return, // for now only existing notes
-            title = _state.value.title,
-            content = _state.value.content,
-            isPinned = _state.value.isPinned
-        )
-        val updatedNote = update(currentNote)
-        viewModelScope.launch {
-            notesRepository.saveNote(updatedNote)
+    private fun saveNote(debounce: Boolean) {
+        val id = noteId ?: return
+        val currentState = _state.value
+        saveJob?.cancel()
+        saveJob = viewModelScope.launch {
+            if (debounce) {
+                delay(300)
+            }
+            notesRepository.saveNote(
+                Note(
+                    id = id,
+                    title = currentState.title,
+                    content = currentState.content,
+                    isPinned = currentState.isPinned,
+                    folderId = currentState.folderId
+                )
+            )
         }
+    }
+
+    private fun SingleNoteScreenState.isUITheSame(note: Note): Boolean {
+        return title == note.title &&
+                content == note.content &&
+                isPinned == note.isPinned &&
+                folderId == note.folderId
     }
 }
