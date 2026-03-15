@@ -27,7 +27,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
@@ -58,10 +58,14 @@ import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import my.cheysoff.core_ui.theme.FrozenLake
+import my.cheysoff.core_ui.theme.Graphite
 import my.cheysoff.core_ui.theme.LocalRadii
 import my.cheysoff.core_ui.theme.LocalSpacing
+import my.cheysoff.core_ui.theme.Silver
 import my.cheysoff.feature_notes.LocalNoteDimensions
 import my.cheysoff.feature_notes.R
+import my.cheysoff.feature_notes.model.list.BottomBarItem
 import my.cheysoff.feature_notes.model.list.FolderPreviewUi
 import my.cheysoff.feature_notes.model.list.NotePreviewUi
 import my.cheysoff.feature_notes.model.list.NotesListIntent
@@ -81,11 +85,11 @@ fun NotesListScreen(
             FloatingActionButton(
                 onClick = { onIntent(NotesListIntent.AddNoteClicked) },
                 shape = CircleShape,
-                containerColor = Color(0xFF19192C), // Dark navy color from the image
+                containerColor = Graphite,
                 contentColor = Color.White,
                 modifier = Modifier
                     .size(spacing.fabSize)
-                    .offset(y = spacing.fabOverlapOffset) 
+                    .offset(y = spacing.fabOverlapOffset)
             ) {
                 Icon(
                     imageVector = Icons.Default.Add,
@@ -110,29 +114,29 @@ fun NotesListScreen(
                         Icon(
                             imageVector = Icons.Default.Description,
                             contentDescription = "All notes",
-                            tint = Color(0xFF81D4FA) // Light blue tint
+                            tint = if (state.selectedBottomBarItem == BottomBarItem.ALL_NOTES) FrozenLake else Silver
                         )
                     }
                     IconButton(onClick = { onIntent(NotesListIntent.SearchClicked) }) {
                         Icon(
                             imageVector = Icons.Default.Search,
                             contentDescription = "Search",
-                            tint = Color.Gray
+                            tint = if (state.selectedBottomBarItem == BottomBarItem.SEARCH) FrozenLake else Silver
                         )
                     }
                     Spacer(modifier = Modifier.width(spacing.bottomBarFabGap))
                     IconButton(onClick = { onIntent(NotesListIntent.CalendarClicked) }) {
                         Icon(
-                            imageVector = Icons.Default.DateRange,
+                            imageVector = Icons.Default.CalendarToday,
                             contentDescription = "Calendar",
-                            tint = Color.Gray
+                            tint = if (state.selectedBottomBarItem == BottomBarItem.CALENDAR) FrozenLake else Silver
                         )
                     }
                     IconButton(onClick = { onIntent(NotesListIntent.ProfileClicked) }) {
                         Icon(
                             imageVector = Icons.Default.Person,
                             contentDescription = "Profile",
-                            tint = Color.Gray
+                            tint = if (state.selectedBottomBarItem == BottomBarItem.PROFILE) FrozenLake else Silver
                         )
                     }
                 }
