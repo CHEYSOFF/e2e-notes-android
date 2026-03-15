@@ -84,17 +84,18 @@ class SingleNoteViewModel @Inject constructor(
 
             is SingleNoteIntent.BackClicked -> {
                 viewModelScope.launch {
+                    saveNote(debounce = false)?.join()
                     _events.send(SingleNoteEvent.NavigateBack)
                 }
             }
         }
     }
 
-    private fun saveNote(debounce: Boolean) {
-        val id = noteId ?: return
+    private fun saveNote(debounce: Boolean): Job? {
+        val id = noteId ?: return null
         val currentState = _state.value
         saveJob?.cancel()
-        saveJob = viewModelScope.launch {
+        val job = viewModelScope.launch {
             if (debounce) {
                 delay(300)
             }
@@ -108,6 +109,8 @@ class SingleNoteViewModel @Inject constructor(
                 )
             )
         }
+        saveJob = job
+        return job
     }
 
     private fun SingleNoteScreenState.isUITheSame(note: Note): Boolean {
