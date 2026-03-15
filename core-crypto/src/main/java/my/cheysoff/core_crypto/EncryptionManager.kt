@@ -7,6 +7,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import java.security.SecureRandom
 import javax.inject.Inject
 import javax.inject.Singleton
+import androidx.core.content.edit
 
 @Singleton
 class EncryptionManager @Inject constructor(
@@ -38,7 +39,7 @@ class EncryptionManager @Inject constructor(
             val newPassphrase = ByteArray(32)
             SecureRandom().nextBytes(newPassphrase)
             val encoded = android.util.Base64.encodeToString(newPassphrase, android.util.Base64.DEFAULT)
-            sharedPreferences.edit().putString(key, encoded).apply()
+            sharedPreferences.edit(commit = true) { putString(key, encoded) }
             newPassphrase
         }
     }
