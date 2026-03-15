@@ -11,10 +11,13 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.repository.NotesRepository
 import my.cheysoff.feature_notes.model.list.NotesListIntent
 import my.cheysoff.feature_notes.model.list.NotesListScreenState
 import my.cheysoff.feature_notes.model.list.toUi
+import my.cheysoff.feature_notes.ui.list.NotesListEvent.NavigateToNote
+import java.util.UUID
 import javax.inject.Inject
 
 sealed class NotesListEvent {
@@ -34,7 +37,7 @@ class NotesListViewModel @Inject constructor(
     init {
         notesRepository.getNotes()
             .onEach { notes ->
-                _state.update { it.copy(notePreviews = notes.map { note -> note.toUi() }) }
+                _state.update { it.copy(notePreviews = notes.map { note -> note.toUi() }, isLoading = false) }
             }
             .launchIn(viewModelScope)
     }
@@ -43,7 +46,7 @@ class NotesListViewModel @Inject constructor(
         when (intent) {
             is NotesListIntent.NoteClicked -> {
                 viewModelScope.launch {
-                    _events.send(NotesListEvent.NavigateToNote(intent.noteId))
+                    _events.send(NavigateToNote(intent.noteId))
                 }
             }
 
@@ -52,8 +55,25 @@ class NotesListViewModel @Inject constructor(
             }
 
             is NotesListIntent.AddNoteClicked -> {
-                // TODO
+                createNewNote()
             }
+
+            NotesListIntent.AllNotesClicked -> { /* TODO */ }
+            NotesListIntent.CalendarClicked -> { /* TODO */ }
+            NotesListIntent.ProfileClicked -> { /* TODO */ }
+            NotesListIntent.SearchClicked -> { /* TODO */ }
+        }
+    }
+
+    private fun createNewNote() {
+        viewModelScope.launch {
+            val newNote = Note(
+                id = UUID.randomUUID().toString(),
+                title = "",
+                content = ""
+            )
+            notesRepository.saveNote(newNote)
+            _events.send(NavigateToNote(newNote.id))
         }
     }
 }
