@@ -1,7 +1,7 @@
 package my.cheysoff.feature_notes.model.list
 
 import androidx.compose.runtime.Immutable
-import my.cheysoff.core_domain.FolderPreview
+import my.cheysoff.core_domain.model.FolderPreview
 
 @Immutable
 data class FolderPreviewUi(

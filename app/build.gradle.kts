@@ -48,6 +48,7 @@ dependencies {
     implementation(project(":feature-notes"))
     implementation(project(":core-ui"))
     implementation(project(":core-domain"))
+    implementation(project(":core-data"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
