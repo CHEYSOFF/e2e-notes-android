@@ -34,12 +34,17 @@ abstract class DataModule {
             encryptionManager: EncryptionManager
         ): NoteDatabase {
             val passphrase = encryptionManager.getDatabasePassphrase()
+            
+            if (encryptionManager.wasPassphraseReset) {
+                context.deleteDatabase(EncryptionManager.DATABASE_NAME)
+            }
+
             val factory = SupportOpenHelperFactory(passphrase)
             
             return Room.databaseBuilder(
                 context,
                 NoteDatabase::class.java,
-                "notes.db"
+                EncryptionManager.DATABASE_NAME
             )
             .openHelperFactory(factory)
             .build()
