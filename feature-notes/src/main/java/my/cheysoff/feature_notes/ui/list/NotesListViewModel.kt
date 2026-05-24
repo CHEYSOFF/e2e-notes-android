@@ -6,6 +6,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -35,13 +36,34 @@ class NotesListViewModel @Inject constructor(
     private val _events = Channel<NotesListEvent>(Channel.BUFFERED)
     val events = _events.receiveAsFlow()
 
+    // Latest full (unfiltered) note list, kept so folder selection can re-filter without a re-fetch.
+    private var allNotes: List<Note> = emptyList()
+
     init {
-        notesRepository.getNotes()
-            .onEach { notes ->
-                _state.update { it.copy(notePreviews = notes.map { note -> note.toUi() }, isLoading = false) }
+        combine(
+            notesRepository.getFolders(),
+            notesRepository.getNotes(),
+        ) { folders, notes -> folders to notes }
+            .onEach { (folders, notes) ->
+                allNotes = notes
+                val countByFolder = notes.groupingBy { it.folderId }.eachCount()
+                val folderPreviews = folders.map { folder ->
+                    folder.toUi(notesAmount = countByFolder[folder.id] ?: 0)
+                }
+                _state.update { current ->
+                    current.copy(
+                        folderPreviews = folderPreviews,
+                        notePreviews = visibleNotes(current.selectedFolderId).map { it.toUi() },
+                        isLoading = false,
+                    )
+                }
             }
             .launchIn(viewModelScope)
     }
+
+    private fun visibleNotes(selectedFolderId: String?): List<Note> =
+        if (selectedFolderId == null) allNotes
+        else allNotes.filter { it.folderId == selectedFolderId }
 
     fun onIntent(intent: NotesListIntent) {
         when (intent) {
@@ -52,7 +74,15 @@ class NotesListViewModel @Inject constructor(
             }
 
             is NotesListIntent.FolderClicked -> {
-                // TODO
+                _state.update { current ->
+                    // Toggle: tapping the active folder clears the filter (back to All).
+                    val newSelection =
+                        if (current.selectedFolderId == intent.folderId) null else intent.folderId
+                    current.copy(
+                        selectedFolderId = newSelection,
+                        notePreviews = visibleNotes(newSelection).map { it.toUi() },
+                    )
+                }
             }
 
             is NotesListIntent.AddNoteClicked -> {

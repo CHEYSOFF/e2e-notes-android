@@ -1,17 +1,19 @@
 package my.cheysoff.feature_notes.model.list
 
 import androidx.compose.runtime.Immutable
-import my.cheysoff.core_domain.model.FolderPreview
+import my.cheysoff.core_domain.model.Folder
 
 @Immutable
 data class FolderPreviewUi(
     val id: String,
     val name: String,
     val notesAmount: Int,
+    val colorArgb: Long? = null,
 )
 
-fun FolderPreview.toUi() = FolderPreviewUi(
-    id = id.toString(),
+fun Folder.toUi(notesAmount: Int) = FolderPreviewUi(
+    id = id,
     name = name,
-    notesAmount = notesAmount
+    notesAmount = notesAmount,
+    colorArgb = colorArgb,
 )
