@@ -6,6 +6,7 @@ import androidx.core.content.edit
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.security.GeneralSecurityException
 import java.security.SecureRandom
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -32,8 +33,9 @@ class EncryptionManager @Inject constructor(
         try {
             createSharedPreferences()
         } catch (e: Exception) {
-            // If creation fails (e.g. due to Keystore issues after restore),
-            // we delete the existing preferences file to allow a fresh start.
+            // Only treat genuine key loss (e.g. Keystore wiped after a restore) as a reset.
+            // Transient/non-crypto failures must NOT clear prefs or flag a DB wipe — rethrow.
+            if (!isKeyLoss(e)) throw e
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit(commit = true) {
                 clear()
             }
@@ -64,7 +66,9 @@ class EncryptionManager @Inject constructor(
         val existingPassphrase = try {
             sharedPreferences.getString(key, null)
         } catch (e: Exception) {
-            // Handle decryption failure (e.g. after restore)
+            // Only a genuine decryption/key-loss failure (e.g. after restore) should trigger
+            // regeneration + DB reset. Transient/non-crypto errors must NOT wipe the database.
+            if (!isKeyLoss(e)) throw e
             _wasPassphraseReset = true
             null
         }
@@ -117,6 +121,21 @@ class EncryptionManager @Inject constructor(
     @Synchronized
     fun onForeground() {
         isBackgrounded = false
+    }
+
+    /**
+     * True only for exceptions indicating the encryption key itself is gone or unusable
+     * (Keystore wiped, backup/restore, decryption failure) — NOT transient I/O or other
+     * runtime errors, which must not trigger a passphrase reset / database wipe.
+     * Walks the cause chain because EncryptedSharedPreferences often wraps crypto errors.
+     */
+    private fun isKeyLoss(error: Throwable): Boolean {
+        var cause: Throwable? = error
+        while (cause != null) {
+            if (cause is GeneralSecurityException || cause is SecurityException) return true
+            cause = cause.cause
+        }
+        return false
     }
 
     companion object {
