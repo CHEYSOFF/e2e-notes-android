@@ -26,7 +26,12 @@ class RoomNotesRepository @Inject constructor(
     }
 
     override suspend fun saveNote(note: Note) {
-        noteDao.insertNote(note.toEntity())
+        val now = System.currentTimeMillis()
+        val stamped = note.copy(
+            createdAt = if (note.createdAt == 0L) now else note.createdAt,
+            updatedAt = now,
+        )
+        noteDao.insertNote(stamped.toEntity())
     }
 
     override suspend fun deleteNote(id: String) {
