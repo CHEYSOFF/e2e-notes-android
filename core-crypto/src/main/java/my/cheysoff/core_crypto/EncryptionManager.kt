@@ -69,6 +69,9 @@ class EncryptionManager @Inject constructor(
             // Only a genuine decryption/key-loss failure (e.g. after restore) should trigger
             // regeneration + DB reset. Transient/non-crypto errors must NOT wipe the database.
             if (!isKeyLoss(e)) throw e
+            // The stored passphrase is unreadable: clear the corrupt prefs so the regeneration
+            // below writes to a clean store instead of failing on the same bad state.
+            sharedPreferences.edit(commit = true) { clear() }
             _wasPassphraseReset = true
             null
         }
