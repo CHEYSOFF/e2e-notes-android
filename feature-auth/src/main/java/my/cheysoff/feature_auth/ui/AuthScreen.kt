@@ -68,7 +68,7 @@ fun AuthScreen(
             contentDescription = null,
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .offset(x = moonSize * 0.08f, y = -(moonSize * 0.18f))
+                .offset(x = moonSize * 0.065f, y = -(moonSize * 0.2f))
                 .size(moonSize),
         )
 
