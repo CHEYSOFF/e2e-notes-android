@@ -39,6 +39,12 @@ abstract class DataModule {
                 context.deleteDatabase(EncryptionManager.DATABASE_NAME)
             }
 
+            // KNOWN LIMITATION (review #4): SQLCipher's SupportOpenHelperFactory retains this
+            // passphrase in SQLiteOpenHelper.mPassword for the helper's lifetime (verified in
+            // sqlcipher-android 4.13.0 bytecode) and re-reads it on every (re)open. There is no
+            // clearPassphrase option in this version, and zeroing the array would break DB reopen.
+            // Fully purging it would require tearing down and rebuilding the whole DB instance.
+            // Tracked as a follow-up security task (close DB / rebuild on background).
             val factory = SupportOpenHelperFactory(passphrase)
             
             return Room.databaseBuilder(
