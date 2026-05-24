@@ -10,7 +10,10 @@ data class NoteEntity(
     val title: String,
     val content: String,
     val isPinned: Boolean,
-    val folderId: String?
+    val isFavorite: Boolean = false,
+    val folderId: String?,
+    val createdAt: Long = 0L,
+    val updatedAt: Long = 0L,
 )
 
 fun NoteEntity.toDomain() = Note(
@@ -18,7 +21,10 @@ fun NoteEntity.toDomain() = Note(
     title = title,
     content = content,
     isPinned = isPinned,
-    folderId = folderId
+    isFavorite = isFavorite,
+    folderId = folderId,
+    createdAt = createdAt,
+    updatedAt = updatedAt,
 )
 
 fun Note.toEntity() = NoteEntity(
@@ -26,5 +32,8 @@ fun Note.toEntity() = NoteEntity(
     title = title,
     content = content,
     isPinned = isPinned,
-    folderId = folderId
+    isFavorite = isFavorite,
+    folderId = folderId,
+    createdAt = createdAt,
+    updatedAt = updatedAt,
 )

@@ -53,6 +53,7 @@ abstract class DataModule {
                 EncryptionManager.DATABASE_NAME
             )
             .openHelperFactory(factory)
+            .addMigrations(NoteDatabase.MIGRATION_1_2)
             .build()
         }
 
