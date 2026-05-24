@@ -7,18 +7,23 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import my.cheysoff.core_domain.model.HeaderSettings
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.repository.NotesRepository
+import my.cheysoff.core_domain.repository.SettingsRepository
 import my.cheysoff.feature_notes.model.list.BottomBarItem
+import my.cheysoff.feature_notes.model.list.HeaderLineUi
 import my.cheysoff.feature_notes.model.list.NotesListIntent
 import my.cheysoff.feature_notes.model.list.NotesListScreenState
 import my.cheysoff.feature_notes.model.list.toUi
 import my.cheysoff.feature_notes.ui.list.NotesListEvent.NavigateToNote
+import java.time.LocalTime
 import java.util.UUID
 import javax.inject.Inject
 
@@ -28,7 +33,8 @@ sealed class NotesListEvent {
 
 @HiltViewModel
 class NotesListViewModel @Inject constructor(
-    private val notesRepository: NotesRepository
+    private val notesRepository: NotesRepository,
+    private val settingsRepository: SettingsRepository,
 ) : ViewModel() {
     private val _state = MutableStateFlow(NotesListScreenState())
     val state = _state.asStateFlow()
@@ -40,6 +46,15 @@ class NotesListViewModel @Inject constructor(
     private var allNotes: List<Note> = emptyList()
 
     init {
+        // Pick the header line once per screen open (random source among the enabled ones).
+        viewModelScope.launch {
+            val settings = settingsRepository.headerSettings.first()
+            val notes = notesRepository.getNotes().first()
+            _state.update {
+                it.copy(headerLine = buildHeaderLine(settings, notes))
+            }
+        }
+
         combine(
             notesRepository.getFolders(),
             notesRepository.getNotes(),
@@ -51,9 +66,11 @@ class NotesListViewModel @Inject constructor(
                     folder.toUi(notesAmount = countByFolder[folder.id] ?: 0)
                 }
                 _state.update { current ->
+                    val visible = visibleNotes(current.selectedFolderId)
                     current.copy(
                         folderPreviews = folderPreviews,
-                        notePreviews = visibleNotes(current.selectedFolderId).map { it.toUi() },
+                        pinnedPreviews = visible.filter { it.isPinned }.map { it.toUi() },
+                        notePreviews = visible.filter { !it.isPinned }.map { it.toUi() },
                         isLoading = false,
                     )
                 }
@@ -64,6 +81,39 @@ class NotesListViewModel @Inject constructor(
     private fun visibleNotes(selectedFolderId: String?): List<Note> =
         if (selectedFolderId == null) allNotes
         else allNotes.filter { it.folderId == selectedFolderId }
+
+    private val dailyPhrases = listOf(
+        HeaderLineUi("One thing", "at a time."),
+        HeaderLineUi("Tomorrow", "starts here."),
+        HeaderLineUi("Capture", "the thought."),
+        HeaderLineUi("Make it", "count."),
+        HeaderLineUi("Today's", "canvas."),
+    )
+
+    private fun buildHeaderLine(settings: HeaderSettings, notes: List<Note>): HeaderLineUi? {
+        val sources = buildList {
+            if (settings.showGreetings) add("greeting")
+            if (settings.showDailyPhrases) add("phrase")
+            if (settings.showStats) add("stats")
+        }
+        if (sources.isEmpty()) return null // -> screen shows the small "Mañana" wordmark
+        return when (sources.random()) {
+            "greeting" -> {
+                val word = when (LocalTime.now().hour) {
+                    in 5..11 -> "morning."
+                    in 12..16 -> "afternoon."
+                    in 17..21 -> "evening."
+                    else -> "night."
+                }
+                HeaderLineUi("Good", word)
+            }
+            "stats" -> {
+                val pinned = notes.count { it.isPinned }
+                HeaderLineUi("You have", "${notes.size} notes · $pinned pinned.")
+            }
+            else -> dailyPhrases.random()
+        }
+    }
 
     fun onIntent(intent: NotesListIntent) {
         when (intent) {
@@ -78,9 +128,11 @@ class NotesListViewModel @Inject constructor(
                     // Toggle: tapping the active folder clears the filter (back to All).
                     val newSelection =
                         if (current.selectedFolderId == intent.folderId) null else intent.folderId
+                    val visible = visibleNotes(newSelection)
                     current.copy(
                         selectedFolderId = newSelection,
-                        notePreviews = visibleNotes(newSelection).map { it.toUi() },
+                        pinnedPreviews = visible.filter { it.isPinned }.map { it.toUi() },
+                        notePreviews = visible.filter { !it.isPinned }.map { it.toUi() },
                     )
                 }
             }
