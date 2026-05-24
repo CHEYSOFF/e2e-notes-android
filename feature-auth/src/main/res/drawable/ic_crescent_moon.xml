@@ -1,0 +1,10 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="220dp"
+    android:height="220dp"
+    android:viewportWidth="100"
+    android:viewportHeight="100">
+    <!-- Crescent: outer left semicircle carved by a larger inner arc. fillColor is tinted in code. -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M50,5 A45,45 0 0 0 50,95 A62,62 0 0 1 50,5 Z" />
+</vector>
