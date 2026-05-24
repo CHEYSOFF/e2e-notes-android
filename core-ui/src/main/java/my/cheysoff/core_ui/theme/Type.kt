@@ -1,37 +1,54 @@
 package my.cheysoff.core_ui.theme
 
 import androidx.compose.material3.Typography
+import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import my.cheysoff.core_ui.R
 
+// Light (300) and Medium (500) are driven from the Urbanist variable font via the
+// 'wght' axis; Regular/Bold/ExtraBold use the bundled static instances.
+@OptIn(ExperimentalTextApi::class)
 val UrbanistFontFamily = FontFamily(
+    Font(
+        R.font.urbanist_variable,
+        weight = FontWeight.Light,
+        variationSettings = FontVariation.Settings(FontVariation.weight(300))
+    ),
     Font(R.font.urbanist_regular, FontWeight.Normal),
+    Font(
+        R.font.urbanist_variable,
+        weight = FontWeight.Medium,
+        variationSettings = FontVariation.Settings(FontVariation.weight(500))
+    ),
     Font(R.font.urbanist_bold, FontWeight.Bold),
     Font(R.font.urbanist_extra_bold, FontWeight.ExtraBold)
 )
 
 val Typography = Typography(
+    // Hero / screen titles — thin, airy (the "Welcome back." / "My Notes" look)
     titleLarge = TextStyle(
         fontFamily = UrbanistFontFamily,
-        fontWeight = FontWeight.ExtraBold,
+        fontWeight = FontWeight.Light,
         fontSize = 37.sp,
-        letterSpacing = 0.5.sp,
+        letterSpacing = (-0.5).sp,
     ),
+    // Card / section titles — comfortable mid-weight
     titleMedium = TextStyle(
         fontFamily = UrbanistFontFamily,
-        fontWeight = FontWeight.Bold,
+        fontWeight = FontWeight.Medium,
         fontSize = 25.sp,
-        letterSpacing = 0.5.sp,
+        letterSpacing = 0.sp,
     ),
     titleSmall = TextStyle(
         fontFamily = UrbanistFontFamily,
-        fontWeight = FontWeight.Bold,
+        fontWeight = FontWeight.Medium,
         fontSize = 20.sp,
-        letterSpacing = 0.5.sp,
+        letterSpacing = 0.sp,
     ),
     bodyMedium = TextStyle(
         fontFamily = UrbanistFontFamily,
