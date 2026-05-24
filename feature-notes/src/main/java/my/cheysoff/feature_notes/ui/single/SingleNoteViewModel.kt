@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.repository.NotesRepository
 import my.cheysoff.feature_notes.model.single.SingleNoteIntent
@@ -38,6 +40,9 @@ class SingleNoteViewModel @Inject constructor(
     val events = _events.receiveAsFlow()
 
     private var saveJob: Job? = null
+
+    // Serializes DB writes so an older/delayed save can't run concurrently with a newer one.
+    private val saveMutex = Mutex()
 
     init {
         noteId?.let { id ->
@@ -93,21 +98,25 @@ class SingleNoteViewModel @Inject constructor(
 
     private fun saveNote(debounce: Boolean): Job? {
         val id = noteId ?: return null
-        val currentState = _state.value
         saveJob?.cancel()
         val job = viewModelScope.launch {
             if (debounce) {
                 delay(300)
             }
-            notesRepository.saveNote(
-                Note(
-                    id = id,
-                    title = currentState.title,
-                    content = currentState.content,
-                    isPinned = currentState.isPinned,
-                    folderId = currentState.folderId
+            // Serialize writes and persist the LATEST state (not a snapshot captured before
+            // the delay), so a delayed/older save can't overwrite newer edits.
+            saveMutex.withLock {
+                val current = _state.value
+                notesRepository.saveNote(
+                    Note(
+                        id = id,
+                        title = current.title,
+                        content = current.content,
+                        isPinned = current.isPinned,
+                        folderId = current.folderId
+                    )
                 )
-            )
+            }
         }
         saveJob = job
         return job
