@@ -1,193 +1,197 @@
 package my.cheysoff.feature_auth.ui
 
 import android.content.res.Configuration
-import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.fragment.app.FragmentActivity
-import my.cheysoff.core_ui.theme.LocalSpacing
+import my.cheysoff.core_ui.theme.AccentIndigo
+import my.cheysoff.core_ui.theme.AppBlack
+import my.cheysoff.core_ui.theme.EncryptedNoteGrey
+import my.cheysoff.core_ui.theme.IndigoTint
 import my.cheysoff.core_ui.theme.NotesTheme
+import my.cheysoff.core_ui.theme.WelcomeGrey
 import my.cheysoff.feature_auth.R
 import my.cheysoff.feature_auth.model.AuthScreenIntent
 import my.cheysoff.feature_auth.model.AuthScreenState
+
+private val MoonGlow = Color(0xFFEAE3C8) // pale warm moonlight; tweak freely
 
 @Composable
 fun AuthScreen(
     state: AuthScreenState,
     onIntentReceived: (AuthScreenIntent) -> Unit,
 ) {
-    val spacing = LocalSpacing.current
-
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-    ) { innerPadding ->
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(AppBlack)
+    ) {
+        // Large crescent, top-right, bleeding off the corner.
         Image(
-            painter = painterResource(id = R.drawable.background),
-            contentDescription = "Background",
-            modifier = Modifier.fillMaxSize(),
-            colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)),
-            contentScale = ContentScale.Crop
+            painter = painterResource(id = R.drawable.ic_crescent_moon),
+            contentDescription = null,
+            colorFilter = ColorFilter.tint(MoonGlow),
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .offset(x = 56.dp, y = (-44).dp)
+                .size(240.dp),
+        )
+
+        // Black -> transparent scrim over the top: darkens the moon's top + protects status bar.
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .height(150.dp)
+                .background(
+                    Brush.verticalGradient(
+                        0f to AppBlack,
+                        0.30f to AppBlack.copy(alpha = 0.75f),
+                        1f to Color.Transparent,
+                    )
+                )
         )
 
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
-                .padding(
-                    vertical = spacing.screenVertical, horizontal = spacing.screenHorizontal
-                )
+                .systemBarsPadding()
+                .padding(horizontal = 24.dp),
         ) {
-            Column(
+            // Wordmark, plain centered text at the top.
+            Text(
+                text = "Mañana",
+                color = Color(0xFF888888),
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp,
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Image(
-                    painter = painterResource(id = R.drawable.cloud_lock),
-                    contentDescription = "Application Logo",
-                    modifier = Modifier
-                        .size(120.dp)
-                        .padding(bottom = spacing.logoBottomMargin),
-                    colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.primary),
-                )
-                Text(
-                    text = "Welcome back.",
-                    style = MaterialTheme.typography.titleSmall,
-                    textAlign = TextAlign.Center,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = buildAnnotatedString {
-                        withStyle(style = SpanStyle(color = MaterialTheme.colorScheme.secondary)) {
-                            append("Unlock")
-                        }
-                        append(" your\naccount.")
-                    },
-                    style = MaterialTheme.typography.titleLarge,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(top = spacing.interItemSpacingVertical),
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-            }
-            AuthOptions(
-                state, onIntentReceived
+                    .fillMaxWidth()
+                    .padding(top = 4.dp),
+                style = MaterialTheme.typography.titleSmall.copy(textAlign = androidx.compose.ui.text.style.TextAlign.Center),
             )
+
+            Spacer(modifier = Modifier.weight(1f))
+
+            // Big editorial title, left-aligned, with the indigo "back."
+            Text(
+                text = buildAnnotatedString {
+                    withStyle(SpanStyle(color = WelcomeGrey, fontWeight = FontWeight.Light)) {
+                        append("Welcome")
+                    }
+                    append("\n")
+                    withStyle(SpanStyle(color = IndigoTint, fontWeight = FontWeight.Medium)) {
+                        append("back.")
+                    }
+                },
+                style = MaterialTheme.typography.titleLarge.copy(
+                    fontSize = 50.sp,
+                    lineHeight = 50.sp,
+                    letterSpacing = (-1.4).sp,
+                ),
+            )
+            Text(
+                text = "Your notes are encrypted on this device.",
+                color = EncryptedNoteGrey,
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
+                modifier = Modifier.padding(top = 14.dp),
+            )
+
+            Spacer(modifier = Modifier.height(30.dp))
+
+            AuthActions(state, onIntentReceived)
+
+            Spacer(modifier = Modifier.height(8.dp))
         }
     }
 }
 
 @Composable
-private fun AuthOptions(
+private fun AuthActions(
     state: AuthScreenState,
     onIntentReceived: (AuthScreenIntent) -> Unit,
-    modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val spacing = LocalSpacing.current
     Column(
-        modifier = modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(spacing.buttonGroupSpacing)
     ) {
         if (state.areBiometricsEnabled) {
-            AuthButton(
-                text = "Login with Biometrics",
-                iconRes = R.drawable.fingerprint,
+            Button(
                 onClick = {
                     (context as? FragmentActivity)?.let { activity ->
                         onIntentReceived(AuthScreenIntent.BiometricsLoginClickIntent(activity))
                     }
-                })
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(54.dp),
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(percent = 50),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AccentIndigo,
+                    contentColor = Color(0xFFE8E6F5),
+                ),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Image(
+                        painter = painterResource(id = R.drawable.fingerprint),
+                        contentDescription = null,
+                        colorFilter = ColorFilter.tint(Color(0xFFE8E6F5)),
+                        modifier = Modifier
+                            .size(20.dp)
+                            .padding(end = 8.dp),
+                    )
+                    Text(text = "Unlock", style = MaterialTheme.typography.titleSmall)
+                }
+            }
         }
 
-        if (state.areBiometricsEnabled && state.isPinEnabled) {
+        // Quiet PIN fallback (wired to the PIN intent; PIN flow itself is a later feature).
+        TextButton(onClick = { onIntentReceived(AuthScreenIntent.PinLoginClickIntent) }) {
             Text(
-                text = "or",
-                style = MaterialTheme.typography.titleMedium,
-                textAlign = TextAlign.Center,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-        }
-
-        if (state.isPinEnabled) {
-            AuthButton(
-                text = "Login with Pin",
-                iconRes = R.drawable.pin_code,
-                onClick = { onIntentReceived(AuthScreenIntent.PinLoginClickIntent) })
-        }
-    }
-}
-
-@Composable
-private fun AuthButton(
-    text: String,
-    @DrawableRes iconRes: Int,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val spacing = LocalSpacing.current
-    Button(
-        onClick = onClick,
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = spacing.buttonContentPadding),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = MaterialTheme.colorScheme.primary,
-            contentColor = MaterialTheme.colorScheme.onPrimary
-        )
-    ) {
-        Row(
-            modifier = Modifier.height(36.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = text,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Image(
-                painter = painterResource(id = iconRes),
-                contentDescription = text,
-                modifier = Modifier.padding(start = spacing.interItemSpacingHorizontal),
-                colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.onPrimary),
+                text = "Use PIN instead",
+                color = Color(0xFF777777),
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
             )
         }
     }
 }
 
-@Preview(
-    showBackground = true, showSystemUi = true,
-    uiMode = Configuration.UI_MODE_NIGHT_NO
-)
+@Preview(showBackground = true, showSystemUi = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
 @Composable
 fun AuthScreenPreview() {
-    NotesTheme(darkTheme = false) {
-        AuthScreen(AuthScreenState(), {})
+    NotesTheme(darkTheme = true) {
+        AuthScreen(AuthScreenState(areBiometricsEnabled = true), {})
     }
 }
