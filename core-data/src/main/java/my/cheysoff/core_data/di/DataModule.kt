@@ -9,11 +9,13 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import my.cheysoff.core_crypto.EncryptionManager
+import my.cheysoff.core_data.data.DataStoreSettingsRepository
 import my.cheysoff.core_data.data.RoomNotesRepository
 import my.cheysoff.core_data.data.local.FolderDao
 import my.cheysoff.core_data.data.local.NoteDao
 import my.cheysoff.core_data.data.local.NoteDatabase
 import my.cheysoff.core_domain.repository.NotesRepository
+import my.cheysoff.core_domain.repository.SettingsRepository
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 import javax.inject.Singleton
 
@@ -26,6 +28,12 @@ abstract class DataModule {
     abstract fun bindNotesRepository(
         roomNotesRepository: RoomNotesRepository
     ): NotesRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindSettingsRepository(
+        dataStoreSettingsRepository: DataStoreSettingsRepository
+    ): SettingsRepository
 
     companion object {
         @Provides
