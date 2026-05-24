@@ -51,6 +51,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -154,16 +155,19 @@ fun NotesListScreen(
 
 @Composable
 private fun HeaderLine(header: HeaderLineUi?) {
+    val sw = LocalConfiguration.current.screenWidthDp
     if (header == null) {
         Text(
             text = "Mañana",
             color = Color(0xFF888888),
             fontWeight = FontWeight.Bold,
+            fontSize = (sw * 0.04f).sp,
             style = MaterialTheme.typography.titleSmall,
             modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
         )
         return
     }
+    val headerSize = (sw * 0.092f).sp
     Text(
         text = buildAnnotatedString {
             withStyle(SpanStyle(color = TitleGrey, fontWeight = FontWeight.Light)) {
@@ -175,8 +179,8 @@ private fun HeaderLine(header: HeaderLineUi?) {
             }
         },
         style = MaterialTheme.typography.titleLarge.copy(
-            fontSize = 30.sp,
-            lineHeight = 32.sp,
+            fontSize = headerSize,
+            lineHeight = headerSize * 1.05f,
             letterSpacing = (-0.6).sp,
         ),
         modifier = Modifier.padding(start = 4.dp),
@@ -210,25 +214,30 @@ private fun FolderChips(
 
 @Composable
 private fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {
+    val sw = LocalConfiguration.current.screenWidthDp
     Text(
         text = text,
         color = if (selected) Color(0xFFE0DDF2) else Color(0xFF8A8A8A),
-        style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp, fontWeight = FontWeight.Medium),
+        style = MaterialTheme.typography.bodySmall.copy(
+            fontSize = (sw * 0.038f).sp,
+            fontWeight = FontWeight.Medium,
+        ),
         modifier = Modifier
             .clip(RoundedCornerShape(percent = 50))
             .background(if (selected) AccentIndigo else SurfaceDark)
             .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp, vertical = 10.dp),
     )
 }
 
 @Composable
 private fun SectionLabel(text: String) {
+    val sw = LocalConfiguration.current.screenWidthDp
     Text(
         text = text.uppercase(),
         color = Color(0xFF5E5E62),
         style = MaterialTheme.typography.labelSmall.copy(
-            fontSize = 11.sp,
+            fontSize = (sw * 0.032f).sp,
             fontWeight = FontWeight.Bold,
             letterSpacing = 1.2.sp,
         ),
@@ -272,6 +281,7 @@ private fun PinnedPager(pinned: List<NotePreviewUi>, onClick: (String) -> Unit) 
 
 @Composable
 private fun PinnedCard(note: NotePreviewUi, onClick: () -> Unit) {
+    val sw = LocalConfiguration.current.screenWidthDp
     val color = noteColor(note.folderId) ?: AccentIndigo
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -280,17 +290,17 @@ private fun PinnedCard(note: NotePreviewUi, onClick: () -> Unit) {
         onClick = onClick,
     ) {
         Box(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(15.dp)) {
+            Column(modifier = Modifier.padding(16.dp)) {
                 Text(
                     text = note.title.ifBlank { "Untitled" },
                     color = Color.White.copy(alpha = 0.92f),
-                    style = MaterialTheme.typography.titleSmall.copy(fontSize = 15.sp, fontWeight = FontWeight.Medium),
+                    style = MaterialTheme.typography.titleSmall.copy(fontSize = (sw * 0.05f).sp, fontWeight = FontWeight.Medium),
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
                     text = note.content,
                     color = Color.White.copy(alpha = 0.6f),
-                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp, lineHeight = 17.sp),
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = (sw * 0.036f).sp, lineHeight = (sw * 0.05f).sp),
                     maxLines = 3,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -300,7 +310,7 @@ private fun PinnedCard(note: NotePreviewUi, onClick: () -> Unit) {
                     Text(
                         text = meta,
                         color = Color.White.copy(alpha = 0.45f),
-                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Medium),
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = (sw * 0.028f).sp, fontWeight = FontWeight.Medium),
                     )
                 }
             }
@@ -319,6 +329,10 @@ private fun PinnedCard(note: NotePreviewUi, onClick: () -> Unit) {
 
 @Composable
 private fun NoteCard(note: NotePreviewUi, onClick: () -> Unit) {
+    val sw = LocalConfiguration.current.screenWidthDp
+    val titleSize = (sw * 0.043f).sp
+    val bodySize = (sw * 0.034f).sp
+    val bodyLine = (sw * 0.046f).sp
     val base = noteColor(note.folderId)
     val filled = note.isPinned || note.isFavorite
 
@@ -330,17 +344,17 @@ private fun NoteCard(note: NotePreviewUi, onClick: () -> Unit) {
             colors = CardDefaults.cardColors(containerColor = color),
             onClick = onClick,
         ) {
-            Column(modifier = Modifier.padding(13.dp)) {
+            Column(modifier = Modifier.padding(14.dp)) {
                 Text(
                     text = note.title.ifBlank { "Untitled" },
                     color = Color.White.copy(alpha = 0.9f),
-                    style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                    style = MaterialTheme.typography.titleSmall.copy(fontSize = titleSize, fontWeight = FontWeight.Medium),
                 )
                 Spacer(Modifier.height(5.dp))
                 Text(
                     text = note.content,
                     color = Color.White.copy(alpha = 0.55f),
-                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, lineHeight = 16.sp),
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = bodySize, lineHeight = bodyLine),
                     overflow = TextOverflow.Ellipsis,
                 )
             }
@@ -360,17 +374,17 @@ private fun NoteCard(note: NotePreviewUi, onClick: () -> Unit) {
                         .fillMaxHeight()
                         .background(edge)
                 )
-                Column(modifier = Modifier.padding(13.dp)) {
+                Column(modifier = Modifier.padding(14.dp)) {
                     Text(
                         text = note.title.ifBlank { "Untitled" },
                         color = TitleGrey,
-                        style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                        style = MaterialTheme.typography.titleSmall.copy(fontSize = titleSize, fontWeight = FontWeight.Medium),
                     )
                     Spacer(Modifier.height(5.dp))
                     Text(
                         text = note.content,
                         color = BodyGrey,
-                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, lineHeight = 16.sp),
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = bodySize, lineHeight = bodyLine),
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
