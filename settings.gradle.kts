@@ -22,8 +22,8 @@ dependencyResolutionManagement {
 rootProject.name = "notes"
 include(":app")
 include(":feature-auth")
-include(":feature-auth")
 include(":core-ui")
 include(":feature-notes")
 include(":core-crypto")
 include(":core-domain")
+include(":core-data")

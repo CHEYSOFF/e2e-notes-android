@@ -6,11 +6,14 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -20,9 +23,21 @@ import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
 import androidx.compose.foundation.lazy.staggeredgrid.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CalendarToday
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardColors
+import androidx.compose.material3.FabPosition
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -32,6 +47,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -42,10 +58,14 @@ import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import my.cheysoff.core_ui.theme.FrozenLake
+import my.cheysoff.core_ui.theme.Graphite
 import my.cheysoff.core_ui.theme.LocalRadii
 import my.cheysoff.core_ui.theme.LocalSpacing
+import my.cheysoff.core_ui.theme.Silver
 import my.cheysoff.feature_notes.LocalNoteDimensions
 import my.cheysoff.feature_notes.R
+import my.cheysoff.feature_notes.model.list.BottomBarItem
 import my.cheysoff.feature_notes.model.list.FolderPreviewUi
 import my.cheysoff.feature_notes.model.list.NotePreviewUi
 import my.cheysoff.feature_notes.model.list.NotesListIntent
@@ -61,6 +81,67 @@ fun NotesListScreen(
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = { onIntent(NotesListIntent.AddNoteClicked) },
+                shape = CircleShape,
+                containerColor = Graphite,
+                contentColor = Color.White,
+                modifier = Modifier
+                    .size(spacing.fabSize)
+                    .offset(y = spacing.fabOverlapOffset)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = "Add note",
+                    modifier = Modifier.size(spacing.fabIconSize)
+                )
+            }
+        },
+        floatingActionButtonPosition = FabPosition.Center,
+        bottomBar = {
+            BottomAppBar(
+                modifier = Modifier.height(spacing.bottomBarHeight),
+                containerColor = MaterialTheme.colorScheme.surface,
+                contentPadding = PaddingValues(horizontal = spacing.screenHorizontal)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = { onIntent(NotesListIntent.AllNotesClicked) }) {
+                        Icon(
+                            imageVector = Icons.Default.Description,
+                            contentDescription = "All notes",
+                            tint = if (state.selectedBottomBarItem == BottomBarItem.ALL_NOTES) FrozenLake else Silver
+                        )
+                    }
+                    IconButton(onClick = { onIntent(NotesListIntent.SearchClicked) }) {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = "Search",
+                            tint = if (state.selectedBottomBarItem == BottomBarItem.SEARCH) FrozenLake else Silver
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(spacing.bottomBarFabGap))
+                    IconButton(onClick = { onIntent(NotesListIntent.CalendarClicked) }) {
+                        Icon(
+                            imageVector = Icons.Default.CalendarToday,
+                            contentDescription = "Calendar",
+                            tint = if (state.selectedBottomBarItem == BottomBarItem.CALENDAR) FrozenLake else Silver
+                        )
+                    }
+                    IconButton(onClick = { onIntent(NotesListIntent.ProfileClicked) }) {
+                        Icon(
+                            imageVector = Icons.Default.Person,
+                            contentDescription = "Profile",
+                            tint = if (state.selectedBottomBarItem == BottomBarItem.PROFILE) FrozenLake else Silver
+                        )
+                    }
+                }
+            }
+        }
     ) { innerPadding ->
         LazyVerticalStaggeredGrid(
             modifier = Modifier
