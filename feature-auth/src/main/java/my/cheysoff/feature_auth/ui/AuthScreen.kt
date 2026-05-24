@@ -46,27 +46,28 @@ import my.cheysoff.feature_auth.R
 import my.cheysoff.feature_auth.model.AuthScreenIntent
 import my.cheysoff.feature_auth.model.AuthScreenState
 
-private val MoonGlow = Color(0xFFEAE3C8) // pale warm moonlight; tweak freely
-
 @Composable
 fun AuthScreen(
     state: AuthScreenState,
     onIntentReceived: (AuthScreenIntent) -> Unit,
 ) {
+    // Size the hero title relative to screen width so it keeps its proportion on large devices.
+    val screenWidthDp = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
+    val titleSize = (screenWidthDp * 0.175f).sp
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(AppBlack)
     ) {
-        // Large crescent, top-right, bleeding off the corner.
+        // Large emoji-style crescent (native gold), top-right, bleeding off the corner.
         Image(
             painter = painterResource(id = R.drawable.ic_crescent_moon),
             contentDescription = null,
-            colorFilter = ColorFilter.tint(MoonGlow),
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .offset(x = 56.dp, y = (-44).dp)
-                .size(240.dp),
+                .offset(x = 40.dp, y = (-30).dp)
+                .size(220.dp),
         )
 
         // Black -> transparent scrim over the top: darkens the moon's top + protects status bar.
@@ -116,16 +117,16 @@ fun AuthScreen(
                     }
                 },
                 style = MaterialTheme.typography.titleLarge.copy(
-                    fontSize = 50.sp,
-                    lineHeight = 50.sp,
+                    fontSize = titleSize,
+                    lineHeight = titleSize * 0.96f,
                     letterSpacing = (-1.4).sp,
                 ),
             )
             Text(
                 text = "Your notes are encrypted on this device.",
                 color = EncryptedNoteGrey,
-                style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
-                modifier = Modifier.padding(top = 14.dp),
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = 14.sp),
+                modifier = Modifier.padding(top = 16.dp),
             )
 
             Spacer(modifier = Modifier.height(30.dp))
