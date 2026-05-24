@@ -13,6 +13,8 @@ data class Spacing(
     val m: Dp = 16.dp,
     val l: Dp = 24.dp,
     val xl: Dp = 32.dp,
+    val xxl: Dp = 48.dp,
+    val xxxl: Dp = 64.dp,
 
     // --- Semantic Roles ---
 
@@ -45,4 +47,19 @@ data class Spacing(
 
     /** Spacing between a series of related buttons or interactive elements. */
     val buttonGroupSpacing: Dp = xs,
+
+    /** Height of the bottom navigation bar. */
+    val bottomBarHeight: Dp = 80.dp,
+
+    /** Size of the primary Floating Action Button. */
+    val fabSize: Dp = 56.dp,
+
+    /** Size of the icon inside a FAB. */
+    val fabIconSize: Dp = xl,
+
+    /** Vertical offset for the FAB to overlap the bottom bar. */
+    val fabOverlapOffset: Dp = 44.dp,
+
+    /** Gap in the bottom bar to accommodate the centered FAB. */
+    val bottomBarFabGap: Dp = xxxl,
 )

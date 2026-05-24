@@ -46,7 +46,6 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,7 +59,6 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.SavedStateHandle
 import my.cheysoff.core_ui.theme.LocalRadii
 import my.cheysoff.core_ui.theme.LocalSpacing
 import my.cheysoff.core_ui.theme.NotesTheme
@@ -73,7 +71,6 @@ fun SingleNoteScreen(
     state: SingleNoteScreenState,
     onIntent: (SingleNoteIntent) -> Unit
 ) {
-    LocalSpacing.current
     val focusManager = LocalFocusManager.current
     val isImeVisible = WindowInsets.isImeVisible
 
@@ -326,11 +323,14 @@ private fun BackButton(onClick: () -> Unit) {
 @Preview(showBackground = true)
 @Composable
 private fun SingleNoteScreenPreview() {
-    val viewModel = remember { SingleNoteViewModel(SavedStateHandle()) }
     NotesTheme {
         SingleNoteScreen(
-            state = viewModel.state.collectAsState().value,
-            onIntent = { intent -> viewModel.onIntent(intent) }
+            state = SingleNoteScreenState(
+                title = "Meeting Notes",
+                content = "Discussed Q4 roadmap and action items.",
+                isPinned = true
+            ),
+            onIntent = {}
         )
     }
 }
