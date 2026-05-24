@@ -23,13 +23,18 @@ class EncryptionManager @Inject constructor(
 
     private var cachedPassphrase: ByteArray? = null
 
+    // When the app is backgrounded we clear the cache and must NOT let an in-flight
+    // pre-warm (or any concurrent call) repopulate it. Reset on foreground.
+    @Volatile
+    private var isBackgrounded = false
+
     private val sharedPreferences: SharedPreferences by lazy {
         try {
             createSharedPreferences()
         } catch (e: Exception) {
             // If creation fails (e.g. due to Keystore issues after restore),
             // we delete the existing preferences file to allow a fresh start.
-            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit(commit = true) {
                 clear()
             }
             _wasPassphraseReset = true
@@ -81,7 +86,10 @@ class EncryptionManager @Inject constructor(
             newPassphrase
         }
 
-        cachedPassphrase = result
+        // Don't repopulate the cache if we've been backgrounded (race with clearCache).
+        if (!isBackgrounded) {
+            cachedPassphrase = result
+        }
         return result.copyOf()
     }
 
@@ -98,8 +106,17 @@ class EncryptionManager @Inject constructor(
      */
     @Synchronized
     fun clearCache() {
+        isBackgrounded = true
         cachedPassphrase?.fill(0)
         cachedPassphrase = null
+    }
+
+    /**
+     * Re-enables passphrase caching when the app returns to the foreground.
+     */
+    @Synchronized
+    fun onForeground() {
+        isBackgrounded = false
     }
 
     companion object {
