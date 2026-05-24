@@ -51,9 +51,11 @@ fun AuthScreen(
     state: AuthScreenState,
     onIntentReceived: (AuthScreenIntent) -> Unit,
 ) {
-    // Size the hero title relative to screen width so it keeps its proportion on large devices.
+    // Everything scales with screen width so proportions match the design on any device.
     val screenWidthDp = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
     val titleSize = (screenWidthDp * 0.175f).sp
+    val secondarySize = (screenWidthDp * 0.042f).sp
+    val moonSize = (screenWidthDp * 0.78f).dp
 
     Box(
         modifier = Modifier
@@ -66,8 +68,8 @@ fun AuthScreen(
             contentDescription = null,
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .offset(x = 40.dp, y = (-30).dp)
-                .size(220.dp),
+                .offset(x = moonSize * 0.18f, y = -(moonSize * 0.10f))
+                .size(moonSize),
         )
 
         // Black -> transparent scrim over the top: darkens the moon's top + protects status bar.
@@ -75,7 +77,7 @@ fun AuthScreen(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
-                .height(150.dp)
+                .height(170.dp)
                 .background(
                     Brush.verticalGradient(
                         0f to AppBlack,
@@ -96,7 +98,7 @@ fun AuthScreen(
                 text = "Mañana",
                 color = Color(0xFF888888),
                 fontWeight = FontWeight.Bold,
-                fontSize = 14.sp,
+                fontSize = secondarySize,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 4.dp),
@@ -125,7 +127,7 @@ fun AuthScreen(
             Text(
                 text = "Your notes are encrypted on this device.",
                 color = EncryptedNoteGrey,
-                style = MaterialTheme.typography.bodySmall.copy(fontSize = 14.sp),
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = secondarySize),
                 modifier = Modifier.padding(top = 16.dp),
             )
 
@@ -144,6 +146,9 @@ private fun AuthActions(
     onIntentReceived: (AuthScreenIntent) -> Unit,
 ) {
     val context = LocalContext.current
+    val screenWidthDp = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
+    val unlockTextSize = (screenWidthDp * 0.05f).sp
+    val fingerprintSize = (screenWidthDp * 0.075f).dp
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -157,7 +162,7 @@ private fun AuthActions(
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(54.dp),
+                    .height(60.dp),
                 shape = androidx.compose.foundation.shape.RoundedCornerShape(percent = 50),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = AccentIndigo,
@@ -170,10 +175,13 @@ private fun AuthActions(
                         contentDescription = null,
                         colorFilter = ColorFilter.tint(Color(0xFFE8E6F5)),
                         modifier = Modifier
-                            .size(20.dp)
-                            .padding(end = 8.dp),
+                            .size(fingerprintSize)
+                            .padding(end = 10.dp),
                     )
-                    Text(text = "Unlock", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        text = "Unlock",
+                        style = MaterialTheme.typography.titleSmall.copy(fontSize = unlockTextSize),
+                    )
                 }
             }
         }
@@ -183,7 +191,7 @@ private fun AuthActions(
             Text(
                 text = "Use PIN instead",
                 color = Color(0xFF777777),
-                style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = (screenWidthDp * 0.038f).sp),
             )
         }
     }
