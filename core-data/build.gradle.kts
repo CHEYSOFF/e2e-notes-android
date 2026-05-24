@@ -53,6 +53,9 @@ dependencies {
     implementation(libs.sqlcipher)
     implementation(libs.androidx.sqlite)
 
+    // DataStore (app settings)
+    implementation(libs.androidx.datastore.preferences)
+
     implementation(libs.hilt.android)
     kapt(libs.hilt.compiler)
 
