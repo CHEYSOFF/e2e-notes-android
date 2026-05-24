@@ -62,7 +62,7 @@ fun AuthScreen(
     ) {
         // Large emoji-style crescent (native gold), top-right, bleeding off the corner.
         Image(
-            painter = painterResource(id = R.drawable.ic_crescent_moon),
+            painter = painterResource(id = R.drawable.ic_crescent_moon_3d),
             contentDescription = null,
             modifier = Modifier
                 .align(Alignment.TopEnd)
