@@ -1,14 +1,18 @@
 package my.cheysoff.feature_notes.ui.list
 
-import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -23,6 +27,7 @@ import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
 import androidx.compose.foundation.lazy.staggeredgrid.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -30,10 +35,10 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.Card
-import androidx.compose.material3.CardColors
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FabPosition
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -42,35 +47,31 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.key
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.painter.Painter
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.graphics.vector.rememberVectorPainter
-import androidx.compose.ui.layout.layout
-import androidx.compose.ui.platform.LocalLayoutDirection
-import androidx.compose.ui.res.vectorResource
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
-import my.cheysoff.core_ui.theme.FrozenLake
-import my.cheysoff.core_ui.theme.Graphite
-import my.cheysoff.core_ui.theme.LocalRadii
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import my.cheysoff.core_ui.theme.AccentIndigo
+import my.cheysoff.core_ui.theme.BodyGrey
+import my.cheysoff.core_ui.theme.IndigoTint
 import my.cheysoff.core_ui.theme.LocalSpacing
-import my.cheysoff.core_ui.theme.Silver
-import my.cheysoff.feature_notes.LocalNoteDimensions
-import my.cheysoff.feature_notes.R
+import my.cheysoff.core_ui.theme.SurfaceDark
+import my.cheysoff.core_ui.theme.TitleGrey
+import my.cheysoff.core_ui.theme.UncategorizedEdge
+import my.cheysoff.core_ui.theme.colorForCategory
 import my.cheysoff.feature_notes.model.list.BottomBarItem
 import my.cheysoff.feature_notes.model.list.FolderPreviewUi
+import my.cheysoff.feature_notes.model.list.HeaderLineUi
 import my.cheysoff.feature_notes.model.list.NotePreviewUi
 import my.cheysoff.feature_notes.model.list.NotesListIntent
 import my.cheysoff.feature_notes.model.list.NotesListScreenState
-
 
 @Composable
 fun NotesListScreen(
@@ -81,12 +82,13 @@ fun NotesListScreen(
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
+        containerColor = MaterialTheme.colorScheme.background,
         floatingActionButton = {
             FloatingActionButton(
                 onClick = { onIntent(NotesListIntent.AddNoteClicked) },
                 shape = CircleShape,
-                containerColor = Graphite,
-                contentColor = Color.White,
+                containerColor = AccentIndigo,
+                contentColor = Color(0xFFE8E6F5),
                 modifier = Modifier
                     .size(spacing.fabSize)
                     .offset(y = spacing.fabOverlapOffset)
@@ -99,186 +101,169 @@ fun NotesListScreen(
             }
         },
         floatingActionButtonPosition = FabPosition.Center,
-        bottomBar = {
-            BottomAppBar(
-                modifier = Modifier.height(spacing.bottomBarHeight),
-                containerColor = MaterialTheme.colorScheme.surface,
-                contentPadding = PaddingValues(horizontal = spacing.screenHorizontal)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(onClick = { onIntent(NotesListIntent.AllNotesClicked) }) {
-                        Icon(
-                            imageVector = Icons.Default.Description,
-                            contentDescription = "All notes",
-                            tint = if (state.selectedBottomBarItem == BottomBarItem.ALL_NOTES) FrozenLake else Silver
-                        )
-                    }
-                    IconButton(onClick = { onIntent(NotesListIntent.SearchClicked) }) {
-                        Icon(
-                            imageVector = Icons.Default.Search,
-                            contentDescription = "Search",
-                            tint = if (state.selectedBottomBarItem == BottomBarItem.SEARCH) FrozenLake else Silver
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(spacing.bottomBarFabGap))
-                    IconButton(onClick = { onIntent(NotesListIntent.CalendarClicked) }) {
-                        Icon(
-                            imageVector = Icons.Default.CalendarToday,
-                            contentDescription = "Calendar",
-                            tint = if (state.selectedBottomBarItem == BottomBarItem.CALENDAR) FrozenLake else Silver
-                        )
-                    }
-                    IconButton(onClick = { onIntent(NotesListIntent.ProfileClicked) }) {
-                        Icon(
-                            imageVector = Icons.Default.Person,
-                            contentDescription = "Profile",
-                            tint = if (state.selectedBottomBarItem == BottomBarItem.PROFILE) FrozenLake else Silver
-                        )
-                    }
-                }
-            }
-        }
+        bottomBar = { FloatingNavBar(state.selectedBottomBarItem, onIntent) }
     ) { innerPadding ->
         LazyVerticalStaggeredGrid(
-            modifier = Modifier
-                .fillMaxSize(),
+            modifier = Modifier.fillMaxSize(),
             columns = StaggeredGridCells.Fixed(2),
             contentPadding = PaddingValues(
                 top = innerPadding.calculateTopPadding() + spacing.screenVertical,
-                start = innerPadding.calculateStartPadding(LocalLayoutDirection.current) + spacing.screenHorizontal,
-                end = innerPadding.calculateEndPadding(LocalLayoutDirection.current) + spacing.screenHorizontal,
+                start = innerPadding.calculateStartPadding(androidx.compose.ui.platform.LocalLayoutDirection.current) + spacing.screenHorizontal,
+                end = innerPadding.calculateEndPadding(androidx.compose.ui.platform.LocalLayoutDirection.current) + spacing.screenHorizontal,
                 bottom = innerPadding.calculateBottomPadding() + spacing.screenVertical
             ),
             verticalItemSpacing = spacing.interItemSpacingVertical,
             horizontalArrangement = Arrangement.spacedBy(spacing.interItemSpacingHorizontal)
         ) {
-            item(
-                span = StaggeredGridItemSpan.FullLine,
-                contentType = "folders_section"
-            ) {
-                FoldersSection(
-                    folderPreviews = state.folderPreviews,
-                    onFolderClick = { id -> onIntent(NotesListIntent.FolderClicked(id)) }
+            item(span = StaggeredGridItemSpan.FullLine, contentType = "header") {
+                HeaderLine(state.headerLine)
+            }
+            item(span = StaggeredGridItemSpan.FullLine, contentType = "chips") {
+                FolderChips(
+                    folders = state.folderPreviews,
+                    selectedFolderId = state.selectedFolderId,
+                    onAllClick = { state.selectedFolderId?.let { onIntent(NotesListIntent.FolderClicked(it)) } },
+                    onFolderClick = { onIntent(NotesListIntent.FolderClicked(it)) },
                 )
             }
-            item(span = StaggeredGridItemSpan.FullLine) {
-                Text(
-                    text = "Recent notes",
-                    style = MaterialTheme.typography.titleMedium,
-                    textAlign = TextAlign.Start,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
+
+            if (state.pinnedPreviews.isNotEmpty()) {
+                item(span = StaggeredGridItemSpan.FullLine, contentType = "pinned_label") {
+                    SectionLabel("Pinned")
+                }
+                item(span = StaggeredGridItemSpan.FullLine, contentType = "pinned_pager") {
+                    PinnedPager(state.pinnedPreviews) { onIntent(NotesListIntent.NoteClicked(it)) }
+                }
+            }
+
+            if (state.notePreviews.isNotEmpty()) {
+                item(span = StaggeredGridItemSpan.FullLine, contentType = "recent_label") {
+                    SectionLabel("Recent")
+                }
             }
             items(
                 items = state.notePreviews,
                 key = { it.id },
-                contentType = { "note_preview" }
+                contentType = { "note" }
             ) { note ->
-                NotePreview(
-                    notePreview = note,
-                    onClick = { onIntent(NotesListIntent.NoteClicked(note.id)) }
-                )
+                NoteCard(note) { onIntent(NotesListIntent.NoteClicked(note.id)) }
             }
         }
     }
 }
 
-fun Modifier.fillWidthOfParent(parentPadding: Dp) = this.then( // todo reconsider using this hack
-    layout { measurable, constraints ->
-
-        val paddingPx = parentPadding.roundToPx()
-
-        val expandedConstraints = constraints.copy(
-            minWidth = constraints.minWidth + paddingPx * 4, // todo check magic number 4 instead of 2
-            maxWidth = constraints.maxWidth + paddingPx * 4
+@Composable
+private fun HeaderLine(header: HeaderLineUi?) {
+    if (header == null) {
+        Text(
+            text = "Mañana",
+            color = Color(0xFF888888),
+            fontWeight = FontWeight.Bold,
+            style = MaterialTheme.typography.titleSmall,
+            modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
         )
+        return
+    }
+    Text(
+        text = buildAnnotatedString {
+            withStyle(SpanStyle(color = TitleGrey, fontWeight = FontWeight.Light)) {
+                append(header.prefix)
+            }
+            append("\n")
+            withStyle(SpanStyle(color = IndigoTint, fontWeight = FontWeight.Medium)) {
+                append(header.accent)
+            }
+        },
+        style = MaterialTheme.typography.titleLarge.copy(
+            fontSize = 30.sp,
+            lineHeight = 32.sp,
+            letterSpacing = (-0.6).sp,
+        ),
+        modifier = Modifier.padding(start = 4.dp),
+    )
+}
 
-        val placeable = measurable.measure(expandedConstraints)
-
-        layout(placeable.width, placeable.height) {
-            // Shift back so content visually ignores parent padding
-            placeable.placeRelative(
-                x = -paddingPx,
-                y = 0
+@Composable
+private fun FolderChips(
+    folders: List<FolderPreviewUi>,
+    selectedFolderId: String?,
+    onAllClick: () -> Unit,
+    onFolderClick: (String) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(vertical = 16.dp, horizontal = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        Chip(text = "All", selected = selectedFolderId == null, onClick = onAllClick)
+        folders.forEach { folder ->
+            Chip(
+                text = folder.name,
+                selected = selectedFolderId == folder.id,
+                onClick = { onFolderClick(folder.id) },
             )
         }
     }
-)
+}
 
 @Composable
-fun FoldersSection(
-    folderPreviews: List<FolderPreviewUi>,
-    onFolderClick: (String) -> Unit
-) {
-    val spacing = LocalSpacing.current
-
-    val pages =
-        remember(folderPreviews) {
-            folderPreviews.chunked(3)
-        }
-
-    val pagerState = rememberPagerState(
-        initialPage = 0,
-        pageCount = { pages.size }
-    )
-
-    val folderPainter =
-        rememberVectorPainter(image = ImageVector.vectorResource(id = R.drawable.folder))
-
-    Column(
+private fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {
+    Text(
+        text = text,
+        color = if (selected) Color(0xFFE0DDF2) else Color(0xFF8A8A8A),
+        style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp, fontWeight = FontWeight.Medium),
         modifier = Modifier
-            .fillMaxWidth()
-            .fillWidthOfParent(spacing.screenHorizontal)
-            .padding(start = spacing.screenHorizontal * 2), // todo check magic padding
-        verticalArrangement = Arrangement.spacedBy(spacing.insideCardItemSpacing),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = spacing.screenHorizontal),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(
-                text = "My Folders",
-                style = MaterialTheme.typography.titleMedium,
-                textAlign = TextAlign.Start,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-            Text(
-                text = "Filter by",
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.clickable { /* TODO */ },
-                textAlign = TextAlign.End,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-        }
+            .clip(RoundedCornerShape(percent = 50))
+            .background(if (selected) AccentIndigo else SurfaceDark)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+    )
+}
 
+@Composable
+private fun SectionLabel(text: String) {
+    Text(
+        text = text.uppercase(),
+        color = Color(0xFF5E5E62),
+        style = MaterialTheme.typography.labelSmall.copy(
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 1.2.sp,
+        ),
+        modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 10.dp),
+    )
+}
+
+@Composable
+private fun PinnedPager(pinned: List<NotePreviewUi>, onClick: (String) -> Unit) {
+    val pagerState = rememberPagerState(pageCount = { pinned.size })
+    Column(modifier = Modifier.fillMaxWidth()) {
         HorizontalPager(
-            modifier = Modifier
-                .fillMaxWidth()
-                .graphicsLayer(),
             state = pagerState,
-            beyondViewportPageCount = 0,
+            pageSpacing = 10.dp,
+            contentPadding = PaddingValues(end = if (pinned.size > 1) 34.dp else 0.dp),
         ) { page ->
-            val pageItems = pages[page]
-
+            PinnedCard(pinned[page]) { onClick(pinned[page].id) }
+        }
+        if (pinned.size > 1) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceAround
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 11.dp),
+                horizontalArrangement = Arrangement.Center,
             ) {
-                pageItems.forEach { folder ->
-                    key(folder.id) {
-                        FolderPreview(
-                            folderPreview = folder,
-                            painter = folderPainter,
-                            onClick = { onFolderClick(folder.id) }
-                        )
-                    }
+                repeat(pinned.size) { i ->
+                    val active = i == pagerState.currentPage
+                    Box(
+                        modifier = Modifier
+                            .padding(horizontal = 2.5.dp)
+                            .height(6.dp)
+                            .width(if (active) 16.dp else 6.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(if (active) IndigoTint else Color(0xFF2E2E34))
+                    )
                 }
             }
         }
@@ -286,70 +271,172 @@ fun FoldersSection(
 }
 
 @Composable
-private fun FolderPreview(
-    folderPreview: FolderPreviewUi,
-    painter: Painter,
-    onClick: () -> Unit
-) {
-    val spacing = LocalSpacing.current
-    val radii = LocalRadii.current
-    val dimensions = LocalNoteDimensions.current
-
-    Column(
-        modifier = Modifier
-            .width(dimensions.folderIconSize)
-            .clip(RoundedCornerShape(radii.medium))
-            .clickable(onClick = onClick)
-            .padding(spacing.insideCardItemSpacing),
-        horizontalAlignment = Alignment.CenterHorizontally,
+private fun PinnedCard(note: NotePreviewUi, onClick: () -> Unit) {
+    val color = noteColor(note.folderId) ?: AccentIndigo
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = color),
+        onClick = onClick,
     ) {
-        Image(
-            painter = painter,
-            contentDescription = "Folder icon",
-            modifier = Modifier.size(dimensions.folderIconSize),
-        )
-        Text(
-            text = folderPreview.name,
-            style = MaterialTheme.typography.bodyLarge,
-            textAlign = TextAlign.Center,
-            color = MaterialTheme.colorScheme.onBackground
-        )
+        Box(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(15.dp)) {
+                Text(
+                    text = note.title.ifBlank { "Untitled" },
+                    color = Color.White.copy(alpha = 0.92f),
+                    style = MaterialTheme.typography.titleSmall.copy(fontSize = 15.sp, fontWeight = FontWeight.Medium),
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = note.content,
+                    color = Color.White.copy(alpha = 0.6f),
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp, lineHeight = 17.sp),
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val meta = relativeTime(note.updatedAt)
+                if (meta.isNotEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        text = meta,
+                        color = Color.White.copy(alpha = 0.45f),
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, fontWeight = FontWeight.Medium),
+                    )
+                }
+            }
+            Icon(
+                imageVector = Icons.Default.PushPin,
+                contentDescription = null,
+                tint = Color.White.copy(alpha = 0.8f),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(12.dp)
+                    .size(14.dp),
+            )
+        }
     }
 }
 
 @Composable
-private fun NotePreview(
-    notePreview: NotePreviewUi,
-    onClick: () -> Unit
-) {
-    val spacing = LocalSpacing.current
-    val dimensions = LocalNoteDimensions.current
+private fun NoteCard(note: NotePreviewUi, onClick: () -> Unit) {
+    val base = noteColor(note.folderId)
+    val filled = note.isPinned || note.isFavorite
 
-    Card(
-        modifier = Modifier.heightIn(max = dimensions.noteCardMaxHeight),
-        colors = CardColors(
-            MaterialTheme.colorScheme.surface,
-            MaterialTheme.colorScheme.onSurface,
-            MaterialTheme.colorScheme.surface,
-            MaterialTheme.colorScheme.onSurface
-        ),
-        onClick = onClick
-    ) {
-        Column(
-            modifier = Modifier.padding(spacing.insideCardItemSpacing),
-            verticalArrangement = Arrangement.spacedBy(spacing.insideCardItemSpacing),
+    if (filled) {
+        val color = base ?: AccentIndigo
+        Card(
+            modifier = Modifier.heightIn(max = 300.dp),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = color),
+            onClick = onClick,
         ) {
-            Text(
-                text = notePreview.title,
-                style = MaterialTheme.typography.titleSmall,
-                textAlign = TextAlign.Start,
-            )
-            Text(
-                text = notePreview.content,
-                style = MaterialTheme.typography.bodyMedium,
-                textAlign = TextAlign.Start,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Column(modifier = Modifier.padding(13.dp)) {
+                Text(
+                    text = note.title.ifBlank { "Untitled" },
+                    color = Color.White.copy(alpha = 0.9f),
+                    style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                )
+                Spacer(Modifier.height(5.dp))
+                Text(
+                    text = note.content,
+                    color = Color.White.copy(alpha = 0.55f),
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, lineHeight = 16.sp),
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
+    } else {
+        val edge = base ?: UncategorizedEdge
+        Card(
+            modifier = Modifier.heightIn(max = 300.dp),
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+            onClick = onClick,
+        ) {
+            Row(modifier = Modifier.height(IntrinsicSize.Min)) {
+                Box(
+                    modifier = Modifier
+                        .width(3.dp)
+                        .fillMaxHeight()
+                        .background(edge)
+                )
+                Column(modifier = Modifier.padding(13.dp)) {
+                    Text(
+                        text = note.title.ifBlank { "Untitled" },
+                        color = TitleGrey,
+                        style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.sp, fontWeight = FontWeight.Medium),
+                    )
+                    Spacer(Modifier.height(5.dp))
+                    Text(
+                        text = note.content,
+                        color = BodyGrey,
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp, lineHeight = 16.sp),
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FloatingNavBar(
+    selected: BottomBarItem,
+    onIntent: (NotesListIntent) -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp)
+                .clip(RoundedCornerShape(percent = 50))
+                .background(SurfaceDark),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceAround,
+        ) {
+            NavIcon(Icons.Default.Description, selected == BottomBarItem.ALL_NOTES) {
+                onIntent(NotesListIntent.AllNotesClicked)
+            }
+            NavIcon(Icons.Default.Search, selected == BottomBarItem.SEARCH) {
+                onIntent(NotesListIntent.SearchClicked)
+            }
+            Spacer(Modifier.width(56.dp)) // gap for the centered FAB
+            NavIcon(Icons.Default.CalendarToday, selected == BottomBarItem.CALENDAR) {
+                onIntent(NotesListIntent.CalendarClicked)
+            }
+            NavIcon(Icons.Default.Person, selected == BottomBarItem.PROFILE) {
+                onIntent(NotesListIntent.ProfileClicked)
+            }
+        }
+    }
+}
+
+@Composable
+private fun NavIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, active: Boolean, onClick: () -> Unit) {
+    IconButton(onClick = onClick) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = if (active) IndigoTint else Color(0xFF5E5E5E),
+        )
+    }
+}
+
+/** Category color for a note, or null when it has no folder (caller picks the neutral/accent fallback). */
+private fun noteColor(folderId: String?): Color? =
+    if (folderId.isNullOrBlank()) null else colorForCategory(folderId)
+
+private fun relativeTime(ts: Long): String {
+    if (ts <= 0L) return ""
+    val min = (System.currentTimeMillis() - ts) / 60_000
+    return when {
+        min < 1 -> "just now"
+        min < 60 -> "${min}m ago"
+        min < 1440 -> "${min / 60}h ago"
+        else -> "${min / 1440}d ago"
     }
 }
