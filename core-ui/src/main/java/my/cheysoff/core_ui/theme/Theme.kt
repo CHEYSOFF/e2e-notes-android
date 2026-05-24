@@ -10,15 +10,33 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
 
 val LocalSpacing = staticCompositionLocalOf { Spacing() }
 val LocalRadii = staticCompositionLocalOf { Radii() }
-private val DarkColorScheme = darkColorScheme( // todo: change colors
-    primary = Purple80,
-    secondary = PurpleGrey80,
-    tertiary = Pink80
+
+// Mañana dark theme — see redesign-design-system memory.
+private val DarkColorScheme = darkColorScheme(
+    primary = AccentIndigo,
+    onPrimary = Color.White,
+    primaryContainer = AccentIndigo,
+    onPrimaryContainer = Color.White,
+
+    secondary = IndigoTint,
+    onSecondary = Color.White,
+
+    background = AppBlack,
+    onBackground = TitleGrey,
+
+    surface = SurfaceDark,
+    onSurface = TitleGrey,
+    surfaceContainer = SurfaceDark,
+    surfaceVariant = SurfaceDark,
+    onSurfaceVariant = BodyGrey,
+
+    outline = OutlineDark,
 )
 
 //private val LightColorScheme = lightColorScheme(
