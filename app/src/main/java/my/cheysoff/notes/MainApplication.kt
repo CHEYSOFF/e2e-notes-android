@@ -26,10 +26,17 @@ class MainApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // The whole app is an encrypted database — if SQLCipher's native lib can't load there's
+        // no graceful degradation. Fail fast with a clear cause instead of letting Room crash
+        // later at DB-open with a confusing error.
         try {
             System.loadLibrary("sqlcipher")
         } catch (e: UnsatisfiedLinkError) {
-            Log.e("MainApplication", "Failed to load sqlcipher library", e)
+            Log.e("MainApplication", "Failed to load SQLCipher native library", e)
+            throw IllegalStateException(
+                "SQLCipher native library failed to load; the encrypted database cannot be opened.",
+                e
+            )
         }
 
         // Pre-warm the passphrase on a background thread
