@@ -50,7 +50,7 @@ class SingleNoteViewModel @Inject constructor(
                 .filterNotNull()
                 .onEach { note ->
                     _state.update { currentState ->
-                        if (currentState.isUITheSame(note)) {
+                        val updated = if (currentState.isUITheSame(note)) {
                             // Editable fields unchanged; still refresh updatedAt so the editor's
                             // "Edited … ago" meta reflects the latest save without clobbering edits.
                             if (currentState.updatedAt != note.updatedAt) {
@@ -67,6 +67,8 @@ class SingleNoteViewModel @Inject constructor(
                                 updatedAt = note.updatedAt,
                             )
                         }
+                        // Mark loaded once, so the editor knows it can initialize from the stored HTML.
+                        if (updated.isLoaded) updated else updated.copy(isLoaded = true)
                     }
                 }
                 .launchIn(viewModelScope)

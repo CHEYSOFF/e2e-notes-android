@@ -3,8 +3,8 @@ package my.cheysoff.feature_notes.ui.single
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
@@ -48,23 +48,27 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusDirection
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mohamedrejeb.richeditor.model.RichTextState
+import com.mohamedrejeb.richeditor.model.rememberRichTextState
+import com.mohamedrejeb.richeditor.ui.BasicRichTextEditor
+import kotlinx.coroutines.flow.drop
 import my.cheysoff.core_ui.theme.AccentIndigo
 import my.cheysoff.core_ui.theme.AppBlack
 import my.cheysoff.core_ui.theme.BodyGrey
@@ -84,9 +88,22 @@ fun SingleNoteScreen(
     val focusManager = LocalFocusManager.current
     val isImeVisible = WindowInsets.isImeVisible
     val accent = editorAccent(state.folderId)
+    val richTextState = rememberRichTextState()
 
     LaunchedEffect(isImeVisible) {
         if (!isImeVisible) focusManager.clearFocus()
+    }
+
+    // Initialize the editor from the stored HTML once the note is loaded, then push every
+    // subsequent (user) change back as HTML. drop(1) skips the emission caused by setHtml,
+    // so merely opening a note doesn't trigger a save.
+    LaunchedEffect(state.isLoaded) {
+        if (state.isLoaded) {
+            richTextState.setHtml(state.content)
+            snapshotFlow { richTextState.annotatedString }
+                .drop(1)
+                .collect { onIntent(SingleNoteIntent.ContentChanged(richTextState.toHtml())) }
+        }
     }
 
     Scaffold(
@@ -94,12 +111,13 @@ fun SingleNoteScreen(
             .fillMaxSize()
             .imePadding(),
         topBar = { EditorTopBar(isPinned = state.isPinned, accent = accent, onIntent = onIntent) },
-        floatingActionButton = { FormattingToolbar(accent = accent) },
+        floatingActionButton = { FormattingToolbar(richTextState = richTextState, accent = accent) },
         floatingActionButtonPosition = androidx.compose.material3.FabPosition.Center,
         containerColor = AppBlack,
     ) { paddingValues ->
         NoteEditor(
             state = state,
+            richTextState = richTextState,
             accent = accent,
             onIntent = onIntent,
             modifier = Modifier
@@ -112,6 +130,7 @@ fun SingleNoteScreen(
 @Composable
 private fun NoteEditor(
     state: SingleNoteScreenState,
+    richTextState: RichTextState,
     accent: Color,
     onIntent: (SingleNoteIntent) -> Unit,
     modifier: Modifier = Modifier,
@@ -119,9 +138,7 @@ private fun NoteEditor(
     val spacing = LocalSpacing.current
     val sw = LocalConfiguration.current.screenWidthDp
     val focusManager = LocalFocusManager.current
-    val keyboardController = LocalSoftwareKeyboardController.current
     val scrollState = rememberScrollState()
-    val contentFocus = remember { FocusRequester() }
 
     val titleStyle = MaterialTheme.typography.titleLarge.copy(
         fontWeight = FontWeight.Light,
@@ -129,19 +146,14 @@ private fun NoteEditor(
         lineHeight = (sw * 0.08f).sp,
     )
     val bodyStyle = MaterialTheme.typography.bodyMedium.copy(fontSize = (sw * 0.042f).sp)
-    // Recompute only when the content changes, not on every recomposition while typing.
-    val wordCount = remember(state.content) { countWords(state.content) }
+    // Word count over the plain text (not the HTML), recomputed only when the text changes.
+    val wordCount = remember(richTextState.annotatedString) {
+        countWords(richTextState.annotatedString.text)
+    }
 
     Column(
         modifier = modifier
             .verticalScroll(scrollState)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-            ) {
-                contentFocus.requestFocus()
-                keyboardController?.show()
-            }
             .padding(horizontal = spacing.screenHorizontal),
     ) {
         BasicTextField(
@@ -161,7 +173,6 @@ private fun NoteEditor(
             },
         )
 
-        // Meta line: relative edit time + live word count.
         Text(
             text = metaLine(state.updatedAt, wordCount),
             color = Color(0xFF5E5E62),
@@ -169,17 +180,13 @@ private fun NoteEditor(
             modifier = Modifier.padding(top = 8.dp, bottom = 18.dp),
         )
 
-        BasicTextField(
-            value = state.content,
-            onValueChange = { onIntent(SingleNoteIntent.ContentChanged(it)) },
+        BasicRichTextEditor(
+            state = richTextState,
             textStyle = bodyStyle.copy(color = Color(0xFFB9B9BD)),
             cursorBrush = SolidColor(accent),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Default),
-            modifier = Modifier
-                .fillMaxWidth()
-                .focusRequester(contentFocus),
+            modifier = Modifier.fillMaxWidth(),
             decorationBox = { inner ->
-                if (state.content.isEmpty()) {
+                if (richTextState.annotatedString.isEmpty()) {
                     Text("Start writing…", style = bodyStyle, color = Color(0xFF4A4A50))
                 }
                 inner()
@@ -209,8 +216,8 @@ private fun EditorTopBar(
             onIntent(SingleNoteIntent.BackClicked)
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            TopIcon(Icons.AutoMirrored.Filled.Undo, "Undo", BodyGrey) { /* TODO (Phase 6) */ }
-            TopIcon(Icons.AutoMirrored.Filled.Redo, "Redo", BodyGrey) { /* TODO (Phase 6) */ }
+            TopIcon(Icons.AutoMirrored.Filled.Undo, "Undo", BodyGrey) { /* TODO: undo history */ }
+            TopIcon(Icons.AutoMirrored.Filled.Redo, "Redo", BodyGrey) { /* TODO: redo history */ }
             TopIcon(
                 Icons.Outlined.PushPin,
                 "Pin",
@@ -229,21 +236,24 @@ private fun TopIcon(icon: ImageVector, desc: String, tint: Color, onClick: () ->
 }
 
 @Composable
-private fun FormattingToolbar(accent: Color) {
+private fun FormattingToolbar(richTextState: RichTextState, accent: Color) {
     var showStyles by remember { mutableStateOf(false) }
-    var selectedStyle by remember { mutableStateOf("Body") }
     val inactive = Color(0xFF9A9A9E)
     val border = Color(0xFF24242C)
 
+    val current = richTextState.currentSpanStyle
+    val isBold = (current.fontWeight?.weight ?: 0) >= FontWeight.Bold.weight
+    val isItalic = current.fontStyle == FontStyle.Italic
+    val isList = richTextState.isUnorderedList
+
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         if (showStyles) {
-            StylePopover(accent = accent, selected = selectedStyle) {
-                selectedStyle = it
+            StylePopover(accent = accent) { style ->
+                applyTextStyle(richTextState, style)
                 showStyles = false
             }
             Spacer(Modifier.height(10.dp))
         }
-        // Fixed floating pill above the keyboard.
         Row(
             modifier = Modifier
                 .shadow(12.dp, RoundedCornerShape(percent = 50))
@@ -257,10 +267,31 @@ private fun FormattingToolbar(accent: Color) {
             ToolIcon(Icons.Outlined.TextFields, "Text style", if (showStyles) accent else inactive) {
                 showStyles = !showStyles
             }
-            ToolIcon(Icons.Outlined.FormatBold, "Bold", inactive) { /* TODO (Phase 6) */ }
-            ToolIcon(Icons.Outlined.FormatItalic, "Italic", inactive) { /* TODO (Phase 6) */ }
-            ToolIcon(Icons.AutoMirrored.Outlined.FormatListBulleted, "List", inactive) { /* TODO (Phase 6) */ }
+            ToolIcon(Icons.Outlined.FormatBold, "Bold", if (isBold) accent else inactive) {
+                richTextState.toggleSpanStyle(SpanStyle(fontWeight = FontWeight.Bold))
+            }
+            ToolIcon(Icons.Outlined.FormatItalic, "Italic", if (isItalic) accent else inactive) {
+                richTextState.toggleSpanStyle(SpanStyle(fontStyle = FontStyle.Italic))
+            }
+            ToolIcon(Icons.AutoMirrored.Outlined.FormatListBulleted, "List", if (isList) accent else inactive) {
+                richTextState.toggleUnorderedList()
+            }
             ToolIcon(Icons.Outlined.Checklist, "Checklist", inactive) { /* TODO (Phase 7) */ }
+        }
+    }
+}
+
+private val TitleSpan = SpanStyle(fontSize = 24.sp, fontWeight = FontWeight.Bold)
+private val HeadingSpan = SpanStyle(fontSize = 19.sp, fontWeight = FontWeight.Bold)
+
+/** Best-effort heading styles via span size+weight. "Body" clears the heading spans. */
+private fun applyTextStyle(state: RichTextState, label: String) {
+    when (label) {
+        "Title" -> state.toggleSpanStyle(TitleSpan)
+        "Heading" -> state.toggleSpanStyle(HeadingSpan)
+        "Body" -> {
+            state.removeSpanStyle(TitleSpan)
+            state.removeSpanStyle(HeadingSpan)
         }
     }
 }
@@ -273,7 +304,7 @@ private fun ToolIcon(icon: ImageVector, desc: String, tint: Color, onClick: () -
 }
 
 @Composable
-private fun StylePopover(accent: Color, selected: String, onSelect: (String) -> Unit) {
+private fun StylePopover(accent: Color, onSelect: (String) -> Unit) {
     val options = listOf("Title" to "800", "Heading" to "700", "Body" to "400")
     Column(
         modifier = Modifier
@@ -285,12 +316,10 @@ private fun StylePopover(accent: Color, selected: String, onSelect: (String) -> 
             .padding(6.dp),
     ) {
         options.forEach { (label, weight) ->
-            val isSelected = label == selected
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(10.dp))
-                    .background(if (isSelected) accent.copy(alpha = 0.22f) else Color.Transparent)
                     .clickable { onSelect(label) }
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -298,7 +327,7 @@ private fun StylePopover(accent: Color, selected: String, onSelect: (String) -> 
             ) {
                 Text(
                     text = label,
-                    color = if (isSelected) accent else TitleGrey,
+                    color = TitleGrey,
                     style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp, fontWeight = FontWeight.Medium),
                 )
                 Text(
