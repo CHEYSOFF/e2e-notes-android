@@ -51,7 +51,13 @@ class SingleNoteViewModel @Inject constructor(
                 .onEach { note ->
                     _state.update { currentState ->
                         if (currentState.isUITheSame(note)) {
-                            currentState
+                            // Editable fields unchanged; still refresh updatedAt so the editor's
+                            // "Edited … ago" meta reflects the latest save without clobbering edits.
+                            if (currentState.updatedAt != note.updatedAt) {
+                                currentState.copy(updatedAt = note.updatedAt)
+                            } else {
+                                currentState
+                            }
                         } else {
                             currentState.copy(
                                 title = note.title,
