@@ -30,10 +30,10 @@ class RoomNotesRepository @Inject constructor(
 
     override suspend fun saveNote(note: Note) {
         val now = System.currentTimeMillis()
-        val stamped = note.copy(
-            createdAt = if (note.createdAt == 0L) now else note.createdAt,
-            updatedAt = now,
-        )
+        // Preserve the original creation time from the stored row (the UI doesn't carry it);
+        // only a brand-new note (no existing row) gets createdAt = now.
+        val createdAt = noteDao.getCreatedAt(note.id) ?: now
+        val stamped = note.copy(createdAt = createdAt, updatedAt = now)
         noteDao.insertNote(stamped.toEntity())
     }
 

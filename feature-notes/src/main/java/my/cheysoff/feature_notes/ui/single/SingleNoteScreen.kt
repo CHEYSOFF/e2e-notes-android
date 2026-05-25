@@ -129,6 +129,8 @@ private fun NoteEditor(
         lineHeight = (sw * 0.08f).sp,
     )
     val bodyStyle = MaterialTheme.typography.bodyMedium.copy(fontSize = (sw * 0.042f).sp)
+    // Recompute only when the content changes, not on every recomposition while typing.
+    val wordCount = remember(state.content) { countWords(state.content) }
 
     Column(
         modifier = modifier
@@ -161,7 +163,7 @@ private fun NoteEditor(
 
         // Meta line: relative edit time + live word count.
         Text(
-            text = metaLine(state.updatedAt, state.content),
+            text = metaLine(state.updatedAt, wordCount),
             color = Color(0xFF5E5E62),
             style = MaterialTheme.typography.bodySmall.copy(fontSize = (sw * 0.03f).sp, fontWeight = FontWeight.Medium),
             modifier = Modifier.padding(top = 8.dp, bottom = 18.dp),
@@ -313,11 +315,25 @@ private fun StylePopover(accent: Color, selected: String, onSelect: (String) -> 
 private fun editorAccent(folderId: String?): Color =
     if (folderId.isNullOrBlank()) AccentIndigo else colorForCategory(folderId)
 
-private fun metaLine(updatedAt: Long, content: String): String {
-    val words = content.trim().split(Regex("\\s+")).count { it.isNotBlank() }
+private fun metaLine(updatedAt: Long, words: Int): String {
     val wordLabel = if (words == 1) "1 word" else "$words words"
     val rel = relativeTime(updatedAt)
     return if (rel.isEmpty()) wordLabel else "Edited $rel · $wordLabel"
+}
+
+/** Counts words without allocating a list/regex (single pass over the chars). */
+private fun countWords(text: String): Int {
+    var count = 0
+    var inWord = false
+    for (c in text) {
+        if (c.isWhitespace()) {
+            inWord = false
+        } else if (!inWord) {
+            inWord = true
+            count++
+        }
+    }
+    return count
 }
 
 private fun relativeTime(ts: Long): String {

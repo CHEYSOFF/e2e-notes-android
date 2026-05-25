@@ -14,6 +14,10 @@ interface NoteDao {
     @Query("SELECT * FROM notes WHERE id = :id")
     fun getNoteById(id: String): Flow<NoteEntity?>
 
+    /** Existing creation timestamp for a note, or null if it doesn't exist yet. */
+    @Query("SELECT createdAt FROM notes WHERE id = :id")
+    suspend fun getCreatedAt(id: String): Long?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertNote(note: NoteEntity)
 
