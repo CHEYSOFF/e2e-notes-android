@@ -1,6 +1,7 @@
 package my.cheysoff.feature_notes.model.list
 
 import androidx.compose.runtime.Immutable
+import androidx.core.text.HtmlCompat
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.model.NotePreview
 
@@ -24,9 +25,13 @@ fun NotePreview.toUi() = NotePreviewUi(
 fun Note.toUi() = NotePreviewUi(
     id = id,
     title = title,
-    content = content,
+    // content is stored as HTML (rich text); show a plain-text snippet in the list.
+    content = htmlToPlainText(content),
     isPinned = isPinned,
     isFavorite = isFavorite,
     folderId = folderId,
     updatedAt = updatedAt,
 )
+
+private fun htmlToPlainText(html: String): String =
+    HtmlCompat.fromHtml(html, HtmlCompat.FROM_HTML_MODE_COMPACT).toString().trim()
