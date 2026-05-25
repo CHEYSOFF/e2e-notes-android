@@ -57,7 +57,8 @@ class SingleNoteViewModel @Inject constructor(
                                 title = note.title,
                                 content = note.content,
                                 isPinned = note.isPinned,
-                                folderId = note.folderId
+                                folderId = note.folderId,
+                                updatedAt = note.updatedAt,
                             )
                         }
                     }
