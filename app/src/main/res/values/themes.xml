@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.Notes" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="Theme.Notes" parent="android:Theme.Material.Light.NoActionBar">
+        <!-- Black window background so cold start and screen transitions don't flash white
+             (Compose draws the dark UI on top of this window). -->
+        <item name="android:windowBackground">@color/black</item>
+    </style>
 </resources>
