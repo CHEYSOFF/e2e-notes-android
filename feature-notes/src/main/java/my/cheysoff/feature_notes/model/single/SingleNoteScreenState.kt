@@ -8,6 +8,7 @@ data class SingleNoteScreenState(
     val content: String = "",
     val isPinned: Boolean = false,
     val folderId: String? = null,
+    val updatedAt: Long = 0L,
     val isLoading: Boolean = false,
     val error: String? = null
 )
