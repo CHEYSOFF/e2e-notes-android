@@ -50,8 +50,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -60,6 +63,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import my.cheysoff.core_ui.theme.AccentIndigo
+import my.cheysoff.core_ui.theme.AppBlack
 import my.cheysoff.core_ui.theme.BodyGrey
 import my.cheysoff.core_ui.theme.IndigoTint
 import my.cheysoff.core_ui.theme.LocalSpacing
@@ -247,16 +251,42 @@ private fun SectionLabel(text: String) {
 
 @Composable
 private fun PinnedPager(pinned: List<NotePreviewUi>, onClick: (String) -> Unit) {
+    val spacing = LocalSpacing.current
     val pagerState = rememberPagerState(pageCount = { pinned.size })
+    val multiple = pinned.size > 1
     Column(modifier = Modifier.fillMaxWidth()) {
-        HorizontalPager(
-            state = pagerState,
-            pageSpacing = 10.dp,
-            contentPadding = PaddingValues(end = if (pinned.size > 1) 34.dp else 0.dp),
-        ) { page ->
-            PinnedCard(pinned[page]) { onClick(pinned[page].id) }
+        // Full-bleed: cancel the grid's side padding so the peeking card runs to the real screen edge.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillWidthOfParent(spacing.screenHorizontal)
+        ) {
+            HorizontalPager(
+                state = pagerState,
+                pageSpacing = 10.dp,
+                // Current card aligns with the content inset on the left; next card peeks off the right edge.
+                contentPadding = PaddingValues(
+                    start = spacing.screenHorizontal,
+                    end = if (multiple) spacing.screenHorizontal * 3 else spacing.screenHorizontal,
+                ),
+            ) { page ->
+                PinnedCard(pinned[page]) { onClick(pinned[page].id) }
+            }
+            // Soft fade both edges into the black background (non-interactive: swipes pass through).
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(
+                        Brush.horizontalGradient(
+                            0f to AppBlack,
+                            0.05f to Color.Transparent,
+                            0.95f to Color.Transparent,
+                            1f to AppBlack,
+                        )
+                    )
+            )
         }
-        if (pinned.size > 1) {
+        if (multiple) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -454,3 +484,21 @@ private fun relativeTime(ts: Long): String {
         else -> "${min / 1440}d ago"
     }
 }
+
+/**
+ * Lets content inside a horizontally-padded parent (e.g. a LazyVerticalStaggeredGrid with
+ * contentPadding) span the full parent width by expanding by [parentPadding] on each side and
+ * shifting back, cancelling the parent's horizontal padding for this element only.
+ */
+private fun Modifier.fillWidthOfParent(parentPadding: Dp) = this.then(
+    layout { measurable, constraints ->
+        val px = parentPadding.roundToPx()
+        val fullWidth = constraints.maxWidth + px * 2
+        val placeable = measurable.measure(
+            constraints.copy(minWidth = fullWidth, maxWidth = fullWidth)
+        )
+        layout(placeable.width, placeable.height) {
+            placeable.place(-px, 0)
+        }
+    }
+)
