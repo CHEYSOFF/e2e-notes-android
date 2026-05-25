@@ -29,13 +29,16 @@ class RoomNotesRepository @Inject constructor(
     }
 
     override suspend fun saveNote(note: Note) {
-        val now = System.currentTimeMillis()
-        // Preserve the original creation time from the stored row (the UI doesn't carry it).
-        // A missing row (new note) OR a legacy note migrated with createdAt=0 gets initialized to now.
-        val existingCreatedAt = noteDao.getCreatedAt(note.id)
-        val createdAt = if (existingCreatedAt == null || existingCreatedAt == 0L) now else existingCreatedAt
-        val stamped = note.copy(createdAt = createdAt, updatedAt = now)
-        noteDao.insertNote(stamped.toEntity())
+        // One write, no read: the upsert preserves/initializes createdAt and refreshes updatedAt.
+        noteDao.upsertNote(
+            id = note.id,
+            title = note.title,
+            content = note.content,
+            isPinned = note.isPinned,
+            isFavorite = note.isFavorite,
+            folderId = note.folderId,
+            timestamp = System.currentTimeMillis(),
+        )
     }
 
     override suspend fun deleteNote(id: String) {
