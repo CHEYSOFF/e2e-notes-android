@@ -3,10 +3,8 @@ package my.cheysoff.feature_notes.ui.single
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
@@ -17,7 +15,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.isImeVisible
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
@@ -58,17 +55,14 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import my.cheysoff.core_ui.theme.AccentIndigo
@@ -80,7 +74,6 @@ import my.cheysoff.core_ui.theme.ToolbarDark
 import my.cheysoff.core_ui.theme.colorForCategory
 import my.cheysoff.feature_notes.model.single.SingleNoteIntent
 import my.cheysoff.feature_notes.model.single.SingleNoteScreenState
-import kotlin.math.roundToInt
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -235,16 +228,12 @@ private fun TopIcon(icon: ImageVector, desc: String, tint: Color, onClick: () ->
 
 @Composable
 private fun FormattingToolbar(accent: Color) {
-    var dragOffset by remember { mutableStateOf(Offset.Zero) }
     var showStyles by remember { mutableStateOf(false) }
     var selectedStyle by remember { mutableStateOf("Body") }
     val inactive = Color(0xFF9A9A9E)
     val border = Color(0xFF24242C)
 
-    Column(
-        modifier = Modifier.offset { IntOffset(dragOffset.x.roundToInt(), dragOffset.y.roundToInt()) },
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
         if (showStyles) {
             StylePopover(accent = accent, selected = selectedStyle) {
                 selectedStyle = it
@@ -252,39 +241,24 @@ private fun FormattingToolbar(accent: Color) {
             }
             Spacer(Modifier.height(10.dp))
         }
-        Column(
+        // Fixed floating pill above the keyboard.
+        Row(
             modifier = Modifier
-                .shadow(12.dp, RoundedCornerShape(28.dp))
-                .clip(RoundedCornerShape(28.dp))
+                .shadow(12.dp, RoundedCornerShape(percent = 50))
+                .clip(RoundedCornerShape(percent = 50))
                 .background(ToolbarDark)
-                .border(1.dp, border, RoundedCornerShape(28.dp))
-                // Draggable: the whole pill can be moved; icon taps still work.
-                .pointerInput(Unit) {
-                    detectDragGestures { _, drag -> dragOffset += drag }
-                },
-            horizontalAlignment = Alignment.CenterHorizontally,
+                .border(1.dp, border, RoundedCornerShape(percent = 50))
+                .padding(horizontal = 16.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(
-                modifier = Modifier
-                    .padding(top = 7.dp)
-                    .width(30.dp)
-                    .height(4.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(Color(0xFF34343C))
-            )
-            Row(
-                modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                ToolIcon(Icons.Outlined.TextFields, "Text style", if (showStyles) accent else inactive) {
-                    showStyles = !showStyles
-                }
-                ToolIcon(Icons.Outlined.FormatBold, "Bold", inactive) { /* TODO (Phase 6) */ }
-                ToolIcon(Icons.Outlined.FormatItalic, "Italic", inactive) { /* TODO (Phase 6) */ }
-                ToolIcon(Icons.AutoMirrored.Outlined.FormatListBulleted, "List", inactive) { /* TODO (Phase 6) */ }
-                ToolIcon(Icons.Outlined.Checklist, "Checklist", inactive) { /* TODO (Phase 7) */ }
+            ToolIcon(Icons.Outlined.TextFields, "Text style", if (showStyles) accent else inactive) {
+                showStyles = !showStyles
             }
+            ToolIcon(Icons.Outlined.FormatBold, "Bold", inactive) { /* TODO (Phase 6) */ }
+            ToolIcon(Icons.Outlined.FormatItalic, "Italic", inactive) { /* TODO (Phase 6) */ }
+            ToolIcon(Icons.AutoMirrored.Outlined.FormatListBulleted, "List", inactive) { /* TODO (Phase 6) */ }
+            ToolIcon(Icons.Outlined.Checklist, "Checklist", inactive) { /* TODO (Phase 7) */ }
         }
     }
 }
