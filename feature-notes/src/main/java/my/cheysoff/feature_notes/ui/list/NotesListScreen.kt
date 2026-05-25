@@ -6,13 +6,11 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -120,7 +118,7 @@ fun NotesListScreen(
             horizontalArrangement = Arrangement.spacedBy(spacing.interItemSpacingHorizontal)
         ) {
             item(span = StaggeredGridItemSpan.FullLine, contentType = "header") {
-                HeaderLine(state.headerLine)
+                HeaderLine(state.headerLine, state.statsLine)
             }
             item(span = StaggeredGridItemSpan.FullLine, contentType = "chips") {
                 FolderChips(
@@ -157,37 +155,49 @@ fun NotesListScreen(
 }
 
 @Composable
-private fun HeaderLine(header: HeaderLineUi?) {
+private fun HeaderLine(header: HeaderLineUi?, statsLine: String?) {
     val sw = LocalConfiguration.current.screenWidthDp
-    if (header == null) {
-        Text(
-            text = "Mañana",
-            color = Color(0xFF888888),
-            fontWeight = FontWeight.Bold,
-            fontSize = (sw * 0.04f).sp,
-            style = MaterialTheme.typography.titleSmall,
-            modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
-        )
-        return
+    Column(modifier = Modifier.padding(start = 4.dp, top = 28.dp)) {
+        if (header == null) {
+            Text(
+                text = "Mañana",
+                color = Color(0xFF888888),
+                fontWeight = FontWeight.Bold,
+                fontSize = (sw * 0.04f).sp,
+                style = MaterialTheme.typography.titleSmall,
+            )
+        } else {
+            val headerSize = (sw * 0.092f).sp
+            Text(
+                text = buildAnnotatedString {
+                    withStyle(SpanStyle(color = TitleGrey, fontWeight = FontWeight.Light)) {
+                        append(header.prefix)
+                    }
+                    append("\n")
+                    withStyle(SpanStyle(color = IndigoTint, fontWeight = FontWeight.Medium)) {
+                        append(header.accent)
+                    }
+                },
+                style = MaterialTheme.typography.titleLarge.copy(
+                    fontSize = headerSize,
+                    lineHeight = headerSize * 1.05f,
+                    letterSpacing = (-0.6).sp,
+                ),
+            )
+        }
+        // Permanent stats sub-line (when enabled), always beneath the motivational line.
+        if (statsLine != null) {
+            Text(
+                text = statsLine,
+                color = Color(0xFF6A6A70),
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontSize = (sw * 0.036f).sp,
+                    fontWeight = FontWeight.Medium,
+                ),
+                modifier = Modifier.padding(top = 12.dp),
+            )
+        }
     }
-    val headerSize = (sw * 0.092f).sp
-    Text(
-        text = buildAnnotatedString {
-            withStyle(SpanStyle(color = TitleGrey, fontWeight = FontWeight.Light)) {
-                append(header.prefix)
-            }
-            append("\n")
-            withStyle(SpanStyle(color = IndigoTint, fontWeight = FontWeight.Medium)) {
-                append(header.accent)
-            }
-        },
-        style = MaterialTheme.typography.titleLarge.copy(
-            fontSize = headerSize,
-            lineHeight = headerSize * 1.05f,
-            letterSpacing = (-0.6).sp,
-        ),
-        modifier = Modifier.padding(start = 4.dp),
-    )
 }
 
 @Composable
@@ -389,20 +399,25 @@ private fun NoteCard(note: NotePreviewUi, onClick: () -> Unit) {
         }
     } else {
         val edge = base ?: UncategorizedEdge
-        Card(
-            modifier = Modifier.heightIn(max = 300.dp),
-            shape = RoundedCornerShape(18.dp),
-            colors = CardDefaults.cardColors(containerColor = SurfaceDark),
-            onClick = onClick,
-        ) {
-            Row(modifier = Modifier.height(IntrinsicSize.Min)) {
-                Box(
-                    modifier = Modifier
-                        .width(3.dp)
-                        .fillMaxHeight()
-                        .background(edge)
-                )
-                Column(modifier = Modifier.padding(14.dp)) {
+        val shape = RoundedCornerShape(18.dp)
+        // Two stacked rounded cards: a colored one behind, and the gray content card shifted right
+        // so the color peeks along the left edge and tapers as it curls around the top/bottom corners.
+        Box(modifier = Modifier.heightIn(max = 300.dp)) {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clip(shape)
+                    .background(edge)
+            )
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 5.dp),
+                shape = shape,
+                colors = CardDefaults.cardColors(containerColor = SurfaceDark),
+                onClick = onClick,
+            ) {
+                Column(modifier = Modifier.padding(start = 13.dp, top = 14.dp, end = 14.dp, bottom = 14.dp)) {
                     Text(
                         text = note.title.ifBlank { "Untitled" },
                         color = TitleGrey,
