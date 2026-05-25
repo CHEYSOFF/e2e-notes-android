@@ -7,5 +7,6 @@ package my.cheysoff.core_domain.model
 data class HeaderSettings(
     val showGreetings: Boolean = true,
     val showDailyPhrases: Boolean = true,
-    val showStats: Boolean = false,
+    // Stats is a permanent sub-line beneath the motivational line; on by default.
+    val showStats: Boolean = true,
 )

@@ -5,6 +5,7 @@ import androidx.compose.runtime.Immutable
 @Immutable
 data class NotesListScreenState(
     val headerLine: HeaderLineUi? = null,
+    val statsLine: String? = null,
     val folderPreviews: List<FolderPreviewUi> = emptyList(),
     val pinnedPreviews: List<NotePreviewUi> = emptyList(),
     val notePreviews: List<NotePreviewUi> = emptyList(),
