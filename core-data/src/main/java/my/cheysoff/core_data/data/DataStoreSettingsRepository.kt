@@ -30,7 +30,7 @@ class DataStoreSettingsRepository @Inject constructor(
             HeaderSettings(
                 showGreetings = prefs[Keys.GREETINGS] ?: true,
                 showDailyPhrases = prefs[Keys.DAILY_PHRASES] ?: true,
-                showStats = prefs[Keys.STATS] ?: false,
+                showStats = prefs[Keys.STATS] ?: true,
             )
         }
 

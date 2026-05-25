@@ -46,31 +46,35 @@ class NotesListViewModel @Inject constructor(
     private var allNotes: List<Note> = emptyList()
 
     init {
-        // Pick the header line once per screen open (random source among the enabled ones).
+        // Pick the motivational line once per screen open (random greeting/phrase among the enabled).
         viewModelScope.launch {
             val settings = settingsRepository.headerSettings.first()
-            val notes = notesRepository.getNotes().first()
-            _state.update {
-                it.copy(headerLine = buildHeaderLine(settings, notes))
-            }
+            _state.update { it.copy(headerLine = pickMotivationalLine(settings)) }
         }
 
+        // Stats is a separate, always-visible sub-line (not part of the random rotation) and tracks
+        // the live note counts.
         combine(
+            settingsRepository.headerSettings,
             notesRepository.getFolders(),
             notesRepository.getNotes(),
-        ) { folders, notes -> folders to notes }
-            .onEach { (folders, notes) ->
+        ) { settings, folders, notes -> Triple(settings, folders, notes) }
+            .onEach { (settings, folders, notes) ->
                 allNotes = notes
                 val countByFolder = notes.groupingBy { it.folderId }.eachCount()
                 val folderPreviews = folders.map { folder ->
                     folder.toUi(notesAmount = countByFolder[folder.id] ?: 0)
                 }
+                val stats = if (settings.showStats) {
+                    "${notes.size} notes · ${notes.count { it.isPinned }} pinned"
+                } else null
                 _state.update { current ->
                     val visible = visibleNotes(current.selectedFolderId)
                     current.copy(
                         folderPreviews = folderPreviews,
                         pinnedPreviews = visible.filter { it.isPinned }.map { it.toUi() },
                         notePreviews = visible.filter { !it.isPinned }.map { it.toUi() },
+                        statsLine = stats,
                         isLoading = false,
                     )
                 }
@@ -90,11 +94,10 @@ class NotesListViewModel @Inject constructor(
         HeaderLineUi("Today's", "canvas."),
     )
 
-    private fun buildHeaderLine(settings: HeaderSettings, notes: List<Note>): HeaderLineUi? {
+    private fun pickMotivationalLine(settings: HeaderSettings): HeaderLineUi? {
         val sources = buildList {
             if (settings.showGreetings) add("greeting")
             if (settings.showDailyPhrases) add("phrase")
-            if (settings.showStats) add("stats")
         }
         if (sources.isEmpty()) return null // -> screen shows the small "Mañana" wordmark
         return when (sources.random()) {
@@ -106,10 +109,6 @@ class NotesListViewModel @Inject constructor(
                     else -> "night."
                 }
                 HeaderLineUi("Good", word)
-            }
-            "stats" -> {
-                val pinned = notes.count { it.isPinned }
-                HeaderLineUi("You have", "${notes.size} notes · $pinned pinned.")
             }
             else -> dailyPhrases.random()
         }
