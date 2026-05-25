@@ -12,6 +12,13 @@ import my.cheysoff.core_ui.R
 
 // Light (300) and Medium (500) are driven from the Urbanist variable font via the
 // 'wght' axis; Regular/Bold/ExtraBold use the bundled static instances.
+//
+// TODO(font): Urbanist has NO Cyrillic glyphs, so Russian (and other Cyrillic) note text falls
+// back to a system font and looks inconsistent with the Latin UI. Replace this family with a
+// geometric sans that covers Latin + Cyrillic in the same weights — Onest (closest to Urbanist),
+// Manrope, or Nunito Sans (all OFL, have 300/500/700 + Cyrillic). One change here updates the
+// whole app. Compose can't auto-fallback per-script across separate Font entries, so use a single
+// dual-script family rather than adding Urbanist + a Cyrillic font side by side.
 @OptIn(ExperimentalTextApi::class)
 val UrbanistFontFamily = FontFamily(
     Font(
