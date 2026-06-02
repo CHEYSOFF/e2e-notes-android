@@ -4,6 +4,7 @@ import androidx.compose.runtime.Immutable
 import androidx.core.text.HtmlCompat
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.model.NotePreview
+import my.cheysoff.feature_notes.model.single.checklistProgress
 
 @Immutable
 data class NotePreviewUi(
@@ -14,6 +15,8 @@ data class NotePreviewUi(
     val isFavorite: Boolean = false,
     val folderId: String? = null,
     val updatedAt: Long = 0L,
+    val checklistDone: Int = 0,
+    val checklistTotal: Int = 0,
 )
 
 fun NotePreview.toUi() = NotePreviewUi(
@@ -22,16 +25,21 @@ fun NotePreview.toUi() = NotePreviewUi(
     content = content,
 )
 
-fun Note.toUi() = NotePreviewUi(
-    id = id,
-    title = title,
-    // content is stored as HTML (rich text); show a plain-text snippet in the list.
-    content = htmlToPlainText(content),
-    isPinned = isPinned,
-    isFavorite = isFavorite,
-    folderId = folderId,
-    updatedAt = updatedAt,
-)
+fun Note.toUi(): NotePreviewUi {
+    val (done, total) = checklistProgress(checklist)
+    return NotePreviewUi(
+        id = id,
+        title = title,
+        // content is stored as HTML (rich text); show a plain-text snippet in the list.
+        content = htmlToPlainText(content),
+        isPinned = isPinned,
+        isFavorite = isFavorite,
+        folderId = folderId,
+        updatedAt = updatedAt,
+        checklistDone = done,
+        checklistTotal = total,
+    )
+}
 
 private fun htmlToPlainText(html: String): String =
     HtmlCompat.fromHtml(html, HtmlCompat.FROM_HTML_MODE_COMPACT).toString().trim()
