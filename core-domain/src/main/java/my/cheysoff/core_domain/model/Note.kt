@@ -4,6 +4,7 @@ data class Note(
     val id: String,
     val title: String,
     val content: String,
+    val checklist: String = "",
     val isPinned: Boolean = false,
     val isFavorite: Boolean = false,
     val folderId: String? = null,
