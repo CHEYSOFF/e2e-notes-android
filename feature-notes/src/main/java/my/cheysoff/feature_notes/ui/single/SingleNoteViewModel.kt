@@ -19,8 +19,11 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.repository.NotesRepository
+import my.cheysoff.feature_notes.model.single.ChecklistItem
 import my.cheysoff.feature_notes.model.single.SingleNoteIntent
 import my.cheysoff.feature_notes.model.single.SingleNoteScreenState
+import my.cheysoff.feature_notes.model.single.parseChecklist
+import my.cheysoff.feature_notes.model.single.serializeChecklist
 import javax.inject.Inject
 
 sealed class SingleNoteEvent {
@@ -62,6 +65,7 @@ class SingleNoteViewModel @Inject constructor(
                             currentState.copy(
                                 title = note.title,
                                 content = note.content,
+                                checklist = parseChecklist(note.checklist),
                                 isPinned = note.isPinned,
                                 folderId = note.folderId,
                                 updatedAt = note.updatedAt,
@@ -89,6 +93,42 @@ class SingleNoteViewModel @Inject constructor(
 
             is SingleNoteIntent.TogglePin -> {
                 _state.update { it.copy(isPinned = !it.isPinned) }
+                saveNote(debounce = false)
+            }
+
+            is SingleNoteIntent.ChecklistItemAdded -> {
+                _state.update { s ->
+                    val item = ChecklistItem(id = intent.newId, text = "", isDone = false)
+                    val list = s.checklist
+                    val at = intent.afterId?.let { id -> list.indexOfFirst { it.id == id } } ?: -1
+                    val next = if (at < 0) list + item else list.toMutableList().apply { add(at + 1, item) }
+                    s.copy(checklist = next)
+                }
+                saveNote(debounce = false)
+            }
+
+            is SingleNoteIntent.ChecklistItemToggled -> {
+                _state.update { s ->
+                    s.copy(checklist = s.checklist.map {
+                        if (it.id == intent.id) it.copy(isDone = !it.isDone) else it
+                    })
+                }
+                saveNote(debounce = false)
+            }
+
+            is SingleNoteIntent.ChecklistItemTextChanged -> {
+                _state.update { s ->
+                    s.copy(checklist = s.checklist.map {
+                        if (it.id == intent.id) it.copy(text = intent.text) else it
+                    })
+                }
+                saveNote(debounce = true)
+            }
+
+            is SingleNoteIntent.ChecklistItemRemoved -> {
+                _state.update { s ->
+                    s.copy(checklist = s.checklist.filterNot { it.id == intent.id })
+                }
                 saveNote(debounce = false)
             }
 
@@ -121,6 +161,7 @@ class SingleNoteViewModel @Inject constructor(
                         id = id,
                         title = current.title,
                         content = current.content,
+                        checklist = current.checklist.serializeChecklist(),
                         isPinned = current.isPinned,
                         folderId = current.folderId
                     )
@@ -134,6 +175,7 @@ class SingleNoteViewModel @Inject constructor(
     private fun SingleNoteScreenState.isUITheSame(note: Note): Boolean {
         return title == note.title &&
                 content == note.content &&
+                checklist.serializeChecklist() == note.checklist &&
                 isPinned == note.isPinned &&
                 folderId == note.folderId
     }

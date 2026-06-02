@@ -5,7 +5,7 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
-@Database(entities = [NoteEntity::class, FolderEntity::class], version = 3, exportSchema = false)
+@Database(entities = [NoteEntity::class, FolderEntity::class], version = 4, exportSchema = false)
 abstract class NoteDatabase : RoomDatabase() {
     abstract val noteDao: NoteDao
     abstract val folderDao: FolderDao
@@ -28,6 +28,13 @@ abstract class NoteDatabase : RoomDatabase() {
                         "(`id` TEXT NOT NULL, `name` TEXT NOT NULL, `colorArgb` INTEGER, " +
                         "PRIMARY KEY(`id`))"
                 )
+            }
+        }
+
+        // v3 -> v4: add the serialized checklist blob. Additive, so existing notes survive.
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE notes ADD COLUMN checklist TEXT NOT NULL DEFAULT ''")
             }
         }
     }
