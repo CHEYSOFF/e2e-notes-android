@@ -89,6 +89,7 @@ import my.cheysoff.core_ui.theme.LocalSpacing
 import my.cheysoff.core_ui.theme.TitleGrey
 import my.cheysoff.core_ui.theme.ToolbarDark
 import my.cheysoff.core_ui.theme.colorForCategory
+import my.cheysoff.feature_notes.model.looksLikeHtml
 import my.cheysoff.feature_notes.model.single.ChecklistItem
 import my.cheysoff.feature_notes.model.single.SingleNoteIntent
 import my.cheysoff.feature_notes.model.single.SingleNoteScreenState
@@ -111,13 +112,21 @@ fun SingleNoteScreen(
         if (!isImeVisible) focusManager.clearFocus()
     }
 
-    // Initialize the editor from the stored HTML once the note is loaded, then push every
-    // subsequent (user) change back as HTML. drop(1) skips the emission caused by setHtml,
-    // so merely opening a note doesn't trigger a save.
+    // Initialize the editor from the stored content once the note is loaded, then push every
+    // subsequent (user) change back as HTML. drop(1) skips the emission caused by the initial
+    // set*, so merely opening a note doesn't trigger a save.
+    //
+    // Stored content is HTML for notes created with the rich editor, but legacy notes are raw
+    // plain text; feeding such text to setHtml would parse stray "<"/">" as tags and lose
+    // characters, so plain text goes through setText instead.
     LaunchedEffect(state.isLoaded) {
         if (state.isLoaded) {
             richTextState.config.listIndent = 18
-            richTextState.setHtml(state.content)
+            if (state.content.looksLikeHtml()) {
+                richTextState.setHtml(state.content)
+            } else {
+                richTextState.setText(state.content)
+            }
             snapshotFlow { richTextState.annotatedString }
                 .drop(1)
                 .collect { onIntent(SingleNoteIntent.ContentChanged(richTextState.toHtml())) }
