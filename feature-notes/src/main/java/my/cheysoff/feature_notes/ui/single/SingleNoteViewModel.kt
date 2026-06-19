@@ -47,11 +47,6 @@ class SingleNoteViewModel @Inject constructor(
     // Serializes DB writes so an older/delayed save can't run concurrently with a newer one.
     private val saveMutex = Mutex()
 
-    // True once the user has edited the note. After that, an incoming DB emission must not overwrite
-    // the in-memory editable fields (it could clobber unsaved local edits with stale content, e.g.
-    // the first load arriving just after the user started typing).
-    private var hasLocalEdits = false
-
     init {
         noteId?.let { id ->
             notesRepository.getNoteById(id)
@@ -61,10 +56,9 @@ class SingleNoteViewModel @Inject constructor(
                 .filterNotNull()
                 .onEach { note ->
                     _state.update { currentState ->
-                        val updated = if (hasLocalEdits || currentState.isUITheSame(note)) {
-                            // Either the user has unsaved edits, or the editable fields already match
-                            // this emission. Keep local content and only refresh updatedAt so the
-                            // editor's "Edited … ago" meta stays current without clobbering edits.
+                        val updated = if (currentState.isUITheSame(note)) {
+                            // Editable fields unchanged; still refresh updatedAt so the editor's
+                            // "Edited … ago" meta reflects the latest save without clobbering edits.
                             if (currentState.updatedAt != note.updatedAt) {
                                 currentState.copy(updatedAt = note.updatedAt)
                             } else {
@@ -156,9 +150,6 @@ class SingleNoteViewModel @Inject constructor(
 
     private fun saveNote(debounce: Boolean): Job? {
         val id = noteId ?: return null
-        // Only user-initiated mutations call saveNote (the load path does not), so this marks that
-        // local edits exist and incoming DB emissions should no longer overwrite editable fields.
-        hasLocalEdits = true
         saveJob?.cancel()
         val job = viewModelScope.launch {
             if (debounce) {
