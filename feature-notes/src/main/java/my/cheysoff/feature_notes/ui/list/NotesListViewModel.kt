@@ -3,22 +3,27 @@ package my.cheysoff.feature_notes.ui.list
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.HeaderSettings
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.repository.NotesRepository
 import my.cheysoff.core_domain.repository.SettingsRepository
 import my.cheysoff.feature_notes.model.list.BottomBarItem
 import my.cheysoff.feature_notes.model.list.HeaderLineUi
+import my.cheysoff.feature_notes.model.list.NotePreviewUi
 import my.cheysoff.feature_notes.model.list.NotesListIntent
 import my.cheysoff.feature_notes.model.list.NotesListScreenState
 import my.cheysoff.feature_notes.model.list.toUi
@@ -31,6 +36,13 @@ sealed class NotesListEvent {
     data class NavigateToNote(val noteId: String) : NotesListEvent()
 }
 
+/** Carries the off-main-thread result (previews already parsed) to the main-thread state update. */
+private data class ListData(
+    val settings: HeaderSettings,
+    val folders: List<Folder>,
+    val previews: List<NotePreviewUi>,
+)
+
 @HiltViewModel
 class NotesListViewModel @Inject constructor(
     private val notesRepository: NotesRepository,
@@ -42,8 +54,9 @@ class NotesListViewModel @Inject constructor(
     private val _events = Channel<NotesListEvent>(Channel.BUFFERED)
     val events = _events.receiveAsFlow()
 
-    // Latest full (unfiltered) note list, kept so folder selection can re-filter without a re-fetch.
-    private var allNotes: List<Note> = emptyList()
+    // Latest full (unfiltered) previews, kept so folder selection can re-filter without re-parsing
+    // (each preview's HTML→plain-text conversion already happened off the main thread on load).
+    private var allPreviews: List<NotePreviewUi> = emptyList()
 
     init {
         // Pick the motivational line once per screen open (random greeting/phrase among the enabled).
@@ -59,21 +72,25 @@ class NotesListViewModel @Inject constructor(
             notesRepository.getFolders(),
             notesRepository.getNotes(),
         ) { settings, folders, notes -> Triple(settings, folders, notes) }
-            .onEach { (settings, folders, notes) ->
-                allNotes = notes
-                val countByFolder = notes.groupingBy { it.folderId }.eachCount()
+            // Map notes → previews on a background dispatcher: Note.toUi() parses each note's HTML
+            // via HtmlCompat.fromHtml, which is O(content size) and would jank the UI on large lists.
+            .map { (settings, folders, notes) -> ListData(settings, folders, notes.map { it.toUi() }) }
+            .flowOn(Dispatchers.Default)
+            .onEach { (settings, folders, previews) ->
+                allPreviews = previews
+                val countByFolder = previews.groupingBy { it.folderId }.eachCount()
                 val folderPreviews = folders.map { folder ->
                     folder.toUi(notesAmount = countByFolder[folder.id] ?: 0)
                 }
                 val stats = if (settings.showStats) {
-                    "${notes.size} notes · ${notes.count { it.isPinned }} pinned"
+                    "${previews.size} notes · ${previews.count { it.isPinned }} pinned"
                 } else null
                 _state.update { current ->
-                    val visible = visibleNotes(current.selectedFolderId)
+                    val visible = visiblePreviews(current.selectedFolderId)
                     current.copy(
                         folderPreviews = folderPreviews,
-                        pinnedPreviews = visible.filter { it.isPinned }.map { it.toUi() },
-                        notePreviews = visible.filter { !it.isPinned }.map { it.toUi() },
+                        pinnedPreviews = visible.filter { it.isPinned },
+                        notePreviews = visible.filter { !it.isPinned },
                         statsLine = stats,
                         isLoading = false,
                     )
@@ -82,9 +99,9 @@ class NotesListViewModel @Inject constructor(
             .launchIn(viewModelScope)
     }
 
-    private fun visibleNotes(selectedFolderId: String?): List<Note> =
-        if (selectedFolderId == null) allNotes
-        else allNotes.filter { it.folderId == selectedFolderId }
+    private fun visiblePreviews(selectedFolderId: String?): List<NotePreviewUi> =
+        if (selectedFolderId == null) allPreviews
+        else allPreviews.filter { it.folderId == selectedFolderId }
 
     private val dailyPhrases = listOf(
         HeaderLineUi("One thing", "at a time."),
@@ -127,11 +144,11 @@ class NotesListViewModel @Inject constructor(
                     // Toggle: tapping the active folder clears the filter (back to All).
                     val newSelection =
                         if (current.selectedFolderId == intent.folderId) null else intent.folderId
-                    val visible = visibleNotes(newSelection)
+                    val visible = visiblePreviews(newSelection)
                     current.copy(
                         selectedFolderId = newSelection,
-                        pinnedPreviews = visible.filter { it.isPinned }.map { it.toUi() },
-                        notePreviews = visible.filter { !it.isPinned }.map { it.toUi() },
+                        pinnedPreviews = visible.filter { it.isPinned },
+                        notePreviews = visible.filter { !it.isPinned },
                     )
                 }
             }

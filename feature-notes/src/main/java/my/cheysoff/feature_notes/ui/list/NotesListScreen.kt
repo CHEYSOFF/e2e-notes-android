@@ -395,6 +395,10 @@ private fun NoteCard(note: NotePreviewUi, onClick: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall.copy(fontSize = bodySize, lineHeight = bodyLine),
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (note.checklistTotal > 0) {
+                    Spacer(Modifier.height(10.dp))
+                    ChecklistProgress(note.checklistDone, note.checklistTotal, onColor = true)
+                }
             }
         }
     } else {
@@ -430,9 +434,40 @@ private fun NoteCard(note: NotePreviewUi, onClick: () -> Unit) {
                         style = MaterialTheme.typography.bodySmall.copy(fontSize = bodySize, lineHeight = bodyLine),
                         overflow = TextOverflow.Ellipsis,
                     )
+                    if (note.checklistTotal > 0) {
+                        Spacer(Modifier.height(10.dp))
+                        ChecklistProgress(note.checklistDone, note.checklistTotal, onColor = false)
+                    }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ChecklistProgress(done: Int, total: Int, onColor: Boolean) {
+    val maxDots = 7
+    val shown = total.coerceAtMost(maxDots)
+    // When the list is longer than the dot budget, fill dots proportionally instead of literally.
+    val filled = if (total <= maxDots) done else (done * maxDots) / total
+    val remaining = if (onColor) Color.White.copy(alpha = 0.3f) else Color(0xFF333333)
+    val labelColor = if (onColor) Color.White.copy(alpha = 0.6f) else Color(0xFF6A6A70)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        repeat(shown) { i ->
+            Box(
+                modifier = Modifier
+                    .padding(end = 4.dp)
+                    .size(6.dp)
+                    .clip(CircleShape)
+                    .background(if (i < filled) Color(0xFF1F9E4A) else remaining)
+            )
+        }
+        Spacer(Modifier.width(3.dp))
+        Text(
+            text = "$done/$total",
+            color = labelColor,
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Medium),
+        )
     }
 }
 
