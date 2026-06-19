@@ -6,4 +6,10 @@ sealed interface SingleNoteIntent {
     data object TogglePin : SingleNoteIntent
     data object MoreClicked : SingleNoteIntent
     data object BackClicked : SingleNoteIntent
+
+    /** Append a new empty checklist item with [newId] after [afterId] (null = at the end). */
+    data class ChecklistItemAdded(val newId: String, val afterId: String?) : SingleNoteIntent
+    data class ChecklistItemToggled(val id: String) : SingleNoteIntent
+    data class ChecklistItemTextChanged(val id: String, val text: String) : SingleNoteIntent
+    data class ChecklistItemRemoved(val id: String) : SingleNoteIntent
 }

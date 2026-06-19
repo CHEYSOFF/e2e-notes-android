@@ -26,11 +26,12 @@ interface NoteDao {
      */
     @Query(
         """
-        INSERT INTO notes (id, title, content, isPinned, isFavorite, folderId, createdAt, updatedAt)
-        VALUES (:id, :title, :content, :isPinned, 0, :folderId, :timestamp, :timestamp)
+        INSERT INTO notes (id, title, content, checklist, isPinned, isFavorite, folderId, createdAt, updatedAt)
+        VALUES (:id, :title, :content, :checklist, :isPinned, 0, :folderId, :timestamp, :timestamp)
         ON CONFLICT(id) DO UPDATE SET
             title = excluded.title,
             content = excluded.content,
+            checklist = excluded.checklist,
             isPinned = excluded.isPinned,
             folderId = excluded.folderId,
             updatedAt = excluded.updatedAt,
@@ -41,6 +42,7 @@ interface NoteDao {
         id: String,
         title: String,
         content: String,
+        checklist: String,
         isPinned: Boolean,
         folderId: String?,
         timestamp: Long,

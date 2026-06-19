@@ -34,6 +34,7 @@ class RoomNotesRepository @Inject constructor(
             id = note.id,
             title = note.title,
             content = note.content,
+            checklist = note.checklist,
             isPinned = note.isPinned,
             folderId = note.folderId,
             timestamp = System.currentTimeMillis(),
