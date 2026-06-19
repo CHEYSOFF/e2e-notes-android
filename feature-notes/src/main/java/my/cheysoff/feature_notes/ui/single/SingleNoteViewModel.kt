@@ -9,6 +9,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -49,15 +50,11 @@ class SingleNoteViewModel @Inject constructor(
     init {
         noteId?.let { id ->
             notesRepository.getNoteById(id)
+                // Only real content flips isLoaded, so the editor always seeds from a loaded note
+                // (never from an empty placeholder). A missing/never-loading note is handled on the
+                // screen side, where edits are forwarded regardless of load state.
+                .filterNotNull()
                 .onEach { note ->
-                    // Note missing or deleted: still mark loaded so the editor initializes (empty)
-                    // and the screen starts forwarding edits. Without this, typing would be silently
-                    // dropped because the editor→VM sync is gated on isLoaded. A save will recreate
-                    // the note under this id.
-                    if (note == null) {
-                        _state.update { if (it.isLoaded) it else it.copy(isLoaded = true) }
-                        return@onEach
-                    }
                     _state.update { currentState ->
                         val updated = if (currentState.isUITheSame(note)) {
                             // Editable fields unchanged; still refresh updatedAt so the editor's

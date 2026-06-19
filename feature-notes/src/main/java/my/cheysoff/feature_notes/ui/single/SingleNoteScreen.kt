@@ -107,30 +107,40 @@ fun SingleNoteScreen(
     // Id of a checklist item that should grab focus once it appears (set when an item is added,
     // or when one above is removed). Hoisted here so the toolbar FAB and the section can both set it.
     var focusItemId by remember { mutableStateOf<String?>(null) }
+    // The HTML the editor was seeded with (null until the note's stored content loads). Used to skip
+    // the editor emission caused by seeding, so merely opening a note doesn't trigger a save.
+    var seededHtml by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(isImeVisible) {
         if (!isImeVisible) focusManager.clearFocus()
     }
 
-    // Initialize the editor from the stored content once the note is loaded, then push every
-    // subsequent (user) change back as HTML. drop(1) skips the emission caused by the initial
-    // set*, so merely opening a note doesn't trigger a save.
-    //
-    // Stored content is HTML for notes created with the rich editor, but legacy notes are raw
+    // Seed the editor once, when the note's stored content first loads (isLoaded only flips on a
+    // real, non-null note). Stored content is HTML for rich-editor notes, but legacy notes are raw
     // plain text; feeding such text to setHtml would parse stray "<"/">" as tags and lose
     // characters, so plain text goes through setText instead.
     LaunchedEffect(state.isLoaded) {
-        if (state.isLoaded) {
+        if (state.isLoaded && seededHtml == null) {
             richTextState.config.listIndent = 18
             if (state.content.looksLikeHtml()) {
                 richTextState.setHtml(state.content)
             } else {
                 richTextState.setText(state.content)
             }
-            snapshotFlow { richTextState.annotatedString }
-                .drop(1)
-                .collect { onIntent(SingleNoteIntent.ContentChanged(richTextState.toHtml())) }
+            seededHtml = richTextState.toHtml()
         }
+    }
+
+    // Forward editor edits to the VM. Runs regardless of load state, so typing is still saved even
+    // if the note row never loads (otherwise input would be silently dropped). drop(1) skips the
+    // initial snapshot emission; the emission caused by seeding is skipped by the seededHtml guard.
+    LaunchedEffect(Unit) {
+        snapshotFlow { richTextState.annotatedString }
+            .drop(1)
+            .collect {
+                val html = richTextState.toHtml()
+                if (html != seededHtml) onIntent(SingleNoteIntent.ContentChanged(html))
+            }
     }
 
     Scaffold(
