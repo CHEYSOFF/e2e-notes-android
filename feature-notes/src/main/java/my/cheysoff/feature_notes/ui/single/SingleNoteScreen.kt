@@ -107,39 +107,49 @@ fun SingleNoteScreen(
     // Id of a checklist item that should grab focus once it appears (set when an item is added,
     // or when one above is removed). Hoisted here so the toolbar FAB and the section can both set it.
     var focusItemId by remember { mutableStateOf<String?>(null) }
-    // The HTML the editor was seeded with (null until the note's stored content loads). Used to skip
-    // the editor emission caused by seeding, so merely opening a note doesn't trigger a save.
-    var seededHtml by remember { mutableStateOf<String?>(null) }
+    // Whether the editor has been seeded, and whether the user has typed. hasLocalEdits guards
+    // against the seed clobbering input typed before the note finished loading.
+    var seeded by remember { mutableStateOf(false) }
+    var hasLocalEdits by remember { mutableStateOf(false) }
+    // Last HTML forwarded to the VM. Set at seed time so the seed emission isn't saved, and updated
+    // on every forwarded edit so reverting back to the original content still propagates.
+    var lastSentHtml by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(isImeVisible) {
         if (!isImeVisible) focusManager.clearFocus()
     }
 
     // Seed the editor once, when the note's stored content first loads (isLoaded only flips on a
-    // real, non-null note). Stored content is HTML for rich-editor notes, but legacy notes are raw
-    // plain text; feeding such text to setHtml would parse stray "<"/">" as tags and lose
-    // characters, so plain text goes through setText instead.
+    // real, non-null note) — but not if the user already started typing, so pre-load input isn't
+    // clobbered. Stored content is HTML for rich-editor notes, but legacy notes are raw plain text;
+    // feeding such text to setHtml would parse stray "<"/">" as tags, so plain text uses setText.
     LaunchedEffect(state.isLoaded) {
-        if (state.isLoaded && seededHtml == null) {
+        if (state.isLoaded && !seeded && !hasLocalEdits) {
             richTextState.config.listIndent = 18
             if (state.content.looksLikeHtml()) {
                 richTextState.setHtml(state.content)
             } else {
                 richTextState.setText(state.content)
             }
-            seededHtml = richTextState.toHtml()
+            lastSentHtml = richTextState.toHtml()
+            seeded = true
         }
     }
 
     // Forward editor edits to the VM. Runs regardless of load state, so typing is still saved even
     // if the note row never loads (otherwise input would be silently dropped). drop(1) skips the
-    // initial snapshot emission; the emission caused by seeding is skipped by the seededHtml guard.
+    // initial snapshot emission; comparing against lastSentHtml skips the seed emission while still
+    // letting an edit that reverts to the original content through.
     LaunchedEffect(Unit) {
         snapshotFlow { richTextState.annotatedString }
             .drop(1)
             .collect {
                 val html = richTextState.toHtml()
-                if (html != seededHtml) onIntent(SingleNoteIntent.ContentChanged(html))
+                if (html != lastSentHtml) {
+                    lastSentHtml = html
+                    hasLocalEdits = true
+                    onIntent(SingleNoteIntent.ContentChanged(html))
+                }
             }
     }
 
