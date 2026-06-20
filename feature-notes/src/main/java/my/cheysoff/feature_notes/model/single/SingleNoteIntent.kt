@@ -12,4 +12,7 @@ sealed interface SingleNoteIntent {
     data class ChecklistItemToggled(val id: String) : SingleNoteIntent
     data class ChecklistItemTextChanged(val id: String, val text: String) : SingleNoteIntent
     data class ChecklistItemRemoved(val id: String) : SingleNoteIntent
+
+    /** Assign this note to [folderId], or unfile it when null. */
+    data class SetFolder(val folderId: String?) : SingleNoteIntent
 }
