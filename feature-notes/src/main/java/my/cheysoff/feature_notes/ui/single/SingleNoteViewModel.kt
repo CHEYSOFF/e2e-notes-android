@@ -140,8 +140,15 @@ class SingleNoteViewModel @Inject constructor(
             }
 
             is SingleNoteIntent.SetFolder -> {
+                // Update the editor immediately (accent + pill react), then persist just the
+                // folderId via a targeted UPDATE — consistent with the list's move path, and unlike
+                // a full saveNote() this doesn't rewrite content or bump updatedAt for a
+                // metadata-only change. Any in-flight content autosave still reads the new folderId
+                // from state, so the two paths converge.
                 _state.update { it.copy(folderId = intent.folderId) }
-                saveNote(debounce = false)
+                noteId?.let { id ->
+                    viewModelScope.launch { notesRepository.setNoteFolder(id, intent.folderId) }
+                }
             }
 
             is SingleNoteIntent.MoreClicked -> {
