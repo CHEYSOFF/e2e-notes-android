@@ -2,7 +2,6 @@ package my.cheysoff.feature_notes.ui.list
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -100,7 +99,9 @@ fun NotesListScreen(
     var deleteFolderTarget by remember { mutableStateOf<FolderPreviewUi?>(null) }
     var moveNoteTarget by remember { mutableStateOf<NotePreviewUi?>(null) }
 
-    val folderRefs = state.folderPreviews.map { FolderRef(it.id, it.name, it.colorArgb) }
+    val folderRefs = remember(state.folderPreviews) {
+        state.folderPreviews.map { FolderRef(it.id, it.name, it.colorArgb) }
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
