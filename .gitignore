@@ -17,4 +17,4 @@ local.properties
 .superpowers/
 .playwright-mcp/
 /extra
-.kotlin/
+.kotlin//.idea/markdown.xml
