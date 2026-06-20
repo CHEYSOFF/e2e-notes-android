@@ -9,6 +9,7 @@ interface NotesRepository {
     fun getNoteById(id: String): Flow<Note?>
     suspend fun saveNote(note: Note)
     suspend fun deleteNote(id: String)
+    suspend fun setNoteFolder(noteId: String, folderId: String?)
 
     fun getFolders(): Flow<List<Folder>>
     suspend fun saveFolder(folder: Folder)
