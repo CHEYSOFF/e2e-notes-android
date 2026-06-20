@@ -80,6 +80,10 @@ class SingleNoteViewModel @Inject constructor(
                 }
                 .launchIn(viewModelScope)
         }
+
+        notesRepository.getFolders()
+            .onEach { folders -> _state.update { it.copy(folders = folders) } }
+            .launchIn(viewModelScope)
     }
 
     fun onIntent(intent: SingleNoteIntent) {
@@ -132,6 +136,11 @@ class SingleNoteViewModel @Inject constructor(
                 _state.update { s ->
                     s.copy(checklist = s.checklist.filterNot { it.id == intent.id })
                 }
+                saveNote(debounce = false)
+            }
+
+            is SingleNoteIntent.SetFolder -> {
+                _state.update { it.copy(folderId = intent.folderId) }
                 saveNote(debounce = false)
             }
 
