@@ -141,13 +141,16 @@ class SingleNoteViewModel @Inject constructor(
 
             is SingleNoteIntent.SetFolder -> {
                 // Update the editor immediately (accent + pill react), then persist just the
-                // folderId via a targeted UPDATE — consistent with the list's move path, and unlike
-                // a full saveNote() this doesn't rewrite content or bump updatedAt for a
-                // metadata-only change. Any in-flight content autosave still reads the new folderId
-                // from state, so the two paths converge.
+                // folderId via a targeted UPDATE — no full upsert, no updatedAt bump, matching the
+                // list's move path. Serialize through saveMutex like saveNote(), and write the
+                // LATEST state.folderId inside the lock, so this can't interleave with an autosave
+                // upsert (which also writes folderId) or a rapid second SetFolder — every write
+                // path converges on the current state instead of a stale captured value.
                 _state.update { it.copy(folderId = intent.folderId) }
                 noteId?.let { id ->
-                    viewModelScope.launch { notesRepository.setNoteFolder(id, intent.folderId) }
+                    viewModelScope.launch {
+                        saveMutex.withLock { notesRepository.setNoteFolder(id, _state.value.folderId) }
+                    }
                 }
             }
 
