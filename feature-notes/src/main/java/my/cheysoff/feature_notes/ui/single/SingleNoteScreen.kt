@@ -89,7 +89,8 @@ import my.cheysoff.core_ui.theme.BodyGrey
 import my.cheysoff.core_ui.theme.LocalSpacing
 import my.cheysoff.core_ui.theme.TitleGrey
 import my.cheysoff.core_ui.theme.ToolbarDark
-import my.cheysoff.core_ui.theme.colorForCategory
+import my.cheysoff.core_domain.model.Folder
+import my.cheysoff.core_ui.theme.folderAccentColor
 import my.cheysoff.feature_notes.model.looksLikeHtml
 import my.cheysoff.feature_notes.model.single.ChecklistItem
 import my.cheysoff.feature_notes.model.single.SingleNoteIntent
@@ -105,7 +106,7 @@ fun SingleNoteScreen(
 ) {
     val focusManager = LocalFocusManager.current
     val isImeVisible = WindowInsets.isImeVisible
-    val accent = editorAccent(state.folderId)
+    val accent = editorAccent(state.folderId, state.folders)
     val richTextState = rememberRichTextState()
     // Id of a checklist item that should grab focus once it appears (set when an item is added,
     // or when one above is removed). Hoisted here so the toolbar FAB and the section can both set it.
@@ -514,9 +515,11 @@ private fun StylePopover(accent: Color, active: HeadingStyle, onSelect: (Heading
     }
 }
 
-/** Editor accent = the note's category color, or the default indigo when it has no folder. */
-private fun editorAccent(folderId: String?): Color =
-    if (folderId.isNullOrBlank()) AccentIndigo else colorForCategory(folderId)
+/** Editor accent = the folder's chosen color (or the hash fallback), or default indigo when it has no folder. */
+private fun editorAccent(folderId: String?, folders: List<Folder>): Color {
+    val colorArgb = folders.find { it.id == folderId }?.colorArgb
+    return folderAccentColor(folderId, colorArgb) ?: AccentIndigo
+}
 
 private fun metaLine(updatedAt: Long, words: Int): String {
     val wordLabel = if (words == 1) "1 word" else "$words words"
