@@ -70,6 +70,7 @@ class SingleNoteViewModel @Inject constructor(
                                 content = note.content,
                                 checklist = parseChecklist(note.checklist),
                                 isPinned = note.isPinned,
+                                isFavorite = note.isFavorite,
                                 folderId = note.folderId,
                                 updatedAt = note.updatedAt,
                             )
@@ -101,6 +102,18 @@ class SingleNoteViewModel @Inject constructor(
             is SingleNoteIntent.TogglePin -> {
                 _state.update { it.copy(isPinned = !it.isPinned) }
                 saveNote(debounce = false)
+            }
+
+            is SingleNoteIntent.ToggleFavorite -> {
+                // React immediately; persist just isFavorite via a targeted UPDATE (the upsert never
+                // writes isFavorite). Serialize through saveMutex like SetFolder, reading the LATEST
+                // state inside the lock so it can't interleave with an autosave or a rapid re-toggle.
+                _state.update { it.copy(isFavorite = !it.isFavorite) }
+                noteId?.let { id ->
+                    viewModelScope.launch {
+                        saveMutex.withLock { notesRepository.setNoteFavorite(id, _state.value.isFavorite) }
+                    }
+                }
             }
 
             is SingleNoteIntent.ChecklistItemAdded -> {
@@ -199,6 +212,7 @@ class SingleNoteViewModel @Inject constructor(
                 content == note.content &&
                 checklist.serializeChecklist() == note.checklist &&
                 isPinned == note.isPinned &&
+                isFavorite == note.isFavorite &&
                 folderId == note.folderId
     }
 }
