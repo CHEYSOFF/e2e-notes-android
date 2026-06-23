@@ -76,7 +76,7 @@ import my.cheysoff.core_ui.theme.LocalSpacing
 import my.cheysoff.core_ui.theme.SurfaceDark
 import my.cheysoff.core_ui.theme.TitleGrey
 import my.cheysoff.core_ui.theme.UncategorizedEdge
-import my.cheysoff.core_ui.theme.colorForCategory
+import my.cheysoff.core_ui.theme.folderAccentColor
 import my.cheysoff.feature_notes.model.list.BottomBarItem
 import my.cheysoff.feature_notes.model.list.FolderPreviewUi
 import my.cheysoff.feature_notes.model.list.HeaderLineUi
@@ -398,7 +398,7 @@ private fun PinnedPager(pinned: List<NotePreviewUi>, onClick: (String) -> Unit, 
 @Composable
 private fun PinnedCard(note: NotePreviewUi, onClick: () -> Unit, onLongClick: () -> Unit) {
     val sw = LocalConfiguration.current.screenWidthDp
-    val color = noteColor(note.folderId) ?: AccentIndigo
+    val color = folderAccentColor(note.folderId, note.folderColorArgb) ?: AccentIndigo
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -451,7 +451,7 @@ private fun NoteCard(note: NotePreviewUi, onClick: () -> Unit, onLongClick: () -
     val titleSize = (sw * 0.043f).sp
     val bodySize = (sw * 0.034f).sp
     val bodyLine = (sw * 0.046f).sp
-    val base = noteColor(note.folderId)
+    val base = folderAccentColor(note.folderId, note.folderColorArgb)
     val filled = note.isPinned || note.isFavorite
 
     if (filled) {
@@ -599,9 +599,6 @@ private fun NavIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, activ
     }
 }
 
-/** Category color for a note, or null when it has no folder (caller picks the neutral/accent fallback). */
-private fun noteColor(folderId: String?): Color? =
-    if (folderId.isNullOrBlank()) null else colorForCategory(folderId)
 
 private fun relativeTime(ts: Long): String {
     if (ts <= 0L) return ""
