@@ -66,3 +66,12 @@ fun colorForCategory(key: String?): Color {
     val index = (key.hashCode() and 0x7FFFFFFF) % CategoryColors.size
     return CategoryColors[index]
 }
+
+/**
+ * A note's accent color: the folder's explicitly chosen [colorArgb] when set, else the
+ * deterministic hash color for [folderId]. Returns null when the note has no folder, so the
+ * caller supplies the neutral/accent fallback (matching the prior noteColor/editorAccent behavior).
+ */
+fun folderAccentColor(folderId: String?, colorArgb: Long?): Color? =
+    if (folderId.isNullOrBlank()) null
+    else colorArgb?.let { Color(it.toInt()) } ?: colorForCategory(folderId)
