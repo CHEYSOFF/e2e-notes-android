@@ -50,4 +50,10 @@ interface NoteDao {
 
     @Query("DELETE FROM notes WHERE id = :id")
     suspend fun deleteNote(id: String)
+
+    @Query("UPDATE notes SET folderId = :folderId WHERE id = :noteId")
+    suspend fun setNoteFolder(noteId: String, folderId: String?)
+
+    @Query("UPDATE notes SET folderId = NULL WHERE folderId = :folderId")
+    suspend fun clearFolder(folderId: String)
 }
