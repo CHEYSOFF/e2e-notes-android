@@ -37,8 +37,10 @@ import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FormatBold
 import androidx.compose.material.icons.outlined.FormatItalic
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.TextFields
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -89,7 +91,8 @@ import my.cheysoff.core_ui.theme.BodyGrey
 import my.cheysoff.core_ui.theme.LocalSpacing
 import my.cheysoff.core_ui.theme.TitleGrey
 import my.cheysoff.core_ui.theme.ToolbarDark
-import my.cheysoff.core_ui.theme.colorForCategory
+import my.cheysoff.core_domain.model.Folder
+import my.cheysoff.core_ui.theme.folderAccentColor
 import my.cheysoff.feature_notes.model.looksLikeHtml
 import my.cheysoff.feature_notes.model.single.ChecklistItem
 import my.cheysoff.feature_notes.model.single.SingleNoteIntent
@@ -105,7 +108,7 @@ fun SingleNoteScreen(
 ) {
     val focusManager = LocalFocusManager.current
     val isImeVisible = WindowInsets.isImeVisible
-    val accent = editorAccent(state.folderId)
+    val accent = remember(state.folderId, state.folders) { editorAccent(state.folderId, state.folders) }
     val richTextState = rememberRichTextState()
     // Id of a checklist item that should grab focus once it appears (set when an item is added,
     // or when one above is removed). Hoisted here so the toolbar FAB and the section can both set it.
@@ -141,7 +144,7 @@ fun SingleNoteScreen(
         modifier = Modifier
             .fillMaxSize()
             .imePadding(),
-        topBar = { EditorTopBar(isPinned = state.isPinned, accent = accent, onIntent = onIntent) },
+        topBar = { EditorTopBar(isPinned = state.isPinned, isFavorite = state.isFavorite, accent = accent, onIntent = onIntent) },
         floatingActionButton = {
             FormattingToolbar(
                 richTextState = richTextState,
@@ -377,6 +380,7 @@ private fun ChecklistSection(
 @Composable
 private fun EditorTopBar(
     isPinned: Boolean,
+    isFavorite: Boolean,
     accent: Color,
     onIntent: (SingleNoteIntent) -> Unit,
 ) {
@@ -400,6 +404,11 @@ private fun EditorTopBar(
                 "Pin",
                 if (isPinned) accent else BodyGrey,
             ) { onIntent(SingleNoteIntent.TogglePin) }
+            TopIcon(
+                if (isFavorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                "Favorite",
+                if (isFavorite) accent else BodyGrey,
+            ) { onIntent(SingleNoteIntent.ToggleFavorite) }
             TopIcon(Icons.Outlined.MoreVert, "More", BodyGrey) { onIntent(SingleNoteIntent.MoreClicked) }
         }
     }
@@ -514,9 +523,12 @@ private fun StylePopover(accent: Color, active: HeadingStyle, onSelect: (Heading
     }
 }
 
-/** Editor accent = the note's category color, or the default indigo when it has no folder. */
-private fun editorAccent(folderId: String?): Color =
-    if (folderId.isNullOrBlank()) AccentIndigo else colorForCategory(folderId)
+/** Editor accent = the folder's chosen color (or the hash fallback), or default indigo when it has no folder. */
+private fun editorAccent(folderId: String?, folders: List<Folder>): Color {
+    if (folderId.isNullOrBlank()) return AccentIndigo
+    val colorArgb = folders.find { it.id == folderId }?.colorArgb
+    return folderAccentColor(folderId, colorArgb) ?: AccentIndigo
+}
 
 private fun metaLine(updatedAt: Long, words: Int): String {
     val wordLabel = if (words == 1) "1 word" else "$words words"

@@ -52,6 +52,10 @@ class RoomNotesRepository @Inject constructor(
         noteDao.setNoteFolder(noteId, folderId)
     }
 
+    override suspend fun setNoteFavorite(noteId: String, isFavorite: Boolean) {
+        noteDao.setNoteFavorite(noteId, isFavorite)
+    }
+
     override fun getFolders(): Flow<List<Folder>> {
         return folderDao.getFolders().map { entities ->
             entities.map { it.toDomain() }
