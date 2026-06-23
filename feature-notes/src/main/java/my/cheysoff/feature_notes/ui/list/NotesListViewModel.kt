@@ -26,6 +26,7 @@ import my.cheysoff.feature_notes.model.list.HeaderLineUi
 import my.cheysoff.feature_notes.model.list.NotePreviewUi
 import my.cheysoff.feature_notes.model.list.NotesListIntent
 import my.cheysoff.feature_notes.model.list.NotesListScreenState
+import my.cheysoff.feature_notes.model.list.normalizeFolderName
 import my.cheysoff.feature_notes.model.list.toUi
 import my.cheysoff.feature_notes.ui.list.NotesListEvent.NavigateToNote
 import java.time.LocalTime
@@ -168,6 +169,43 @@ class NotesListViewModel @Inject constructor(
             }
             NotesListIntent.SearchClicked -> {
                 _state.update { it.copy(selectedBottomBarItem = BottomBarItem.SEARCH) }
+            }
+
+            is NotesListIntent.CreateFolder -> {
+                val name = normalizeFolderName(intent.name) ?: return
+                viewModelScope.launch {
+                    notesRepository.saveFolder(
+                        Folder(id = UUID.randomUUID().toString(), name = name, colorArgb = intent.colorArgb)
+                    )
+                }
+            }
+
+            is NotesListIntent.UpdateFolder -> {
+                val name = normalizeFolderName(intent.name) ?: return
+                viewModelScope.launch {
+                    notesRepository.saveFolder(Folder(id = intent.id, name = name, colorArgb = intent.colorArgb))
+                }
+            }
+
+            is NotesListIntent.DeleteFolder -> {
+                viewModelScope.launch { notesRepository.deleteFolder(intent.id) }
+                // If the deleted folder was the active filter, fall back to "All" immediately. (The notes flow
+                // re-emits after unfiling, but reset selection now so the chip selection isn't left dangling.)
+                _state.update { current ->
+                    if (current.selectedFolderId != intent.id) current
+                    else {
+                        val visible = visiblePreviews(null)
+                        current.copy(
+                            selectedFolderId = null,
+                            pinnedPreviews = visible.filter { it.isPinned },
+                            notePreviews = visible.filter { !it.isPinned },
+                        )
+                    }
+                }
+            }
+
+            is NotesListIntent.MoveNoteToFolder -> {
+                viewModelScope.launch { notesRepository.setNoteFolder(intent.noteId, intent.folderId) }
             }
         }
     }

@@ -34,6 +34,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBackIos
 import androidx.compose.material.icons.automirrored.outlined.FormatListBulleted
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FormatBold
 import androidx.compose.material.icons.outlined.FormatItalic
 import androidx.compose.material.icons.outlined.MoreVert
@@ -93,6 +94,8 @@ import my.cheysoff.feature_notes.model.looksLikeHtml
 import my.cheysoff.feature_notes.model.single.ChecklistItem
 import my.cheysoff.feature_notes.model.single.SingleNoteIntent
 import my.cheysoff.feature_notes.model.single.SingleNoteScreenState
+import my.cheysoff.feature_notes.ui.folder.FolderChooser
+import my.cheysoff.feature_notes.ui.folder.FolderRef
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -181,6 +184,8 @@ private fun NoteEditor(
     val sw = LocalConfiguration.current.screenWidthDp
     val focusManager = LocalFocusManager.current
     val scrollState = rememberScrollState()
+    var showFolderChooser by remember { mutableStateOf(false) }
+    val currentFolder = state.folders.firstOrNull { it.id == state.folderId }
 
     val titleStyle = MaterialTheme.typography.titleLarge.copy(
         fontWeight = FontWeight.Normal,
@@ -219,8 +224,31 @@ private fun NoteEditor(
             text = metaLine(state.updatedAt, wordCount),
             color = Color(0xFF5E5E62),
             style = MaterialTheme.typography.bodySmall.copy(fontSize = (sw * 0.03f).sp, fontWeight = FontWeight.Medium),
-            modifier = Modifier.padding(top = 8.dp, bottom = 18.dp),
+            modifier = Modifier.padding(top = 8.dp, bottom = 8.dp),
         )
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .padding(bottom = 14.dp)
+                .clip(RoundedCornerShape(percent = 50))
+                .background(Color(0xFF1C1C22))
+                .clickable { showFolderChooser = true }
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Folder,
+                contentDescription = null,
+                tint = accent,
+                modifier = Modifier.size(15.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = currentFolder?.name ?: "Add to folder",
+                color = if (currentFolder != null) TitleGrey else BodyGrey,
+                style = MaterialTheme.typography.bodySmall.copy(fontSize = (sw * 0.032f).sp, fontWeight = FontWeight.Medium),
+            )
+        }
 
         BasicRichTextEditor(
             state = richTextState,
@@ -245,6 +273,15 @@ private fun NoteEditor(
         )
 
         Spacer(modifier = Modifier.height(140.dp))
+
+        if (showFolderChooser) {
+            FolderChooser(
+                folders = state.folders.map { FolderRef(it.id, it.name, it.colorArgb) },
+                selectedId = state.folderId,
+                onDismiss = { showFolderChooser = false },
+                onSelect = { folderId -> onIntent(SingleNoteIntent.SetFolder(folderId)); showFolderChooser = false },
+            )
+        }
     }
 }
 
