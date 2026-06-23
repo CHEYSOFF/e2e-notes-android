@@ -75,7 +75,16 @@ class NotesListViewModel @Inject constructor(
         ) { settings, folders, notes -> Triple(settings, folders, notes) }
             // Map notes → previews on a background dispatcher: Note.toUi() parses each note's HTML
             // via HtmlCompat.fromHtml, which is O(content size) and would jank the UI on large lists.
-            .map { (settings, folders, notes) -> ListData(settings, folders, notes.map { it.toUi() }) }
+            .map { (settings, folders, notes) ->
+                // Resolve each note's folder color here (we have the folder list) so the cards can
+                // render the chosen color without looking the folder up at draw time. Stays off-main
+                // thread via the .flowOn(Dispatchers.Default) below.
+                val colorByFolder: Map<String, Long?> = folders.associate { it.id to it.colorArgb }
+                val previews = notes.map { note ->
+                    note.toUi().copy(folderColorArgb = note.folderId?.let(colorByFolder::get))
+                }
+                ListData(settings, folders, previews)
+            }
             .flowOn(Dispatchers.Default)
             .onEach { (settings, folders, previews) ->
                 allPreviews = previews
