@@ -37,8 +37,10 @@ import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FormatBold
 import androidx.compose.material.icons.outlined.FormatItalic
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.TextFields
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -142,7 +144,7 @@ fun SingleNoteScreen(
         modifier = Modifier
             .fillMaxSize()
             .imePadding(),
-        topBar = { EditorTopBar(isPinned = state.isPinned, accent = accent, onIntent = onIntent) },
+        topBar = { EditorTopBar(isPinned = state.isPinned, isFavorite = state.isFavorite, accent = accent, onIntent = onIntent) },
         floatingActionButton = {
             FormattingToolbar(
                 richTextState = richTextState,
@@ -378,6 +380,7 @@ private fun ChecklistSection(
 @Composable
 private fun EditorTopBar(
     isPinned: Boolean,
+    isFavorite: Boolean,
     accent: Color,
     onIntent: (SingleNoteIntent) -> Unit,
 ) {
@@ -401,6 +404,11 @@ private fun EditorTopBar(
                 "Pin",
                 if (isPinned) accent else BodyGrey,
             ) { onIntent(SingleNoteIntent.TogglePin) }
+            TopIcon(
+                if (isFavorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                "Favorite",
+                if (isFavorite) accent else BodyGrey,
+            ) { onIntent(SingleNoteIntent.ToggleFavorite) }
             TopIcon(Icons.Outlined.MoreVert, "More", BodyGrey) { onIntent(SingleNoteIntent.MoreClicked) }
         }
     }
