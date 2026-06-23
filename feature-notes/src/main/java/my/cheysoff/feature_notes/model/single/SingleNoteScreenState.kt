@@ -9,6 +9,7 @@ data class SingleNoteScreenState(
     val content: String = "",
     val checklist: List<ChecklistItem> = emptyList(),
     val isPinned: Boolean = false,
+    val isFavorite: Boolean = false,
     val folderId: String? = null,
     val folders: List<Folder> = emptyList(),
     val updatedAt: Long = 0L,
