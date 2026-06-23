@@ -108,7 +108,7 @@ fun SingleNoteScreen(
 ) {
     val focusManager = LocalFocusManager.current
     val isImeVisible = WindowInsets.isImeVisible
-    val accent = editorAccent(state.folderId, state.folders)
+    val accent = remember(state.folderId, state.folders) { editorAccent(state.folderId, state.folders) }
     val richTextState = rememberRichTextState()
     // Id of a checklist item that should grab focus once it appears (set when an item is added,
     // or when one above is removed). Hoisted here so the toolbar FAB and the section can both set it.
@@ -525,6 +525,7 @@ private fun StylePopover(accent: Color, active: HeadingStyle, onSelect: (Heading
 
 /** Editor accent = the folder's chosen color (or the hash fallback), or default indigo when it has no folder. */
 private fun editorAccent(folderId: String?, folders: List<Folder>): Color {
+    if (folderId.isNullOrBlank()) return AccentIndigo
     val colorArgb = folders.find { it.id == folderId }?.colorArgb
     return folderAccentColor(folderId, colorArgb) ?: AccentIndigo
 }
