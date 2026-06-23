@@ -44,6 +44,11 @@ class SingleNoteViewModel @Inject constructor(
 
     private var saveJob: Job? = null
 
+    // Tracks the latest metadata write (favorite/folder). Both serialize on saveMutex, so awaiting
+    // this one in BackClicked also flushes any earlier-queued meta write before navigation cancels
+    // viewModelScope and could drop an in-flight UPDATE.
+    private var metaWriteJob: Job? = null
+
     // Serializes DB writes so an older/delayed save can't run concurrently with a newer one.
     private val saveMutex = Mutex()
 
@@ -110,7 +115,7 @@ class SingleNoteViewModel @Inject constructor(
                 // state inside the lock so it can't interleave with an autosave or a rapid re-toggle.
                 _state.update { it.copy(isFavorite = !it.isFavorite) }
                 noteId?.let { id ->
-                    viewModelScope.launch {
+                    metaWriteJob = viewModelScope.launch {
                         saveMutex.withLock { notesRepository.setNoteFavorite(id, _state.value.isFavorite) }
                     }
                 }
@@ -161,7 +166,7 @@ class SingleNoteViewModel @Inject constructor(
                 // path converges on the current state instead of a stale captured value.
                 _state.update { it.copy(folderId = intent.folderId) }
                 noteId?.let { id ->
-                    viewModelScope.launch {
+                    metaWriteJob = viewModelScope.launch {
                         saveMutex.withLock { notesRepository.setNoteFolder(id, _state.value.folderId) }
                     }
                 }
@@ -173,6 +178,9 @@ class SingleNoteViewModel @Inject constructor(
 
             is SingleNoteIntent.BackClicked -> {
                 viewModelScope.launch {
+                    // Flush any pending metadata write (favorite/folder) AND the autosave before
+                    // navigating, so popping the screen can't cancel an in-flight UPDATE.
+                    metaWriteJob?.join()
                     saveNote(debounce = false)?.join()
                     _events.send(SingleNoteEvent.NavigateBack)
                 }
