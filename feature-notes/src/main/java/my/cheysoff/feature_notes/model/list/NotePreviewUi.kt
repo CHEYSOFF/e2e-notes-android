@@ -15,6 +15,7 @@ data class NotePreviewUi(
     val isPinned: Boolean = false,
     val isFavorite: Boolean = false,
     val folderId: String? = null,
+    val folderColorArgb: Long? = null,
     val updatedAt: Long = 0L,
     val checklistDone: Int = 0,
     val checklistTotal: Int = 0,
