@@ -84,6 +84,7 @@ import com.mohamedrejeb.richeditor.model.RichTextState
 import com.mohamedrejeb.richeditor.model.rememberRichTextState
 import com.mohamedrejeb.richeditor.ui.BasicRichTextEditor
 import java.util.UUID
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
 import my.cheysoff.core_ui.theme.AccentIndigo
@@ -101,7 +102,7 @@ import my.cheysoff.feature_notes.model.single.SingleNoteScreenState
 import my.cheysoff.feature_notes.ui.folder.FolderChooser
 import my.cheysoff.feature_notes.ui.folder.FolderRef
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, FlowPreview::class)
 @Composable
 fun SingleNoteScreen(
     state: SingleNoteScreenState,
