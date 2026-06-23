@@ -1,7 +1,8 @@
 package my.cheysoff.feature_notes.ui.list
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -36,8 +37,11 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FabPosition
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -45,7 +49,12 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -74,6 +83,9 @@ import my.cheysoff.feature_notes.model.list.HeaderLineUi
 import my.cheysoff.feature_notes.model.list.NotePreviewUi
 import my.cheysoff.feature_notes.model.list.NotesListIntent
 import my.cheysoff.feature_notes.model.list.NotesListScreenState
+import my.cheysoff.feature_notes.ui.folder.FolderChooser
+import my.cheysoff.feature_notes.ui.folder.FolderEditDialog
+import my.cheysoff.feature_notes.ui.folder.FolderRef
 
 @Composable
 fun NotesListScreen(
@@ -81,6 +93,15 @@ fun NotesListScreen(
     onIntent: (NotesListIntent) -> Unit
 ) {
     val spacing = LocalSpacing.current
+
+    var showCreateFolder by remember { mutableStateOf(false) }
+    var editFolderTarget by remember { mutableStateOf<FolderPreviewUi?>(null) }
+    var deleteFolderTarget by remember { mutableStateOf<FolderPreviewUi?>(null) }
+    var moveNoteTarget by remember { mutableStateOf<NotePreviewUi?>(null) }
+
+    val folderRefs = remember(state.folderPreviews) {
+        state.folderPreviews.map { FolderRef(it.id, it.name, it.colorArgb) }
+    }
 
     Scaffold(
         modifier = Modifier.fillMaxSize(),
@@ -126,6 +147,9 @@ fun NotesListScreen(
                     selectedFolderId = state.selectedFolderId,
                     onAllClick = { state.selectedFolderId?.let { onIntent(NotesListIntent.FolderClicked(it)) } },
                     onFolderClick = { onIntent(NotesListIntent.FolderClicked(it)) },
+                    onCreateFolder = { showCreateFolder = true },
+                    onEditFolder = { editFolderTarget = it },
+                    onDeleteFolder = { deleteFolderTarget = it },
                 )
             }
 
@@ -134,7 +158,7 @@ fun NotesListScreen(
                     SectionLabel("Pinned")
                 }
                 item(span = StaggeredGridItemSpan.FullLine, contentType = "pinned_pager") {
-                    PinnedPager(state.pinnedPreviews) { onIntent(NotesListIntent.NoteClicked(it)) }
+                    PinnedPager(state.pinnedPreviews, onClick = { onIntent(NotesListIntent.NoteClicked(it)) }, onLongClick = { note -> moveNoteTarget = note })
                 }
             }
 
@@ -148,9 +172,42 @@ fun NotesListScreen(
                 key = { it.id },
                 contentType = { "note" }
             ) { note ->
-                NoteCard(note) { onIntent(NotesListIntent.NoteClicked(note.id)) }
+                NoteCard(note, onClick = { onIntent(NotesListIntent.NoteClicked(note.id)) }, onLongClick = { moveNoteTarget = note })
             }
         }
+    }
+
+    if (showCreateFolder) {
+        FolderEditDialog(
+            initial = null,
+            onDismiss = { showCreateFolder = false },
+            onConfirm = { name, color -> onIntent(NotesListIntent.CreateFolder(name, color)); showCreateFolder = false },
+        )
+    }
+    editFolderTarget?.let { f ->
+        FolderEditDialog(
+            initial = FolderRef(f.id, f.name, f.colorArgb),
+            onDismiss = { editFolderTarget = null },
+            onConfirm = { name, color -> onIntent(NotesListIntent.UpdateFolder(f.id, name, color)); editFolderTarget = null },
+        )
+    }
+    deleteFolderTarget?.let { f ->
+        AlertDialog(
+            containerColor = SurfaceDark,
+            onDismissRequest = { deleteFolderTarget = null },
+            title = { Text("Delete folder?", color = TitleGrey) },
+            text = { Text("\"${f.name}\" — its ${f.notesAmount} notes will move to All.", color = BodyGrey) },
+            confirmButton = { TextButton(onClick = { onIntent(NotesListIntent.DeleteFolder(f.id)); deleteFolderTarget = null }) { Text("Delete", color = AccentIndigo) } },
+            dismissButton = { TextButton(onClick = { deleteFolderTarget = null }) { Text("Cancel", color = BodyGrey) } },
+        )
+    }
+    moveNoteTarget?.let { note ->
+        FolderChooser(
+            folders = folderRefs,
+            selectedId = note.folderId,
+            onDismiss = { moveNoteTarget = null },
+            onSelect = { folderId -> onIntent(NotesListIntent.MoveNoteToFolder(note.id, folderId)); moveNoteTarget = null },
+        )
     }
 }
 
@@ -200,12 +257,16 @@ private fun HeaderLine(header: HeaderLineUi?, statsLine: String?) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun FolderChips(
     folders: List<FolderPreviewUi>,
     selectedFolderId: String?,
     onAllClick: () -> Unit,
     onFolderClick: (String) -> Unit,
+    onCreateFolder: () -> Unit,
+    onEditFolder: (FolderPreviewUi) -> Unit,
+    onDeleteFolder: (FolderPreviewUi) -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -216,17 +277,32 @@ private fun FolderChips(
     ) {
         Chip(text = "All", selected = selectedFolderId == null, onClick = onAllClick)
         folders.forEach { folder ->
-            Chip(
-                text = folder.name,
-                selected = selectedFolderId == folder.id,
-                onClick = { onFolderClick(folder.id) },
-            )
+            var menuOpen by remember(folder.id) { mutableStateOf(false) }
+            Box {
+                Chip(
+                    text = folder.name,
+                    selected = selectedFolderId == folder.id,
+                    onClick = { onFolderClick(folder.id) },
+                    onLongClick = { menuOpen = true },
+                )
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(text = { Text("Rename") }, onClick = { menuOpen = false; onEditFolder(folder) })
+                    DropdownMenuItem(text = { Text("Delete") }, onClick = { menuOpen = false; onDeleteFolder(folder) })
+                }
+            }
         }
+        Chip(text = "+", selected = false, onClick = onCreateFolder)
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {
+private fun Chip(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+) {
     val sw = LocalConfiguration.current.screenWidthDp
     Text(
         text = text,
@@ -238,7 +314,7 @@ private fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {
         modifier = Modifier
             .clip(RoundedCornerShape(percent = 50))
             .background(if (selected) AccentIndigo else SurfaceDark)
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp, vertical = 10.dp),
     )
 }
@@ -258,8 +334,9 @@ private fun SectionLabel(text: String) {
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun PinnedPager(pinned: List<NotePreviewUi>, onClick: (String) -> Unit) {
+private fun PinnedPager(pinned: List<NotePreviewUi>, onClick: (String) -> Unit, onLongClick: (NotePreviewUi) -> Unit) {
     val spacing = LocalSpacing.current
     val screenWidth = LocalConfiguration.current.screenWidthDp.dp
     val pagerState = rememberPagerState(pageCount = { pinned.size })
@@ -278,7 +355,7 @@ private fun PinnedPager(pinned: List<NotePreviewUi>, onClick: (String) -> Unit) 
                 pageSpacing = spacing.screenHorizontal,
                 contentPadding = PaddingValues(horizontal = spacing.screenHorizontal),
             ) { page ->
-                PinnedCard(pinned[page]) { onClick(pinned[page].id) }
+                PinnedCard(pinned[page], onClick = { onClick(pinned[page].id) }, onLongClick = { onLongClick(pinned[page]) })
             }
             // Soft fade both edges into the black background (non-interactive: swipes pass through).
             Box(
@@ -317,15 +394,17 @@ private fun PinnedPager(pinned: List<NotePreviewUi>, onClick: (String) -> Unit) 
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun PinnedCard(note: NotePreviewUi, onClick: () -> Unit) {
+private fun PinnedCard(note: NotePreviewUi, onClick: () -> Unit, onLongClick: () -> Unit) {
     val sw = LocalConfiguration.current.screenWidthDp
     val color = noteColor(note.folderId) ?: AccentIndigo
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = color),
-        onClick = onClick,
     ) {
         Box(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
@@ -365,8 +444,9 @@ private fun PinnedCard(note: NotePreviewUi, onClick: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun NoteCard(note: NotePreviewUi, onClick: () -> Unit) {
+private fun NoteCard(note: NotePreviewUi, onClick: () -> Unit, onLongClick: () -> Unit) {
     val sw = LocalConfiguration.current.screenWidthDp
     val titleSize = (sw * 0.043f).sp
     val bodySize = (sw * 0.034f).sp
@@ -377,10 +457,11 @@ private fun NoteCard(note: NotePreviewUi, onClick: () -> Unit) {
     if (filled) {
         val color = base ?: AccentIndigo
         Card(
-            modifier = Modifier.heightIn(max = 300.dp),
+            modifier = Modifier
+                .heightIn(max = 300.dp)
+                .combinedClickable(onClick = onClick, onLongClick = onLongClick),
             shape = RoundedCornerShape(18.dp),
             colors = CardDefaults.cardColors(containerColor = color),
-            onClick = onClick,
         ) {
             Column(modifier = Modifier.padding(14.dp)) {
                 Text(
@@ -416,10 +497,10 @@ private fun NoteCard(note: NotePreviewUi, onClick: () -> Unit) {
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 5.dp),
+                    .padding(start = 5.dp)
+                    .combinedClickable(onClick = onClick, onLongClick = onLongClick),
                 shape = shape,
                 colors = CardDefaults.cardColors(containerColor = SurfaceDark),
-                onClick = onClick,
             ) {
                 Column(modifier = Modifier.padding(start = 13.dp, top = 14.dp, end = 14.dp, bottom = 14.dp)) {
                     Text(

@@ -1,9 +1,11 @@
 package my.cheysoff.core_data.data
 
+import androidx.room.withTransaction
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import my.cheysoff.core_data.data.local.FolderDao
 import my.cheysoff.core_data.data.local.NoteDao
+import my.cheysoff.core_data.data.local.NoteDatabase
 import my.cheysoff.core_data.data.local.toDomain
 import my.cheysoff.core_data.data.local.toEntity
 import my.cheysoff.core_domain.model.Folder
@@ -16,6 +18,7 @@ import javax.inject.Singleton
 class RoomNotesRepository @Inject constructor(
     private val noteDao: NoteDao,
     private val folderDao: FolderDao,
+    private val database: NoteDatabase,
 ) : NotesRepository {
 
     override fun getNotes(): Flow<List<Note>> {
@@ -45,6 +48,10 @@ class RoomNotesRepository @Inject constructor(
         noteDao.deleteNote(id)
     }
 
+    override suspend fun setNoteFolder(noteId: String, folderId: String?) {
+        noteDao.setNoteFolder(noteId, folderId)
+    }
+
     override fun getFolders(): Flow<List<Folder>> {
         return folderDao.getFolders().map { entities ->
             entities.map { it.toDomain() }
@@ -56,6 +63,11 @@ class RoomNotesRepository @Inject constructor(
     }
 
     override suspend fun deleteFolder(id: String) {
-        folderDao.deleteFolder(id)
+        // Unfile the folder's notes, then drop the folder — atomically, so a failure can't leave
+        // notes pointing at a deleted folder.
+        database.withTransaction {
+            noteDao.clearFolder(id)
+            folderDao.deleteFolder(id)
+        }
     }
 }
