@@ -84,8 +84,6 @@ import com.mohamedrejeb.richeditor.model.RichTextState
 import com.mohamedrejeb.richeditor.model.rememberRichTextState
 import com.mohamedrejeb.richeditor.ui.BasicRichTextEditor
 import java.util.UUID
-import kotlinx.coroutines.FlowPreview
-import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
 import my.cheysoff.core_ui.theme.AccentIndigo
 import my.cheysoff.core_ui.theme.AppBlack
@@ -102,7 +100,7 @@ import my.cheysoff.feature_notes.model.single.SingleNoteScreenState
 import my.cheysoff.feature_notes.ui.folder.FolderChooser
 import my.cheysoff.feature_notes.ui.folder.FolderRef
 
-@OptIn(ExperimentalLayoutApi::class, FlowPreview::class)
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SingleNoteScreen(
     state: SingleNoteScreenState,
@@ -112,7 +110,6 @@ fun SingleNoteScreen(
     val isImeVisible = WindowInsets.isImeVisible
     val accent = remember(state.folderId, state.folders) { editorAccent(state.folderId, state.folders) }
     val richTextState = rememberRichTextState()
-    val history = remember { EditHistory("") }
     // Id of a checklist item that should grab focus once it appears (set when an item is added,
     // or when one above is removed). Hoisted here so the toolbar FAB and the section can both set it.
     var focusItemId by remember { mutableStateOf<String?>(null) }
@@ -137,18 +134,9 @@ fun SingleNoteScreen(
             } else {
                 richTextState.setText(state.content)
             }
-            history.reset(richTextState.toHtml())
             snapshotFlow { richTextState.annotatedString }
                 .drop(1)
                 .collect { onIntent(SingleNoteIntent.ContentChanged(richTextState.toHtml())) }
-        }
-    }
-    LaunchedEffect(state.isLoaded) {
-        if (state.isLoaded) {
-            snapshotFlow { richTextState.annotatedString }
-                .drop(1)
-                .debounce(500)
-                .collect { history.record(richTextState.toHtml()) }
         }
     }
 
@@ -161,10 +149,10 @@ fun SingleNoteScreen(
                 isPinned = state.isPinned,
                 isFavorite = state.isFavorite,
                 accent = accent,
-                canUndo = history.canUndo,
-                canRedo = history.canRedo,
-                onUndo = { history.undo()?.let { richTextState.setHtml(it) } },
-                onRedo = { history.redo()?.let { richTextState.setHtml(it) } },
+                canUndo = richTextState.history.canUndo,
+                canRedo = richTextState.history.canRedo,
+                onUndo = { richTextState.history.undo() },
+                onRedo = { richTextState.history.redo() },
                 onIntent = onIntent,
             )
         },
