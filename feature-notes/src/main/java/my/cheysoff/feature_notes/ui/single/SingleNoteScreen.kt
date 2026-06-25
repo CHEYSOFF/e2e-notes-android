@@ -144,7 +144,18 @@ fun SingleNoteScreen(
         modifier = Modifier
             .fillMaxSize()
             .imePadding(),
-        topBar = { EditorTopBar(isPinned = state.isPinned, isFavorite = state.isFavorite, accent = accent, onIntent = onIntent) },
+        topBar = {
+            EditorTopBar(
+                isPinned = state.isPinned,
+                isFavorite = state.isFavorite,
+                accent = accent,
+                canUndo = richTextState.history.canUndo,
+                canRedo = richTextState.history.canRedo,
+                onUndo = { richTextState.history.undo() },
+                onRedo = { richTextState.history.redo() },
+                onIntent = onIntent,
+            )
+        },
         floatingActionButton = {
             FormattingToolbar(
                 richTextState = richTextState,
@@ -382,6 +393,10 @@ private fun EditorTopBar(
     isPinned: Boolean,
     isFavorite: Boolean,
     accent: Color,
+    canUndo: Boolean,
+    canRedo: Boolean,
+    onUndo: () -> Unit,
+    onRedo: () -> Unit,
     onIntent: (SingleNoteIntent) -> Unit,
 ) {
     val spacing = LocalSpacing.current
@@ -397,8 +412,8 @@ private fun EditorTopBar(
             onIntent(SingleNoteIntent.BackClicked)
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            TopIcon(Icons.AutoMirrored.Filled.Undo, "Undo", BodyGrey) { /* TODO: undo history */ }
-            TopIcon(Icons.AutoMirrored.Filled.Redo, "Redo", BodyGrey) { /* TODO: redo history */ }
+            TopIcon(Icons.AutoMirrored.Filled.Undo, "Undo", if (canUndo) accent else BodyGrey, enabled = canUndo) { onUndo() }
+            TopIcon(Icons.AutoMirrored.Filled.Redo, "Redo", if (canRedo) accent else BodyGrey, enabled = canRedo) { onRedo() }
             TopIcon(
                 Icons.Outlined.PushPin,
                 "Pin",
@@ -415,8 +430,8 @@ private fun EditorTopBar(
 }
 
 @Composable
-private fun TopIcon(icon: ImageVector, desc: String, tint: Color, onClick: () -> Unit) {
-    IconButton(onClick = onClick) {
+private fun TopIcon(icon: ImageVector, desc: String, tint: Color, enabled: Boolean = true, onClick: () -> Unit) {
+    IconButton(onClick = onClick, enabled = enabled) {
         Icon(imageVector = icon, contentDescription = desc, tint = tint)
     }
 }
