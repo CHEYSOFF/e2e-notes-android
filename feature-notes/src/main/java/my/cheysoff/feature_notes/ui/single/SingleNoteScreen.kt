@@ -412,8 +412,8 @@ private fun EditorTopBar(
             onIntent(SingleNoteIntent.BackClicked)
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            TopIcon(Icons.AutoMirrored.Filled.Undo, "Undo", if (canUndo) accent else BodyGrey) { onUndo() }
-            TopIcon(Icons.AutoMirrored.Filled.Redo, "Redo", if (canRedo) accent else BodyGrey) { onRedo() }
+            TopIcon(Icons.AutoMirrored.Filled.Undo, "Undo", if (canUndo) accent else BodyGrey, enabled = canUndo) { onUndo() }
+            TopIcon(Icons.AutoMirrored.Filled.Redo, "Redo", if (canRedo) accent else BodyGrey, enabled = canRedo) { onRedo() }
             TopIcon(
                 Icons.Outlined.PushPin,
                 "Pin",
@@ -430,8 +430,8 @@ private fun EditorTopBar(
 }
 
 @Composable
-private fun TopIcon(icon: ImageVector, desc: String, tint: Color, onClick: () -> Unit) {
-    IconButton(onClick = onClick) {
+private fun TopIcon(icon: ImageVector, desc: String, tint: Color, enabled: Boolean = true, onClick: () -> Unit) {
+    IconButton(onClick = onClick, enabled = enabled) {
         Icon(imageVector = icon, contentDescription = desc, tint = tint)
     }
 }
