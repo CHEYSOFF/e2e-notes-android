@@ -12,6 +12,9 @@ import javax.crypto.Cipher
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.math.max
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Result of a PIN unlock attempt.
@@ -65,6 +68,12 @@ class SecureUnlockManager @Inject constructor(
     /** In-memory unlocked passphrase, or null while locked. Owned/zeroed by this class. */
     private var inMem: ByteArray? = null
 
+    private val _unlocked = MutableStateFlow(false)
+
+    /** True while a passphrase is held in memory (post-unlock); flips to false on [lock]. The nav
+     *  layer observes this to gate the UI back to the auth screen when the app re-locks. */
+    val unlocked: StateFlow<Boolean> = _unlocked.asStateFlow()
+
     /** True once a PIN has been set up (a PIN-wrapped passphrase exists). */
     fun isPinSet(): Boolean = prefs.contains(KEY_PIN_CT)
 
@@ -102,6 +111,7 @@ class SecureUnlockManager @Inject constructor(
             }
             // Keep an in-memory copy; zero the local working copy below.
             inMem = passphrase.copyOf()
+            _unlocked.value = true
         } finally {
             passphrase.fill(0)
         }
@@ -131,6 +141,7 @@ class SecureUnlockManager @Inject constructor(
             putLong(KEY_LOCKOUT_UNTIL, 0L)
         }
         inMem = pp
+        _unlocked.value = true
         return UnlockResult.Success
     }
 
@@ -186,6 +197,7 @@ class SecureUnlockManager @Inject constructor(
             ?: error("unlockWithBiometric() called but no biometric wrap stored")
         val pp = unlockedDecryptCipher.doFinal(Base64.decode(ct, Base64.DEFAULT))
         inMem = pp
+        _unlocked.value = true
         return true
     }
 
@@ -196,6 +208,7 @@ class SecureUnlockManager @Inject constructor(
     fun lock() {
         inMem?.fill(0)
         inMem = null
+        _unlocked.value = false
     }
 
     private fun loadPinWrap(): PinWrap? {
