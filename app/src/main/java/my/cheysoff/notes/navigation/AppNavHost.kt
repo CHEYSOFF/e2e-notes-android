@@ -25,6 +25,22 @@ import my.cheysoff.feature_notes.ui.single.SingleNoteViewModel
 fun AppNavHost(
     navController: NavHostController = rememberNavController()
 ) {
+    // Re-lock gating: when the session locks (passphrase dropped on background), route back to the
+    // auth screen and clear the back stack so notes aren't reachable without re-authenticating.
+    val appViewModel: AppViewModel = hiltViewModel()
+    val unlocked by appViewModel.unlocked.collectAsState()
+    LaunchedEffect(unlocked) {
+        if (!unlocked) {
+            val current = navController.currentDestination?.route
+            if (current != null && current != "auth") {
+                navController.navigate("auth") {
+                    popUpTo(0) { inclusive = true }
+                    launchSingleTop = true
+                }
+            }
+        }
+    }
+
     NavHost(navController, startDestination = "auth") {
         // Auth feature
         composable("auth") {
