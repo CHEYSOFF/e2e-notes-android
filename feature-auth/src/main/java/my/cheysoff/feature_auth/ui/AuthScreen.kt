@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -345,12 +346,30 @@ private fun KeypadSheet(
             fontSize = (screenWidthDp * 0.043f).sp,
         )
 
-        Spacer(modifier = Modifier.height(if (status != null) 8.dp else 0.dp))
-        if (status != null) {
-            Text(
+        val subLineSize = (screenWidthDp * 0.034f).sp
+        Spacer(modifier = Modifier.height(if (state.isLoading || status != null) 8.dp else 0.dp))
+        when {
+            // After the PIN is entered, show that it's being verified.
+            state.isLoading -> Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = IndigoTint,
+                )
+                Text(
+                    text = if (state.mode == AuthMode.CONFIRM_PIN) "Setting up…" else "Checking…",
+                    color = SheetTitleGrey,
+                    fontSize = subLineSize,
+                )
+            }
+
+            status != null -> Text(
                 text = status.first,
                 color = status.second,
-                fontSize = (screenWidthDp * 0.034f).sp,
+                fontSize = subLineSize,
                 textAlign = TextAlign.Center,
             )
         }
