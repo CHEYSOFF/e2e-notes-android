@@ -347,34 +347,41 @@ private fun KeypadSheet(
         )
 
         val subLineSize = (screenWidthDp * 0.034f).sp
-        Spacer(modifier = Modifier.height(if (state.isLoading || status != null) 8.dp else 0.dp))
-        when {
-            // After the PIN is entered, show that it's being verified.
-            state.isLoading -> Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(16.dp),
-                    strokeWidth = 2.dp,
-                    color = IndigoTint,
-                )
-                Text(
-                    text = if (state.mode == AuthMode.CONFIRM_PIN) "Setting up…" else "Checking…",
-                    color = SheetTitleGrey,
+        // Constant-height slot: the status text/spinner appears and disappears WITHOUT resizing the
+        // sheet (otherwise the bottom-anchored sheet grows upward and the grabber appears to jump).
+        Spacer(modifier = Modifier.height(8.dp))
+        Box(
+            modifier = Modifier.height(24.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            when {
+                // After the PIN is entered, show that it's being verified.
+                state.isLoading -> Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = IndigoTint,
+                    )
+                    Text(
+                        text = if (state.mode == AuthMode.CONFIRM_PIN) "Setting up…" else "Checking…",
+                        color = SheetTitleGrey,
+                        fontSize = subLineSize,
+                    )
+                }
+
+                status != null -> Text(
+                    text = status.first,
+                    color = status.second,
                     fontSize = subLineSize,
+                    textAlign = TextAlign.Center,
                 )
             }
-
-            status != null -> Text(
-                text = status.first,
-                color = status.second,
-                fontSize = subLineSize,
-                textAlign = TextAlign.Center,
-            )
         }
 
-        Spacer(modifier = Modifier.height(22.dp))
+        Spacer(modifier = Modifier.height(14.dp))
         PinDots(filled = state.pinLength, total = state.pinMaxLength)
 
         // Approved 72px dots -> keypad gap.
