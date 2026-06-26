@@ -59,6 +59,17 @@ class NotesListViewModel @Inject constructor(
     // (each preview's HTML→plain-text conversion already happened off the main thread on load).
     private var allPreviews: List<NotePreviewUi> = emptyList()
 
+    // Declared before init: the init coroutine can resume synchronously (Main.immediate + a
+    // DataStore flow that emits its first value without suspending), so pickMotivationalLine()
+    // may run during construction — this list must already be initialized by then.
+    private val dailyPhrases = listOf(
+        HeaderLineUi("One thing", "at a time."),
+        HeaderLineUi("Tomorrow", "starts here."),
+        HeaderLineUi("Capture", "the thought."),
+        HeaderLineUi("Make it", "count."),
+        HeaderLineUi("Today's", "canvas."),
+    )
+
     init {
         // Pick the motivational line once per screen open (random greeting/phrase among the enabled).
         viewModelScope.launch {
@@ -112,14 +123,6 @@ class NotesListViewModel @Inject constructor(
     private fun visiblePreviews(selectedFolderId: String?): List<NotePreviewUi> =
         if (selectedFolderId == null) allPreviews
         else allPreviews.filter { it.folderId == selectedFolderId }
-
-    private val dailyPhrases = listOf(
-        HeaderLineUi("One thing", "at a time."),
-        HeaderLineUi("Tomorrow", "starts here."),
-        HeaderLineUi("Capture", "the thought."),
-        HeaderLineUi("Make it", "count."),
-        HeaderLineUi("Today's", "canvas."),
-    )
 
     private fun pickMotivationalLine(settings: HeaderSettings): HeaderLineUi? {
         val sources = buildList {
