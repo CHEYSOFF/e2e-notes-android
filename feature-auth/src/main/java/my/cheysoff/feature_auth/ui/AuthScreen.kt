@@ -139,8 +139,12 @@ fun AuthScreen(
                 .padding(top = 4.dp),
         )
 
-        // Biometric landing: shown only while waiting on the crescent screen.
-        if (state.mode == AuthMode.BIOMETRIC) {
+        // Biometric landing. Also kept rendered as the backdrop BEHIND the keypad sheet when the
+        // sheet was opened over it (ENTER_PIN reached via "Use PIN instead"), so dragging/dismissing
+        // the sheet reveals the real screen underneath instead of black — and nothing pops back in.
+        if (state.mode == AuthMode.BIOMETRIC ||
+            (state.mode == AuthMode.ENTER_PIN && state.canDismissSheet)
+        ) {
             BiometricLanding(
                 titleSize = titleSize,
                 secondarySize = secondarySize,
