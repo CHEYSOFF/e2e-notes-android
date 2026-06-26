@@ -1,8 +1,19 @@
 package my.cheysoff.feature_auth.ui
 
 import android.content.res.Configuration
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,27 +26,43 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.fragment.app.FragmentActivity
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 import my.cheysoff.core_ui.theme.AccentIndigo
 import my.cheysoff.core_ui.theme.AppBlack
 import my.cheysoff.core_ui.theme.EncryptedNoteGrey
@@ -43,26 +70,36 @@ import my.cheysoff.core_ui.theme.IndigoTint
 import my.cheysoff.core_ui.theme.NotesTheme
 import my.cheysoff.core_ui.theme.WelcomeGrey
 import my.cheysoff.feature_auth.R
+import my.cheysoff.feature_auth.model.AuthMode
 import my.cheysoff.feature_auth.model.AuthScreenIntent
 import my.cheysoff.feature_auth.model.AuthScreenState
+
+private val SheetSurface = Color(0xFF08080B)
+private val SheetTitleGrey = Color(0xFFB6B6C2)
+private val ErrorRed = Color(0xFFE0708A)
 
 @Composable
 fun AuthScreen(
     state: AuthScreenState,
     onIntentReceived: (AuthScreenIntent) -> Unit,
 ) {
-    // Everything scales with screen width so proportions match the design on any device.
-    val screenWidthDp = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
+    LaunchedEffect(Unit) { onIntentReceived(AuthScreenIntent.Initialize) }
+
+    val screenWidthDp = LocalConfiguration.current.screenWidthDp
     val titleSize = (screenWidthDp * 0.175f).sp
     val secondarySize = (screenWidthDp * 0.042f).sp
     val moonSize = (screenWidthDp * 0.78f).dp
+
+    val sheetUp = state.mode == AuthMode.ENTER_PIN ||
+        state.mode == AuthMode.SET_PIN ||
+        state.mode == AuthMode.CONFIRM_PIN
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(AppBlack)
     ) {
-        // Large emoji-style crescent (native gold), top-right, bleeding off the corner.
+        // Large crescent (native gold), top-right, bleeding off the corner — always present.
         Image(
             painter = painterResource(id = R.drawable.ic_crescent_moon_3d),
             contentDescription = null,
@@ -72,7 +109,7 @@ fun AuthScreen(
                 .size(moonSize),
         )
 
-        // Black -> transparent scrim over the top: darkens the moon's top + protects status bar.
+        // Black -> transparent scrim protecting the status bar.
         Box(
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -87,107 +124,129 @@ fun AuthScreen(
                 )
         )
 
-        Column(
+        // Wordmark, top center.
+        Text(
+            text = "Mañana",
+            color = Color(0xFF888888),
+            fontWeight = FontWeight.Bold,
+            fontSize = secondarySize,
+            textAlign = TextAlign.Center,
             modifier = Modifier
-                .fillMaxSize()
+                .align(Alignment.TopCenter)
                 .systemBarsPadding()
-                .padding(horizontal = 24.dp),
-        ) {
-            // Wordmark, plain centered text at the top.
-            Text(
-                text = "Mañana",
-                color = Color(0xFF888888),
-                fontWeight = FontWeight.Bold,
-                fontSize = secondarySize,
+                .fillMaxWidth()
+                .padding(top = 4.dp),
+        )
+
+        // Biometric landing: shown only while waiting on the crescent screen.
+        if (state.mode == AuthMode.BIOMETRIC) {
+            BiometricLanding(
+                titleSize = titleSize,
+                secondarySize = secondarySize,
+                onIntentReceived = onIntentReceived,
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 4.dp),
-                style = MaterialTheme.typography.titleSmall.copy(textAlign = androidx.compose.ui.text.style.TextAlign.Center),
+                    .align(Alignment.BottomStart)
+                    .systemBarsPadding()
+                    .padding(horizontal = 24.dp, vertical = 24.dp),
             )
+        }
 
-            Spacer(modifier = Modifier.weight(1f))
-
-            // Big editorial title, left-aligned, with the indigo "back."
-            Text(
-                text = buildAnnotatedString {
-                    withStyle(SpanStyle(color = WelcomeGrey, fontWeight = FontWeight.Light)) {
-                        append("Welcome")
-                    }
-                    append("\n")
-                    withStyle(SpanStyle(color = IndigoTint, fontWeight = FontWeight.Medium)) {
-                        append("back.")
-                    }
-                },
-                style = MaterialTheme.typography.titleLarge.copy(
-                    fontSize = titleSize,
-                    lineHeight = titleSize * 0.96f,
-                    letterSpacing = (-1.4).sp,
-                ),
+        // When the sheet can be dismissed, system-back and a tap above the sheet return to the
+        // prior surface (biometric landing, or Create-PIN from Confirm).
+        if (sheetUp && state.canDismissSheet) {
+            BackHandler { onIntentReceived(AuthScreenIntent.DismissSheet) }
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { onIntentReceived(AuthScreenIntent.DismissSheet) }
             )
-            Text(
-                text = "Your notes are encrypted on this device.",
-                color = EncryptedNoteGrey,
-                style = MaterialTheme.typography.bodySmall.copy(fontSize = secondarySize),
-                modifier = Modifier.padding(top = 16.dp),
-            )
+        }
 
-            Spacer(modifier = Modifier.height(30.dp))
-
-            AuthActions(state, onIntentReceived)
-
-            Spacer(modifier = Modifier.height(8.dp))
+        // Slide-up keypad sheet (rises on launch for set/confirm, on "Use PIN instead" for unlock).
+        AnimatedVisibility(
+            visible = sheetUp,
+            enter = slideInVertically(animationSpec = tween(420)) { it } + fadeIn(tween(220)),
+            exit = slideOutVertically(animationSpec = tween(280)) { it } + fadeOut(tween(160)),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            KeypadSheet(state = state, onIntentReceived = onIntentReceived)
         }
     }
 }
 
 @Composable
-private fun AuthActions(
-    state: AuthScreenState,
+private fun BiometricLanding(
+    titleSize: androidx.compose.ui.unit.TextUnit,
+    secondarySize: androidx.compose.ui.unit.TextUnit,
     onIntentReceived: (AuthScreenIntent) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val screenWidthDp = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
-    val unlockTextSize = (screenWidthDp * 0.05f).sp
-    val fingerprintSize = (screenWidthDp * 0.075f).dp
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        if (state.areBiometricsEnabled) {
-            Button(
-                onClick = {
-                    (context as? FragmentActivity)?.let { activity ->
-                        onIntentReceived(AuthScreenIntent.BiometricsLoginClickIntent(activity))
-                    }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(60.dp),
-                shape = androidx.compose.foundation.shape.RoundedCornerShape(percent = 50),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = AccentIndigo,
-                    contentColor = Color(0xFFE8E6F5),
-                ),
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Image(
-                        painter = painterResource(id = R.drawable.fingerprint),
-                        contentDescription = null,
-                        colorFilter = ColorFilter.tint(Color(0xFFE8E6F5)),
-                        modifier = Modifier
-                            .size(fingerprintSize)
-                            .padding(end = 10.dp),
-                    )
-                    Text(
-                        text = "Unlock",
-                        style = MaterialTheme.typography.titleSmall.copy(fontSize = unlockTextSize),
-                    )
+    val screenWidthDp = LocalConfiguration.current.screenWidthDp
+    Column(modifier = modifier.fillMaxWidth()) {
+        Text(
+            text = buildAnnotatedString {
+                withStyle(SpanStyle(color = WelcomeGrey, fontWeight = FontWeight.Light)) {
+                    append("Welcome")
                 }
+                append("\n")
+                withStyle(SpanStyle(color = IndigoTint, fontWeight = FontWeight.Medium)) {
+                    append("back.")
+                }
+            },
+            style = MaterialTheme.typography.titleLarge.copy(
+                fontSize = titleSize,
+                lineHeight = titleSize * 0.96f,
+                letterSpacing = (-1.4).sp,
+            ),
+        )
+        Text(
+            text = "Your notes are encrypted on this device.",
+            color = EncryptedNoteGrey,
+            style = MaterialTheme.typography.bodySmall.copy(fontSize = secondarySize),
+            modifier = Modifier.padding(top = 16.dp),
+        )
+
+        Spacer(modifier = Modifier.height(30.dp))
+
+        Button(
+            onClick = {
+                (context as? FragmentActivity)?.let {
+                    onIntentReceived(AuthScreenIntent.BiometricUnlock(it))
+                }
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(60.dp),
+            shape = RoundedCornerShape(percent = 50),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = AccentIndigo,
+                contentColor = Color(0xFFE8E6F5),
+            ),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Image(
+                    painter = painterResource(id = R.drawable.fingerprint),
+                    contentDescription = null,
+                    colorFilter = ColorFilter.tint(Color(0xFFE8E6F5)),
+                    modifier = Modifier
+                        .size((screenWidthDp * 0.075f).dp)
+                        .padding(end = 10.dp),
+                )
+                Text(
+                    text = "Unlock",
+                    style = MaterialTheme.typography.titleSmall.copy(fontSize = (screenWidthDp * 0.05f).sp),
+                )
             }
         }
 
-        // Quiet PIN fallback (wired to the PIN intent; PIN flow itself is a later feature).
-        TextButton(onClick = { onIntentReceived(AuthScreenIntent.PinLoginClickIntent) }) {
+        TextButton(
+            onClick = { onIntentReceived(AuthScreenIntent.UsePinInstead) },
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+        ) {
             Text(
                 text = "Use PIN instead",
                 color = Color(0xFF777777),
@@ -197,10 +256,123 @@ private fun AuthActions(
     }
 }
 
+@Composable
+private fun KeypadSheet(
+    state: AuthScreenState,
+    onIntentReceived: (AuthScreenIntent) -> Unit,
+) {
+    val screenWidthDp = LocalConfiguration.current.screenWidthDp
+    val sheetShape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp)
+
+    val title = when (state.mode) {
+        AuthMode.SET_PIN -> if (state.isMigration) "Secure your notes" else "Create your PIN"
+        AuthMode.CONFIRM_PIN -> "Confirm your PIN"
+        else -> "Enter your PIN"
+    }
+    val status: Pair<String, Color>? = when {
+        state.lockoutSecondsRemaining > 0 -> "Try again in ${state.lockoutSecondsRemaining}s" to ErrorRed
+        state.error != null -> state.error to ErrorRed
+        else -> null
+    }
+    val keysEnabled = !state.isLoading && state.lockoutSecondsRemaining == 0
+
+    // Drag-to-dismiss: follow the finger down, release past the threshold to dismiss (else snap back).
+    val scope = rememberCoroutineScope()
+    // Live drag offset is a plain synchronous Float (updated directly in the drag callback) so drag
+    // events can't race the release animation; only the release spring uses a coroutine.
+    var dragOffsetY by remember { mutableFloatStateOf(0f) }
+    val dismissThresholdPx = with(LocalDensity.current) { 130.dp.toPx() }
+    // Reset the drag offset whenever the sheet's mode changes (e.g. Confirm -> Create keeps the
+    // sheet composed, so the offset would otherwise stay where the drag left it).
+    LaunchedEffect(state.mode) { dragOffsetY = 0f }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .offset { IntOffset(0, dragOffsetY.roundToInt()) }
+            .then(
+                if (state.canDismissSheet) Modifier.pointerInput(Unit) {
+                    detectVerticalDragGestures(
+                        onVerticalDrag = { change, dragAmount ->
+                            change.consume()
+                            dragOffsetY = (dragOffsetY + dragAmount).coerceAtLeast(0f)
+                        },
+                        onDragEnd = {
+                            if (dragOffsetY > dismissThresholdPx) {
+                                onIntentReceived(AuthScreenIntent.DismissSheet)
+                            } else {
+                                scope.launch {
+                                    animate(dragOffsetY, 0f) { value, _ -> dragOffsetY = value }
+                                }
+                            }
+                        },
+                    )
+                } else Modifier
+            )
+            .clip(sheetShape)
+            .background(SheetSurface)
+            .systemBarsPadding()
+            .padding(horizontal = 28.dp)
+            .padding(top = 16.dp, bottom = 20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        // Grabber — tappable to dismiss when there's somewhere to return to.
+        Box(
+            modifier = Modifier
+                .then(
+                    if (state.canDismissSheet) Modifier.clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { onIntentReceived(AuthScreenIntent.DismissSheet) } else Modifier
+                )
+                .padding(horizontal = 48.dp, vertical = 8.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(42.dp)
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(Color(0xFF2A2A32))
+            )
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+        Text(
+            text = title,
+            color = SheetTitleGrey,
+            fontWeight = FontWeight.Medium,
+            fontSize = (screenWidthDp * 0.043f).sp,
+        )
+
+        Spacer(modifier = Modifier.height(if (status != null) 8.dp else 0.dp))
+        if (status != null) {
+            Text(
+                text = status.first,
+                color = status.second,
+                fontSize = (screenWidthDp * 0.034f).sp,
+                textAlign = TextAlign.Center,
+            )
+        }
+
+        Spacer(modifier = Modifier.height(22.dp))
+        PinDots(filled = state.pinLength, total = state.pinMaxLength)
+
+        // Approved 72px dots -> keypad gap.
+        Spacer(modifier = Modifier.height((screenWidthDp * 0.184f).dp))
+
+        PinPad(
+            onDigit = { onIntentReceived(AuthScreenIntent.Digit(it)) },
+            onBackspace = { onIntentReceived(AuthScreenIntent.Backspace) },
+            enabled = keysEnabled,
+        )
+    }
+}
+
 @Preview(showBackground = true, showSystemUi = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
 @Composable
 fun AuthScreenPreview() {
     NotesTheme(darkTheme = true) {
-        AuthScreen(AuthScreenState(areBiometricsEnabled = true), {})
+        AuthScreen(AuthScreenState(mode = AuthMode.ENTER_PIN, pinLength = 3), {})
     }
 }

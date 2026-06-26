@@ -4,6 +4,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.LocalContext
+import androidx.fragment.app.FragmentActivity
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -11,6 +13,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import my.cheysoff.feature_auth.model.AuthScreenIntent
 import my.cheysoff.feature_auth.ui.AuthEvent
 import my.cheysoff.feature_auth.ui.AuthScreen
 import my.cheysoff.feature_auth.ui.AuthViewModel
@@ -46,12 +49,21 @@ fun AppNavHost(
         composable("auth") {
             val viewModel: AuthViewModel = hiltViewModel()
             val state by viewModel.state.collectAsState()
+            val context = LocalContext.current
 
             LaunchedEffect(viewModel) {
                 viewModel.events.collect { event ->
                     when (event) {
                         AuthEvent.NavigationToNotesList -> {
                             navController.navigate("notes") {
+                                popUpTo("auth") { inclusive = true }
+                            }
+                        }
+
+                        AuthEvent.RequestBiometricEnroll -> {
+                            (context as? FragmentActivity)?.let {
+                                viewModel.processIntent(AuthScreenIntent.EnableBiometric(it))
+                            } ?: navController.navigate("notes") {
                                 popUpTo("auth") { inclusive = true }
                             }
                         }
