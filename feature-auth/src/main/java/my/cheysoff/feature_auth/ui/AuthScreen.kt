@@ -285,7 +285,18 @@ private fun KeypadSheet(
     val dismissThresholdPx = with(LocalDensity.current) { 130.dp.toPx() }
     // Reset the drag offset whenever the sheet's mode changes (e.g. Confirm -> Create keeps the
     // sheet composed, so the offset would otherwise stay where the drag left it).
-    LaunchedEffect(state.mode) { dragOffsetY = 0f }
+    // Realign the offset only WITHIN sheet modes (e.g. Confirm -> Create, which keeps the sheet
+    // composed). When the mode leaves to a non-sheet mode (e.g. -> BIOMETRIC on drag-dismiss) the
+    // sheet is animating OUT from wherever the drag left it; snapping the offset back to 0 there
+    // makes it jump to the top before AnimatedVisibility slides it out ("snap to top then bottom").
+    LaunchedEffect(state.mode) {
+        val sheetMode = state.mode == AuthMode.ENTER_PIN ||
+            state.mode == AuthMode.SET_PIN ||
+            state.mode == AuthMode.CONFIRM_PIN
+        if (sheetMode && dragOffsetY != 0f) {
+            animate(dragOffsetY, 0f) { value, _ -> dragOffsetY = value }
+        }
+    }
 
     Column(
         modifier = Modifier
