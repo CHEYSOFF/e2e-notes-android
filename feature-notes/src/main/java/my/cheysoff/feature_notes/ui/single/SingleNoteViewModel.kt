@@ -52,6 +52,16 @@ class SingleNoteViewModel @Inject constructor(
     // Serializes DB writes so an older/delayed save can't run concurrently with a newer one.
     private val saveMutex = Mutex()
 
+    // Last note row seen from the DB (refreshed by the load flow after every write). Lets
+    // BackClicked skip the upsert when the content fields are unchanged, so merely opening a
+    // note never bumps updatedAt (which now drives the list's newest-first order).
+    private var lastPersisted: Note? = null
+
+    // True only when this screen opened on an already-empty note — i.e. the blank row that
+    // createNewNote persists before navigating. Such a note is discarded if it's still empty on
+    // back. An existing note the user empties out is NEVER auto-deleted: that would be data loss.
+    private var openedEmpty: Boolean? = null
+
     init {
         noteId?.let { id ->
             notesRepository.getNoteById(id)
@@ -60,6 +70,11 @@ class SingleNoteViewModel @Inject constructor(
                 // screen side, where edits are forwarded regardless of load state.
                 .filterNotNull()
                 .onEach { note ->
+                    lastPersisted = note
+                    if (openedEmpty == null) {
+                        openedEmpty = note.title.isBlank() && note.content.isBlank() &&
+                                note.checklist.isBlank()
+                    }
                     _state.update { currentState ->
                         val updated = if (currentState.isUITheSame(note)) {
                             // Editable fields unchanged; still refresh updatedAt so the editor's
@@ -105,8 +120,14 @@ class SingleNoteViewModel @Inject constructor(
             }
 
             is SingleNoteIntent.TogglePin -> {
+                // Persist just isPinned via a targeted UPDATE, matching the favorite/folder paths:
+                // pinning is metadata, so it must not bump updatedAt (which orders the list).
                 _state.update { it.copy(isPinned = !it.isPinned) }
-                saveNote(debounce = false)
+                noteId?.let { id ->
+                    metaWriteJob = viewModelScope.launch {
+                        saveMutex.withLock { notesRepository.setNotePinned(id, _state.value.isPinned) }
+                    }
+                }
             }
 
             is SingleNoteIntent.ToggleFavorite -> {
@@ -178,10 +199,25 @@ class SingleNoteViewModel @Inject constructor(
 
             is SingleNoteIntent.BackClicked -> {
                 viewModelScope.launch {
-                    // Flush any pending metadata write (favorite/folder) AND the autosave before
-                    // navigating, so popping the screen can't cancel an in-flight UPDATE.
+                    // Flush any pending metadata write (favorite/folder/pin) before navigating, so
+                    // popping the screen can't cancel an in-flight UPDATE.
                     metaWriteJob?.join()
-                    saveNote(debounce = false)?.join()
+                    val current = _state.value
+                    val id = noteId
+                    when {
+                        // A never-written note is discarded rather than saved — otherwise an
+                        // abandoned "+" tap would sit at the top of the newest-first list.
+                        id != null && openedEmpty == true && current.title.isBlank() &&
+                            current.content.isBlank() && current.checklist.isEmpty() -> {
+                            saveJob?.cancel()
+                            saveMutex.withLock { notesRepository.deleteNote(id) }
+                        }
+
+                        current.hasUnsavedContent() -> saveNote(debounce = false)?.join()
+
+                        // Content matches the persisted row: skip the upsert entirely, so just
+                        // reading a note doesn't refresh updatedAt and reorder the list.
+                    }
                     _events.send(SingleNoteEvent.NavigateBack)
                 }
             }
@@ -213,6 +249,15 @@ class SingleNoteViewModel @Inject constructor(
         }
         saveJob = job
         return job
+    }
+
+    // Content fields only (title/body/checklist) — exactly what a save stamps updatedAt for.
+    // Metadata (pin/favorite/folder) persists through targeted UPDATEs and must not force an upsert.
+    private fun SingleNoteScreenState.hasUnsavedContent(): Boolean {
+        val persisted = lastPersisted ?: return true
+        return title != persisted.title ||
+                content != persisted.content ||
+                checklist.serializeChecklist() != persisted.checklist
     }
 
     private fun SingleNoteScreenState.isUITheSame(note: Note): Boolean {
