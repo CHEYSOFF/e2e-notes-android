@@ -354,6 +354,9 @@ private fun PinnedPager(pinned: List<NotePreviewUi>, onClick: (String) -> Unit, 
                 // instead of being clipped at the inner padding.
                 pageSpacing = spacing.screenHorizontal,
                 contentPadding = PaddingValues(horizontal = spacing.screenHorizontal),
+                // Key pages by note id: edits now reorder the list (updatedAt sort), and without
+                // identity Compose would reuse pages by index and swap card contents in place.
+                key = { pinned[it].id },
             ) { page ->
                 PinnedCard(pinned[page], onClick = { onClick(pinned[page].id) }, onLongClick = { onLongClick(pinned[page]) })
             }
