@@ -59,6 +59,9 @@ interface NoteDao {
     @Query("UPDATE notes SET isFavorite = :isFavorite WHERE id = :noteId")
     suspend fun setNoteFavorite(noteId: String, isFavorite: Boolean)
 
+    @Query("UPDATE notes SET isPinned = :isPinned WHERE id = :noteId")
+    suspend fun setNotePinned(noteId: String, isPinned: Boolean)
+
     @Query("UPDATE notes SET folderId = NULL WHERE folderId = :folderId")
     suspend fun clearFolder(folderId: String)
 }
