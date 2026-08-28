@@ -8,7 +8,9 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface NoteDao {
-    @Query("SELECT * FROM notes")
+    // Newest first. Legacy rows carry updatedAt/createdAt = 0 until their first post-migration
+    // save, so untouched old notes sort after anything with a real timestamp.
+    @Query("SELECT * FROM notes ORDER BY updatedAt DESC, createdAt DESC")
     fun getNotes(): Flow<List<NoteEntity>>
 
     @Query("SELECT * FROM notes WHERE id = :id")
