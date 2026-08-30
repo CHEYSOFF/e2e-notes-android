@@ -93,7 +93,7 @@ import my.cheysoff.core_ui.theme.TitleGrey
 import my.cheysoff.core_ui.theme.ToolbarDark
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_ui.theme.folderAccentColor
-import my.cheysoff.feature_notes.model.looksLikeHtml
+import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.feature_notes.model.single.ChecklistItem
 import my.cheysoff.feature_notes.model.single.SingleNoteIntent
 import my.cheysoff.feature_notes.model.single.SingleNoteScreenState
@@ -130,11 +130,12 @@ fun SingleNoteScreen(
     //
     // Stored content is HTML for rich-editor notes, but legacy notes are raw plain text; feeding
     // such text to setHtml would parse stray "<"/">" as tags and drop characters, so plain text
-    // goes through setText instead.
+    // goes through setText instead. The row's recorded contentFormat decides — never a guess at
+    // the string, which used to mistake "<john@example.com>" for markup and eat it.
     LaunchedEffect(state.isLoaded) {
         if (state.isLoaded) {
             richTextState.config.listIndent = 18
-            if (state.content.looksLikeHtml()) {
+            if (state.contentFormat == NoteContentFormat.HTML) {
                 richTextState.setHtml(state.content)
             } else {
                 richTextState.setText(state.content)

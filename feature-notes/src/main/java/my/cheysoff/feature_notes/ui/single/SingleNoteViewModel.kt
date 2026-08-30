@@ -18,6 +18,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import my.cheysoff.core_domain.model.Note
+import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.core_domain.repository.NotesRepository
 import my.cheysoff.feature_notes.model.single.ChecklistItem
 import my.cheysoff.feature_notes.model.single.SingleNoteIntent
@@ -88,6 +89,7 @@ class SingleNoteViewModel @Inject constructor(
                             currentState.copy(
                                 title = note.title,
                                 content = note.content,
+                                contentFormat = note.contentFormat,
                                 checklist = parseChecklist(note.checklist),
                                 isPinned = note.isPinned,
                                 isFavorite = note.isFavorite,
@@ -115,7 +117,11 @@ class SingleNoteViewModel @Inject constructor(
             }
 
             is SingleNoteIntent.ContentChanged -> {
-                _state.update { it.copy(content = intent.content) }
+                // Only the rich-text editor emits this, and it always sends toHtml() output — so
+                // this is the one place a note earns the HTML label. Marking the note HTML in any
+                // other write path (a title-only edit, say) would relabel an untouched legacy
+                // plain-text body and destroy it on the next open.
+                _state.update { it.copy(content = intent.content, contentFormat = NoteContentFormat.HTML) }
                 saveNote(debounce = true)
             }
 
@@ -240,6 +246,7 @@ class SingleNoteViewModel @Inject constructor(
                         id = id,
                         title = current.title,
                         content = current.content,
+                        contentFormat = current.contentFormat,
                         checklist = current.checklist.serializeChecklist(),
                         isPinned = current.isPinned,
                         folderId = current.folderId
@@ -257,12 +264,16 @@ class SingleNoteViewModel @Inject constructor(
         val persisted = lastPersisted ?: return true
         return title != persisted.title ||
                 content != persisted.content ||
+                // A body that changed format but not bytes still has to be flushed, or the row
+                // would keep a stale marker and be re-parsed with the wrong reader on reopen.
+                contentFormat != persisted.contentFormat ||
                 checklist.serializeChecklist() != persisted.checklist
     }
 
     private fun SingleNoteScreenState.isUITheSame(note: Note): Boolean {
         return title == note.title &&
                 content == note.content &&
+                contentFormat == note.contentFormat &&
                 checklist.serializeChecklist() == note.checklist &&
                 isPinned == note.isPinned &&
                 isFavorite == note.isFavorite &&
