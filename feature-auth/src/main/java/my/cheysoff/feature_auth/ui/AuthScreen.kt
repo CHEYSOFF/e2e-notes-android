@@ -19,14 +19,19 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -334,7 +339,15 @@ private fun KeypadSheet(
             )
             .clip(sheetShape)
             .background(SheetSurface)
-            .systemBarsPadding()
+            // systemBarsPadding() here also applied the STATUS BAR inset to the sheet's top edge —
+            // but the sheet is bottom-anchored, so that edge sits mid-screen with no status bar to
+            // avoid. The inset became dead sheet surface between the rounded top and the grabber
+            // (most visible on first launch, where the sheet's near-black surface is invisible
+            // against the black backdrop and the gap just reads as space above the handle).
+            // Keep the bottom (navigation bar) and horizontal (cutout/gesture) insets unchanged.
+            .windowInsetsPadding(
+                WindowInsets.systemBars.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)
+            )
             .padding(horizontal = 28.dp)
             .padding(top = 16.dp, bottom = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
