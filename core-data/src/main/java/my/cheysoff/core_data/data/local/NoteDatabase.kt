@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 // arg) so future migrations can be exercised by MigrationTestHelper instead of only on a device.
 // Only v5 onward is exported — v1..v4 predate the flag, so a 4 -> 5 migration test isn't possible
 // retroactively; from here on every version has a committed schema to migrate from.
-@Database(entities = [NoteEntity::class, FolderEntity::class], version = 5, exportSchema = true)
+@Database(entities = [NoteEntity::class, FolderEntity::class], version = 6, exportSchema = true)
 abstract class NoteDatabase : RoomDatabase() {
     abstract val noteDao: NoteDao
     abstract val folderDao: FolderDao
@@ -83,6 +83,35 @@ abstract class NoteDatabase : RoomDatabase() {
                         arrayOf<Any>(id),
                     )
                 }
+            }
+        }
+
+        // v5 -> v6: Trash. Notes and folders gain a tombstone (isDeleted/deletedAt) so deleting is
+        // reversible, and `folders` gains the createdAt/updatedAt pair it never had.
+        //
+        // Purely additive ALTER TABLE ... ADD COLUMN, with no backfill pass and no data read at
+        // all — unlike MIGRATION_4_5, nothing here has to be inferred from existing content.
+        //
+        // The defaults are what make it safe on an existing install:
+        //  - isDeleted DEFAULT 0, so every note and folder already on disk stays visible. (Every
+        //    read query added `WHERE isDeleted = 0` in the same change; a default of 1 would hide
+        //    the entire library behind it.)
+        //  - deletedAt is nullable with no default, so untrashed rows carry NULL rather than an
+        //    instant in 1970 — see TrashPolicy, which refuses to age a row from a 0 or NULL stamp.
+        //  - createdAt/updatedAt DEFAULT 0 on folders, matching what `notes` did in v1 -> v2. 0 is
+        //    the "unset" sentinel the rest of the code already understands; SQLite requires a
+        //    non-null default for a NOT NULL column added to a table that may hold rows, and the
+        //    alternative — stamping every existing folder with the migration's own clock — would
+        //    invent a creation time that never happened.
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE notes ADD COLUMN isDeleted INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE notes ADD COLUMN deletedAt INTEGER")
+
+                db.execSQL("ALTER TABLE folders ADD COLUMN createdAt INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE folders ADD COLUMN updatedAt INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE folders ADD COLUMN isDeleted INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE folders ADD COLUMN deletedAt INTEGER")
             }
         }
     }
