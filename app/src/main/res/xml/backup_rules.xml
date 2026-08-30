@@ -1,13 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
+   Auto Backup rules, referenced by android:fullBackupContent. The platform reads
+   that attribute only on API 30 and below; on API 31+ it reads
+   android:dataExtractionRules (data_extraction_rules.xml) instead. This module
+   sets minSdk = 31, so this file is never consulted on any supported device — it
+   exists solely to give the manifest attribute a target. It is kept, and kept in
+   sync with data_extraction_rules.xml, so that it is still correct if minSdk ever
+   drops below 31.
+
+   Everything that protects or holds note data is excluded:
+
+   - secret_shared_prefs holds the PIN wrap of the database key (pin_salt,
+     pin_iv, pin_ct, pin_iters). The PIN is 6 digits, so anyone who obtains
+     that file can exhaust the keyspace offline — LockoutPolicy is app-side
+     code an offline attacker never runs. It must not leave the device.
+   - notes.db is the SQLCipher database itself. Its sidecars are listed one by
+     one because exclusion paths match exactly, not by prefix: -wal/-shm for the
+     WAL journal Room uses by default, and -journal for the TRUNCATE journal that
+     JournalMode.AUTOMATIC falls back to on low-RAM devices.
+
+   These are useless on a restore anyway: the EncryptedSharedPreferences
+   MasterKey lives in the AndroidKeyStore and is non-exportable, so a restored
+   prefs file cannot be decrypted on the new device. SecureUnlockManager
+   .wasStateReset exists precisely to detect that and drop the database.
+   Excluding them makes that explicit rather than incidental, and removes the
+   exfiltration path entirely.
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <exclude domain="sharedpref" path="secret_shared_prefs.xml" />
+    <exclude domain="database" path="notes.db" />
+    <exclude domain="database" path="notes.db-wal" />
+    <exclude domain="database" path="notes.db-shm" />
+    <exclude domain="database" path="notes.db-journal" />
 </full-backup-content>
