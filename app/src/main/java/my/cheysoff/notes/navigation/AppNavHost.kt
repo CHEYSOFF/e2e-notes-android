@@ -94,7 +94,7 @@ fun AppNavHost(
                 viewModel.events.collect { event ->
                     when (event) {
                         is NotesListEvent.NavigateToNote -> {
-                            navController.navigate("note/${event.noteId}")
+                            navController.navigate("note/${event.noteId}?isNew=${event.isNew}")
                         }
                     }
                 }
@@ -107,9 +107,18 @@ fun AppNavHost(
         }
 
         composable(
-            route = "note/{noteId}",
+            // isNew is an optional query argument, so plain "note/{noteId}" still matches and any
+            // caller that doesn't set it gets the safe default. It tells the editor that the list
+            // screen inserted this row for it and that the row may therefore be auto-discarded if
+            // it's still empty on back — a fact only the inserting caller can know, which is why it
+            // is passed rather than inferred from the row's timestamps.
+            route = "note/{noteId}?isNew={isNew}",
             arguments = listOf(
-                navArgument("noteId") { type = NavType.StringType }
+                navArgument("noteId") { type = NavType.StringType },
+                navArgument("isNew") {
+                    type = NavType.BoolType
+                    defaultValue = false
+                }
             )
         ) {
             // Same lock guard as the notes list — this destination also opens the database.
