@@ -69,6 +69,8 @@ dependencies {
     ksp(libs.hilt.compiler)
 
     testImplementation(libs.junit)
+    // Migration4to5Test drives Room directly; no UI, so no Espresso (which also drags in
+    // hamcrest-integration and javawriter for nothing).
     androidTestImplementation(libs.androidx.junit)
-    androidTestImplementation(libs.androidx.espresso.core)
+    androidTestImplementation(libs.androidx.test.runner)
 }
