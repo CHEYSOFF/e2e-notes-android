@@ -30,7 +30,11 @@ import javax.inject.Singleton
 @Singleton
 class BiometricKeystoreCipher @Inject constructor() {
 
-    private val keyStore: KeyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+    // Lazy: KeyStore.load() is disk-backed work. This class is a @Singleton reachable from
+    // Application.onCreate, so an eager initializer would run it on the main thread at startup.
+    private val keyStore: KeyStore by lazy {
+        KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+    }
 
     /** True if the biometric Keystore key has been provisioned. */
     fun hasKey(): Boolean = keyStore.containsAlias(KEY_ALIAS)

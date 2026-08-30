@@ -12,8 +12,10 @@ import javax.inject.Inject
 @HiltAndroidApp
 class MainApplication : Application() {
 
+    // dagger.Lazy so Application.onCreate doesn't construct the manager (and with it the Keystore
+    // MasterKey) on the main thread. It is first resolved on background/lock, well after startup.
     @Inject
-    lateinit var secureUnlockManager: SecureUnlockManager
+    lateinit var secureUnlockManager: dagger.Lazy<SecureUnlockManager>
 
     override fun onCreate() {
         super.onCreate()
@@ -36,7 +38,7 @@ class MainApplication : Application() {
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStop(owner: LifecycleOwner) {
                 Log.d("MainApplication", "App backgrounded; locking (dropping passphrase)")
-                secureUnlockManager.lock()
+                secureUnlockManager.get().lock()
             }
         })
     }
