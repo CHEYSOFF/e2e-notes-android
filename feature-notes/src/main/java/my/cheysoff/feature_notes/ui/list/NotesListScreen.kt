@@ -2,10 +2,12 @@ package my.cheysoff.feature_notes.ui.list
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -39,6 +41,8 @@ import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
@@ -88,6 +92,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -96,6 +101,12 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.time.LocalDate
+import java.time.YearMonth
+import java.time.format.DateTimeFormatter
+import java.time.format.TextStyle
+import java.time.temporal.WeekFields
+import java.util.Locale
 import my.cheysoff.core_domain.model.NotesSortOrder
 import my.cheysoff.core_ui.model.menuLabel
 import my.cheysoff.core_ui.model.pillLabel
@@ -108,6 +119,8 @@ import my.cheysoff.core_ui.theme.SurfaceDark
 import my.cheysoff.core_ui.theme.TitleGrey
 import my.cheysoff.core_ui.theme.UncategorizedEdge
 import my.cheysoff.core_ui.theme.folderAccentColor
+import my.cheysoff.feature_notes.model.calendar.monthGrid
+import my.cheysoff.feature_notes.model.calendar.weekdayOrder
 import my.cheysoff.feature_notes.model.list.BottomBarItem
 import my.cheysoff.feature_notes.model.list.FolderPreviewUi
 import my.cheysoff.feature_notes.model.list.HeaderLineUi
@@ -261,6 +274,12 @@ fun NotesListScreen(
             // swaps the grid's content and leaves the chrome untouched.
             if (state.selectedBottomBarItem == BottomBarItem.SEARCH) {
                 searchPane(state, onIntent, onLongClick = { moveNoteTarget = it })
+                return@LazyVerticalStaggeredGrid
+            }
+
+            // Calendar is a mode too, for the same reasons spelled out above for Search.
+            if (state.selectedBottomBarItem == BottomBarItem.CALENDAR) {
+                calendarPane(state, onIntent, onLongClick = { moveNoteTarget = it })
                 return@LazyVerticalStaggeredGrid
             }
 
@@ -1171,6 +1190,266 @@ private fun SearchMessage(headline: String, detail: String) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Calendar tab
+// ---------------------------------------------------------------------------
+
+/**
+ * The Calendar tab's content: a month grid with a dot on every day that has notes, and the
+ * selected day's notes below it.
+ *
+ * Like [searchPane] this swaps the grid's content and leaves the screen's chrome — the nav bar,
+ * the FAB, the blur band — untouched.
+ */
+private fun LazyStaggeredGridScope.calendarPane(
+    state: NotesListScreenState,
+    onIntent: (NotesListIntent) -> Unit,
+    onLongClick: (NotePreviewUi) -> Unit,
+) {
+    // The month and day are null only until the ViewModel's first calendar emission, which lands
+    // with the rest of the initial state. Drawing nothing for that frame is deliberate: a grid
+    // built on a locally-guessed month would visibly jump when the real one arrived.
+    val month = state.calendarMonth ?: return
+    val selected = state.calendarSelectedDay ?: return
+
+    item(span = StaggeredGridItemSpan.FullLine, contentType = "calendar_grid") {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            MonthHeader(
+                month = month,
+                onPrevious = { onIntent(NotesListIntent.CalendarPreviousMonth) },
+                onNext = { onIntent(NotesListIntent.CalendarNextMonth) },
+            )
+            MonthGrid(
+                month = month,
+                selected = selected,
+                counts = state.calendarCounts,
+                onDayClick = { onIntent(NotesListIntent.CalendarDaySelected(it)) },
+            )
+        }
+    }
+
+    item(span = StaggeredGridItemSpan.FullLine, contentType = "calendar_day_label") {
+        val n = state.calendarDayNotes.size
+        SectionLabel(
+            when {
+                n == 0 -> selectedDayLabel(selected)
+                n == 1 -> "${selectedDayLabel(selected)} · 1 note"
+                else -> "${selectedDayLabel(selected)} · $n notes"
+            }
+        )
+    }
+
+    if (state.calendarDayNotes.isEmpty()) {
+        item(span = StaggeredGridItemSpan.FullLine, contentType = "calendar_message") {
+            SearchMessage(
+                headline = "Nothing on this day",
+                detail = "Days with notes carry a dot under the number.",
+            )
+        }
+    }
+
+    items(
+        items = state.calendarDayNotes,
+        key = { it.id },
+        contentType = { "note" },
+    ) { note ->
+        NoteCard(
+            note = note,
+            onClick = { onIntent(NotesListIntent.NoteClicked(note.id)) },
+            onLongClick = { onLongClick(note) },
+        )
+    }
+
+    // Notes with no usable timestamp sit on no day at all, so without this line they would be
+    // reachable from every other view but silently absent from this one.
+    if (state.calendarUndatedCount > 0) {
+        item(span = StaggeredGridItemSpan.FullLine, contentType = "calendar_undated") {
+            val n = state.calendarUndatedCount
+            Text(
+                text = if (n == 1) "1 note has no date and is not shown above."
+                else "$n notes have no date and are not shown above.",
+                color = Color(0xFF5E5E62),
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(start = 4.dp, top = 18.dp),
+            )
+        }
+    }
+}
+
+/** "30 August" — the selected day, without the year unless it is not the current one. */
+private fun selectedDayLabel(day: LocalDate): String {
+    val today = LocalDate.now()
+    val pattern = if (day.year == today.year) "d MMMM" else "d MMMM yyyy"
+    return day.format(DateTimeFormatter.ofPattern(pattern, Locale.getDefault()))
+}
+
+@Composable
+private fun MonthHeader(month: YearMonth, onPrevious: () -> Unit, onNext: () -> Unit) {
+    val sw = LocalConfiguration.current.screenWidthDp
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 4.dp, top = 8.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Two-tone like every other header on this screen: the month in TitleGrey, the year in
+        // the indigo tint.
+        Text(
+            text = buildAnnotatedString {
+                withStyle(SpanStyle(color = TitleGrey, fontWeight = FontWeight.Light)) {
+                    append(
+                        month.format(DateTimeFormatter.ofPattern("MMMM", Locale.getDefault()))
+                    )
+                }
+                append(" ")
+                withStyle(SpanStyle(color = IndigoTint, fontWeight = FontWeight.Medium)) {
+                    append(month.year.toString())
+                }
+            },
+            style = MaterialTheme.typography.titleLarge.copy(fontSize = (sw * 0.072f).sp),
+            modifier = Modifier.weight(1f),
+        )
+        IconButton(onClick = onPrevious) {
+            Icon(
+                imageVector = Icons.Default.KeyboardArrowLeft,
+                contentDescription = "Previous month",
+                tint = BodyGrey,
+            )
+        }
+        IconButton(onClick = onNext) {
+            Icon(
+                imageVector = Icons.Default.KeyboardArrowRight,
+                contentDescription = "Next month",
+                tint = BodyGrey,
+            )
+        }
+    }
+}
+
+@Composable
+private fun MonthGrid(
+    month: YearMonth,
+    selected: LocalDate,
+    counts: Map<LocalDate, Int>,
+    onDayClick: (LocalDate) -> Unit,
+) {
+    val locale = Locale.getDefault()
+    // The week starts on whatever day the user's locale starts on — Monday in most of Europe,
+    // Sunday in the US. Hard-coding Monday would silently mislabel the grid for half the world.
+    val firstDayOfWeek = WeekFields.of(locale).firstDayOfWeek
+    val weekdays = remember(firstDayOfWeek) { weekdayOrder(firstDayOfWeek) }
+    val cells = remember(month, firstDayOfWeek) { monthGrid(month, firstDayOfWeek) }
+    val today = LocalDate.now()
+
+    Column(modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
+        Row(modifier = Modifier.fillMaxWidth()) {
+            weekdays.forEach { dow ->
+                Text(
+                    text = dow.getDisplayName(TextStyle.NARROW, locale),
+                    color = Color(0xFF5E5E62),
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.8.sp,
+                    ),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        // chunked(7) is safe without a remainder check: monthGrid always returns whole weeks.
+        cells.chunked(7).forEach { week ->
+            Row(modifier = Modifier.fillMaxWidth()) {
+                week.forEach { day ->
+                    DayCell(
+                        day = day,
+                        inMonth = YearMonth.from(day) == month,
+                        isToday = day == today,
+                        isSelected = day == selected,
+                        count = counts[day] ?: 0,
+                        onClick = { onDayClick(day) },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DayCell(
+    day: LocalDate,
+    inMonth: Boolean,
+    isToday: Boolean,
+    isSelected: Boolean,
+    count: Int,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val numberColor = when {
+        isSelected -> Color.White
+        !inMonth -> Color(0xFF44444A)   // dim, but still legible and still tappable
+        else -> TitleGrey
+    }
+    Box(
+        modifier = modifier
+            .aspectRatio(1f)
+            .padding(2.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(0.82f)
+                .aspectRatio(1f)
+                .clip(CircleShape)
+                .background(if (isSelected) AccentIndigo else Color.Transparent)
+                // Today is a ring rather than a fill, so it stays visible when another day is
+                // selected and never competes with the selection for the same signal.
+                .then(
+                    if (isToday && !isSelected) {
+                        Modifier.border(1.dp, IndigoTint.copy(alpha = 0.7f), CircleShape)
+                    } else Modifier
+                )
+                .clickable(onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = day.dayOfMonth.toString(),
+                    color = numberColor,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontWeight = if (isSelected || isToday) FontWeight.Bold
+                        else FontWeight.Normal,
+                    ),
+                )
+                // The dot carries the count in three steps rather than as a number: a numeral
+                // inside a day cell competes with the date itself at this size.
+                if (count > 0) {
+                    Spacer(Modifier.height(2.dp))
+                    val dot = when {
+                        count >= 6 -> 6.dp
+                        count >= 3 -> 5.dp
+                        else -> 3.5.dp
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(dot)
+                            .clip(CircleShape)
+                            .background(
+                                if (isSelected) Color.White.copy(alpha = 0.85f)
+                                else if (inMonth) IndigoTint
+                                else IndigoTint.copy(alpha = 0.4f)
+                            )
+                    )
+                } else {
+                    // Reserve the dot's height so numbers do not shift between dotted and
+                    // undotted cells.
+                    Spacer(Modifier.height(8.dp))
+                }
+            }
+        }
+    }
+}
 
 private fun relativeTime(ts: Long): String {
     if (ts <= 0L) return ""
