@@ -43,6 +43,21 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            all {
+                // Robolectric fetches its android-all jars at TEST RUNTIME, from Maven Central by
+                // default — which answers 403 on this network. Point it at the same Google-hosted
+                // read-through mirror settings.gradle.kts uses for Gradle's own resolution.
+                it.systemProperty(
+                    "robolectric.dependency.repo.url",
+                    "https://maven-central.storage-download.googleapis.com/maven2",
+                )
+            }
+        }
+    }
 }
 
 dependencies {
@@ -69,6 +84,13 @@ dependencies {
     ksp(libs.hilt.compiler)
 
     testImplementation(libs.junit)
+    // RoomNotesRepositoryTest runs Room on the JVM under Robolectric (which ships its own SQLite),
+    // so the repository's coverage lands in `jacocoMergedReport` — that report merges only the
+    // `testDebugUnitTest` execution data, so an instrumented test of the same code would score 0.
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.junit)
+    // Every repository method is a suspend function or a Flow; runTest drives both.
+    testImplementation(libs.kotlinx.coroutines.test)
     // Migration4to5Test drives Room directly; no UI, so no Espresso (which also drags in
     // hamcrest-integration and javawriter for nothing).
     androidTestImplementation(libs.androidx.junit)
