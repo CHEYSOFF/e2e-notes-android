@@ -18,6 +18,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import my.cheysoff.core_domain.model.Note
+import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.core_domain.repository.NotesRepository
 import my.cheysoff.feature_notes.model.single.ChecklistItem
 import my.cheysoff.feature_notes.model.single.SingleNoteIntent
@@ -44,6 +45,8 @@ sealed class SingleNoteEvent {
 internal data class EditorBaseline(
     val title: String,
     val content: String,
+    /** Always moves with [content]: the marker says how those exact bytes are to be read. */
+    val contentFormat: NoteContentFormat,
     val checklist: String,
     val isPinned: Boolean,
     val isFavorite: Boolean,
@@ -53,6 +56,7 @@ internal data class EditorBaseline(
 internal fun Note.toEditorBaseline(): EditorBaseline = EditorBaseline(
     title = title,
     content = content,
+    contentFormat = contentFormat,
     checklist = checklist,
     isPinned = isPinned,
     isFavorite = isFavorite,
@@ -91,6 +95,7 @@ internal fun mergeIncomingNote(
             state = current.copy(
                 title = incoming.title,
                 content = incoming.content,
+                contentFormat = incoming.contentFormat,
                 checklist = parseChecklist(incoming.checklist),
                 isPinned = incoming.isPinned,
                 isFavorite = incoming.isFavorite,
@@ -106,7 +111,15 @@ internal fun mergeIncomingNote(
     return NoteMergeResult(
         state = current.copy(
             title = if (current.title == baseline.title) incoming.title else current.title,
+            // content and contentFormat are merged as a single unit, never independently: the
+            // marker describes how those exact bytes are read, so adopting one without the other
+            // hands a plain body to the HTML reader (or the reverse) and truncates the note.
             content = if (current.content == baseline.content) incoming.content else current.content,
+            contentFormat = if (current.content == baseline.content) {
+                incoming.contentFormat
+            } else {
+                current.contentFormat
+            },
             // Even when adopting, go through mergeChecklist rather than parseChecklist: the common
             // case is the echo of our own write, where the items are identical and re-parsing would
             // only destroy their ids.
@@ -266,7 +279,11 @@ class SingleNoteViewModel @Inject constructor(
             }
 
             is SingleNoteIntent.ContentChanged -> {
-                _state.update { it.copy(content = intent.content) }
+                // Only the rich-text editor emits this, and it always sends toHtml() output — so
+                // this is the one place a note earns the HTML label. Marking the note HTML in any
+                // other write path (a title-only edit, say) would relabel an untouched legacy
+                // plain-text body and destroy it on the next open.
+                _state.update { it.copy(content = intent.content, contentFormat = NoteContentFormat.HTML) }
                 saveNote(debounce = true)
             }
 
@@ -433,6 +450,7 @@ class SingleNoteViewModel @Inject constructor(
                         id = id,
                         title = current.title,
                         content = current.content,
+                        contentFormat = current.contentFormat,
                         checklist = checklist,
                         isPinned = current.isPinned,
                         folderId = current.folderId
@@ -443,6 +461,7 @@ class SingleNoteViewModel @Inject constructor(
                 baseline = baseline?.copy(
                     title = current.title,
                     content = current.content,
+                    contentFormat = current.contentFormat,
                     checklist = checklist,
                     isPinned = current.isPinned,
                     folderId = current.folderId,
@@ -461,6 +480,9 @@ class SingleNoteViewModel @Inject constructor(
         val persisted = baseline ?: return true
         return title != persisted.title ||
                 content != persisted.content ||
+                // A body that changed format but not bytes still has to be flushed, or the row
+                // would keep a stale marker and be re-parsed with the wrong reader on reopen.
+                contentFormat != persisted.contentFormat ||
                 checklist.serializeChecklist() != persisted.checklist
     }
 }

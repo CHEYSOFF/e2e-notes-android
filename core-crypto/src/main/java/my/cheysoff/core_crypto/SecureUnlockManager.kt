@@ -11,7 +11,6 @@ import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlin.math.max
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -70,19 +69,90 @@ class SecureUnlockManager @Inject constructor(
         private set
 
     // Mirror EncryptionManager.createSharedPreferences() so we share the legacy prefs file.
-    // Key loss must NOT propagate: isPinSet() is called from the auth screen on the main thread,
-    // so an uncaught GeneralSecurityException here crash-loops the app on every launch with no
-    // way out but clearing app data. Recover the way EncryptionManager did: drop the unreadable
-    // prefs and start clean (the notes they protected are already unrecoverable at this point).
-    private val prefs: SharedPreferences by lazy {
-        try {
-            createPrefs()
-        } catch (e: Exception) {
-            if (!isKeyLoss(e)) throw e
-            context.deleteSharedPreferences(PREFS_NAME)
-            wasStateReset = true
-            createPrefs()
+    private val prefs: SharedPreferences by lazy { openPrefs() }
+
+    /**
+     * Counter file for [openPrefs]. Deliberately a PLAIN SharedPreferences: it exists to decide
+     * whether the ENCRYPTED file can be opened at all, so it cannot itself be encrypted, and it
+     * holds no secret — just how many consecutive launches have failed.
+     */
+    private val healthPrefs: SharedPreferences by lazy {
+        context.getSharedPreferences(HEALTH_PREFS_NAME, Context.MODE_PRIVATE)
+    }
+
+    /**
+     * Open the encrypted prefs, and fall back to discarding the file only once retrying has been
+     * shown not to help.
+     *
+     * Two failure modes have to be told apart, and the cost of confusing them is severe in both
+     * directions. Letting a failure propagate crash-loops the app (the auth screen's first act is
+     * to read this file) with no way out but clearing app data; treating a failure as key loss
+     * deletes every wrap of the DB passphrase and, via [wasStateReset], the whole notes database.
+     *
+     * The retry budget therefore spans PROCESS LAUNCHES, not just milliseconds. An in-process
+     * retry can only rule out a failure that clears within milliseconds, and the failure that
+     * matters most does not: when the Keystore blob behind the master key survives but is no
+     * longer usable (low storage during a keyset write, OEM keystore corruption, a partial
+     * restore), Tink reports `KeyStoreException("the master key %s exists but is unusable")`
+     * wrapping `InvalidKeyException` — and it does so only AFTER its own internal
+     * wait-and-retry has given up. That error is identical 150ms later and identical next boot.
+     * Matching on it by type is what the previous version of this file did via a blanket
+     * `GeneralSecurityException`, which swept in genuinely transient errors and destroyed notes;
+     * matching on it by message would bind us to a Tink string. Counting failed launches proves
+     * the same thing without depending on either.
+     *
+     * So: retry briefly in-process (Keystore momentarily busy at cold start is real and cheap to
+     * absorb), and otherwise reset only when the error is PROVABLY terminal on its first sighting
+     * ([KeyLossPolicy.isProvableKeyLoss]) or when [OPEN_FAILURE_LAUNCHES] separate launches have
+     * now failed the same way. Until that budget is spent the error is rethrown, which crashes — bad, but
+     * recoverable, because the ciphertext is all still on disk and a later launch may succeed.
+     *
+     * The sleeps run on whichever thread first touches [prefs], possibly the main thread, but only
+     * on the already-broken path and for at most [OPEN_RETRY_BASE_MS] * (2^(n-1) - 1) total.
+     *
+     * FOLLOW-UP: even a proven reset destroys every note silently. Asking the user first ("your
+     * keys could not be recovered — reset the app?") would be strictly better, but needs a screen
+     * and a nav state that do not exist yet.
+     */
+    private fun openPrefs(): SharedPreferences {
+        var lastError: Exception? = null
+        for (attempt in 0 until OPEN_ATTEMPTS) {
+            if (attempt > 0) {
+                try {
+                    Thread.sleep(OPEN_RETRY_BASE_MS shl (attempt - 1))
+                } catch (_: InterruptedException) {
+                    // Restore the flag for whoever owns this thread and stop: every remaining
+                    // Thread.sleep would throw immediately anyway, collapsing the backoff into a
+                    // busy loop, and leaving the flag set would leak the interrupt to the next
+                    // task on this (pooled) thread.
+                    Thread.currentThread().interrupt()
+                    break
+                }
+            }
+            try {
+                val opened = createPrefs()
+                // A launch that got in clears the history: only CONSECUTIVE failures are evidence.
+                if (healthPrefs.contains(KEY_OPEN_FAILURES)) {
+                    healthPrefs.edit(commit = true) { remove(KEY_OPEN_FAILURES) }
+                }
+                return opened
+            } catch (e: Exception) {
+                lastError = e
+            }
         }
+
+        // Reached only after at least one createPrefs() failure, so lastError is set.
+        val error = lastError!!
+        // commit, not apply: the whole point is that this survives the crash on the next line.
+        val failedLaunches = healthPrefs.getInt(KEY_OPEN_FAILURES, 0) + 1
+        healthPrefs.edit(commit = true) { putInt(KEY_OPEN_FAILURES, failedLaunches) }
+
+        if (!KeyLossPolicy.isProvableKeyLoss(error) && failedLaunches < OPEN_FAILURE_LAUNCHES) throw error
+
+        context.deleteSharedPreferences(PREFS_NAME)
+        healthPrefs.edit(commit = true) { remove(KEY_OPEN_FAILURES) }
+        wasStateReset = true
+        return createPrefs()
     }
 
     private fun createPrefs(): SharedPreferences = EncryptedSharedPreferences.create(
@@ -92,20 +162,6 @@ class SecureUnlockManager @Inject constructor(
         EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
         EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
     )
-
-    /** Mirrors EncryptionManager.isKeyLoss: only a missing/invalid Keystore key is recoverable. */
-    private fun isKeyLoss(error: Throwable): Boolean {
-        var e: Throwable? = error
-        while (e != null) {
-            if (e is java.security.GeneralSecurityException ||
-                e is java.security.KeyStoreException ||
-                e is javax.crypto.AEADBadTagException ||
-                e is android.security.keystore.KeyPermanentlyInvalidatedException
-            ) return true
-            e = e.cause
-        }
-        return false
-    }
 
     /** In-memory unlocked passphrase, or null while locked. Owned/zeroed by this class. */
     private var inMem: ByteArray? = null
@@ -174,7 +230,13 @@ class SecureUnlockManager @Inject constructor(
             // Also record the deadline on the monotonic clock. System.currentTimeMillis() is
             // user-settable, so a wall-clock-only deadline is skipped by moving the device clock
             // forward in Settings; SystemClock.elapsedRealtime() cannot be changed that way.
-            val duration = max(0L, lockoutUntil - now)
+            // lockoutUntil is 0 while the fail count is still inside the free allowance, and 0
+            // is a sentinel, not an instant: subtracting a NEGATIVE `now` (wall clock set before
+            // 1970) would otherwise turn "not locked" into a decade-long duration and persist it.
+            // Clamping to MAX_LOCK_MS also enforces, at the only site that writes it, the bound
+            // that LockoutPolicy.isElapsedDeadlineStale infers when reading it back.
+            val duration = if (lockoutUntil == 0L) 0L
+            else (lockoutUntil - now).coerceIn(0L, LockoutPolicy.MAX_LOCK_MS)
             val elapsedUntil =
                 if (duration > 0) android.os.SystemClock.elapsedRealtime() + duration else 0L
             prefs.edit(commit = true) {
@@ -198,19 +260,16 @@ class SecureUnlockManager @Inject constructor(
      * Milliseconds remaining on an active lockout window, or 0 if not locked out.
      *
      * Takes the STRICTER of the wall-clock and monotonic deadlines, so winding the device clock
-     * forward doesn't retire the lockout early. A reboot resets elapsedRealtime, which can leave
-     * the monotonic deadline looking far away — that fails closed (at most one MAX_LOCK_MS wait),
-     * which is the right direction for a lockout.
+     * forward doesn't retire the lockout early. A monotonic deadline left over from before a
+     * reboot is discarded outright — see [LockoutPolicy.remainingMillis], which owns the whole
+     * (unit-tested) decision; this method only reads the clocks and the store.
      */
-    fun lockoutRemainingMillis(): Long {
-        val byWall = prefs.getLong(KEY_LOCKOUT_UNTIL, 0L) - System.currentTimeMillis()
-        val elapsedUntil = prefs.getLong(KEY_LOCKOUT_UNTIL_ELAPSED, 0L)
-        val byElapsed = if (elapsedUntil == 0L) 0L else {
-            (elapsedUntil - android.os.SystemClock.elapsedRealtime())
-                .coerceAtMost(LockoutPolicy.MAX_LOCK_MS)
-        }
-        return max(0L, max(byWall, byElapsed))
-    }
+    fun lockoutRemainingMillis(): Long = LockoutPolicy.remainingMillis(
+        lockoutUntilWall = prefs.getLong(KEY_LOCKOUT_UNTIL, 0L),
+        lockoutUntilElapsed = prefs.getLong(KEY_LOCKOUT_UNTIL_ELAPSED, 0L),
+        nowWall = System.currentTimeMillis(),
+        nowElapsed = android.os.SystemClock.elapsedRealtime(),
+    )
 
     /** True once a biometric-wrapped passphrase exists. */
     fun isBiometricEnabled(): Boolean = prefs.contains(KEY_BIO_CT)
@@ -261,6 +320,18 @@ class SecureUnlockManager @Inject constructor(
         // was invalidated between init and use — the caller catches that.
         val ct = prefs.getString(KEY_BIO_CT, null) ?: return false
         setInMem(unlockedDecryptCipher.doFinal(Base64.decode(ct, Base64.DEFAULT)))
+        // Clear the wrong-PIN window exactly as unlockWithPin does. A successful biometric unlock
+        // is proof of the same thing a correct PIN is, so leaving the counters set would be wrong
+        // on its own — and leaving the MONOTONIC deadline set is actively harmful. It is only
+        // ignored after a reboot while uptime is low; a user who fails the PIN on a
+        // long-uptime device and then unlocks by fingerprint from then on would find that stored
+        // deadline stops looking stale once uptime climbed back past it, and be locked out for
+        // five minutes, days later, having failed nothing.
+        prefs.edit(commit = true) {
+            putInt(KEY_FAIL_COUNT, 0)
+            putLong(KEY_LOCKOUT_UNTIL, 0L)
+            putLong(KEY_LOCKOUT_UNTIL_ELAPSED, 0L)
+        }
         return true
     }
 
@@ -300,6 +371,24 @@ class SecureUnlockManager @Inject constructor(
     private companion object {
         const val PREFS_NAME = "secret_shared_prefs"
         const val PASSPHRASE_BYTES = 32
+
+        /** Total tries at opening the encrypted prefs before classifying the failure. */
+        const val HEALTH_PREFS_NAME = "secure_unlock_health"
+        const val KEY_OPEN_FAILURES = "prefs_open_failures"
+
+        /**
+         * Consecutive LAUNCHES that must fail to open the prefs before the file is discarded.
+         * Every launch below this threshold is a visible crash, so the number trades user pain
+         * against the risk of wiping notes over a condition that would have cleared (a full disk,
+         * an OEM keystore hiccup). Erring high is the cheap direction: the notes are the thing
+         * that cannot be recovered, a crash is not.
+         */
+        const val OPEN_FAILURE_LAUNCHES = 5
+
+        const val OPEN_ATTEMPTS = 3
+
+        /** Backoff before retry n (doubling): 50ms, then 100ms — 150ms worst case. */
+        const val OPEN_RETRY_BASE_MS = 50L
 
         const val KEY_PIN_SALT = "pin_salt"
         const val KEY_PIN_IV = "pin_iv"
