@@ -309,8 +309,9 @@ data class ServerHint(
  * Everything device A hands device B, sealed under `Ks`.
  *
  * [ark] is opaque here on purpose: generating it, wrapping it under the device passphrase and
- * storing it are Phase 1's job (`SecureUnlockManager`). This module receives 32 bytes, seals them,
- * and hands 32 bytes back out on the far side. It never persists them and never logs them.
+ * storing it are `SecureUnlockManager`'s job, in `:core-crypto`. This module receives 32 bytes,
+ * seals them, and hands 32 bytes back out on the far side. It never persists them and never logs
+ * them.
  */
 class AccountBundle(
     val ark: ByteArray,

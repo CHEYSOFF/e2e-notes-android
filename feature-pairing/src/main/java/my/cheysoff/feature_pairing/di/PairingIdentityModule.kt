@@ -11,9 +11,9 @@ import javax.inject.Singleton
 /**
  * Binds the device identity key.
  *
- * Separate from [PairingSeamModule] on purpose: this is a real, finished binding to real
- * AndroidKeyStore code, and it must not be read as one of the Phase-1 placeholders that module
- * holds.
+ * Separate from [PairingSeamModule] on purpose: that module is the seam onto `:core-crypto`'s key
+ * hierarchy, and this is a binding onto AndroidKeyStore code inside this module. Keeping them
+ * apart means a reviewer can see at a glance which bindings cross a module boundary.
  */
 @Module
 @InstallIn(SingletonComponent::class)

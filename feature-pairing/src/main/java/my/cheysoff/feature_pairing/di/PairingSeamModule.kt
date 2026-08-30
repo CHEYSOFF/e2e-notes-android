@@ -1,43 +1,58 @@
 package my.cheysoff.feature_pairing.di
 
 import android.os.SystemClock
+import dagger.Binds
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import my.cheysoff.feature_pairing.protocol.AccountBundle
+import my.cheysoff.feature_pairing.protocol.HkdfKeyDerivation
 import my.cheysoff.feature_pairing.protocol.KeyDerivation
 import my.cheysoff.feature_pairing.protocol.MonotonicClock
 import javax.inject.Singleton
 
 /**
- * Everything the pairing flow needs from the sync key hierarchy that Phase 1 owns.
+ * Everything the pairing flow needs from the sync key hierarchy that `:core-crypto` owns.
  *
- * Two things, both opaque here:
- *  - whether this device already belongs to an account, and if so its [AccountBundle];
+ * Three things, all opaque here:
+ *  - whether this device is in a position to share an account at all;
+ *  - the [AccountBundle] to seal when it does;
  *  - somewhere to put the bundle a pairing produces.
  *
  * The ARK inside that bundle is 32 bytes this module seals, transports and hands back. It never
  * generates one, never wraps one, never writes one to disk, and never logs one. Generation and
  * storage are `SecureUnlockManager`'s job (`ark_ct`/`ark_iv` wrapped under
- * `HKDF(dbPassphrase, ".../arkwrap")`), which is Phase 1's work and lives in `:core-crypto`.
+ * `HKDF(dbPassphrase, ".../arkwrap")`), which lives in `:core-crypto`.
  */
 interface PairingKeyMaterial {
 
     /**
-     * Whether the Phase-1 key hierarchy exists in this build at all.
+     * Whether the sync key hierarchy is bound in this build.
      *
-     * **This is `false` on the `sync-phase2-pairing` branch**, and [Phase1NotLandedKeyMaterial] is
-     * the reason. It is a build-time fact rather than a per-device one: there is no ARK on any
-     * device yet because no code anywhere creates one. The UI checks it before starting a session
-     * and shows an honest "sync is not available in this build" state instead of a flow that
-     * cannot complete.
+     * A build-time fact rather than a per-device one, and true in every shipped build since
+     * [SecureUnlockArkStore] replaced the Phase-1 placeholder. It is kept because it is the gate
+     * the screen consults before starting a session: an unbound build shows an honest "not
+     * available" state instead of a flow that cannot complete, and that is a cheaper backstop than
+     * discovering the gap at the point where an ARK would be sealed.
      */
     val isBound: Boolean
 
     /**
-     * This device's account bundle, or null if it does not have one — i.e. if it is the *new*
-     * device in a pairing rather than the one holding the account.
+     * Whether this device can play the account-holder role.
+     *
+     * A **pure read**. It is consulted whenever the role chooser is drawn, so it must never create
+     * key material — see [accountBundle], which does.
+     */
+    fun canShareAccount(): Boolean
+
+    /**
+     * The bundle this device shares with a new one, or null if it cannot produce one.
+     *
+     * Called once, after the user has chosen the account-holder role. On a device that has never
+     * synced this MINTS the account: the ARK is created here, on the first device, exactly as the
+     * design says it should be. That is why it is not called to populate the role chooser —
+     * opening a screen must not create an account.
      */
     fun accountBundle(): AccountBundle?
 
@@ -46,74 +61,52 @@ interface PairingKeyMaterial {
 }
 
 /**
- * The Phase-1 seam.
+ * The `:core-crypto` seam.
  *
  * ## What binds here, and what a reviewer should check
  *
- * Two providers, both placeholders, both replaced by a one-line change when `sync-phase1-crypto`
- * lands:
+ * Both bindings are now real. [KeyDerivation] resolves to [HkdfKeyDerivation], which is a thin
+ * adapter over `core-crypto`'s `Hkdf` — **the only HKDF-SHA256 in the codebase**. The RFC 5869
+ * fake this module's tests used to bind has been deleted rather than left alongside it: two copies
+ * of a protocol primitive each pass their own tests and disagree only on two real phones, which is
+ * the failure `HkdfSeamTest` now pins to literal bytes.
  *
- * ```kotlin
- *   @Binds fun bindKeyDerivation(impl: HkdfSha256): KeyDerivation
- *   @Binds fun bindKeyMaterial(impl: SecureUnlockArkStore): PairingKeyMaterial
- * ```
- *
- * There is deliberately **no working HKDF in this module**. A second implementation of the same
- * KDF is how the two halves of one protocol drift: pairing would agree with itself and disagree
- * with the record envelope, and both sides' tests would pass. The unit tests bind their own RFC
- * 5869 fake (checked against the RFC's published vectors) so everything above the seam is testable
- * without one.
+ * [PairingKeyMaterial] resolves to [SecureUnlockArkStore], which is where the ARK is minted,
+ * wrapped and read back.
  */
 @Module
 @InstallIn(SingletonComponent::class)
-object PairingSeamModule {
+abstract class PairingSeamModule {
 
-    /**
-     * The monotonic clock the pairing sessions measure their TTL against.
-     *
-     * `SystemClock.elapsedRealtime()` counts milliseconds since boot including deep sleep, and
-     * cannot be moved by the user. `System.currentTimeMillis()` deliberately is not used: it is
-     * user-settable, so a TTL measured against it could be shortened or extended from the Settings
-     * app. `LockoutPolicy` already makes the same choice for the wrong-PIN backoff.
-     */
-    @Provides
+    @Binds
     @Singleton
-    fun provideMonotonicClock(): MonotonicClock = MonotonicClock { SystemClock.elapsedRealtime() }
+    abstract fun bindPairingKeyMaterial(impl: SecureUnlockArkStore): PairingKeyMaterial
 
-    /**
-     * Placeholder for Phase 1's HKDF-SHA256.
-     *
-     * Throws rather than returning something plausible: a silently wrong KDF would produce a
-     * pairing that *appears* to work and yields an account key nothing else can use. It is
-     * unreachable in the shipped UI — [PairingKeyMaterial.isBound] is false in this build, and the
-     * ViewModel refuses to start a session before any derivation happens — and the throw is the
-     * backstop if some future caller skips that check.
-     */
-    @Provides
-    @Singleton
-    fun provideKeyDerivation(): KeyDerivation = Phase1NotLandedKeyDerivation
+    companion object {
 
-    @Provides
-    @Singleton
-    fun providePairingKeyMaterial(): PairingKeyMaterial = Phase1NotLandedKeyMaterial
-}
+        /**
+         * The monotonic clock the pairing sessions measure their TTL against.
+         *
+         * `SystemClock.elapsedRealtime()` counts milliseconds since boot including deep sleep, and
+         * cannot be moved by the user. `System.currentTimeMillis()` deliberately is not used: it is
+         * user-settable, so a TTL measured against it could be shortened or extended from the
+         * Settings app. `LockoutPolicy` already makes the same choice for the wrong-PIN backoff.
+         */
+        @Provides
+        @Singleton
+        fun provideMonotonicClock(): MonotonicClock =
+            MonotonicClock { SystemClock.elapsedRealtime() }
 
-/** See [PairingSeamModule.provideKeyDerivation]. */
-private object Phase1NotLandedKeyDerivation : KeyDerivation {
-    override fun derive(ikm: ByteArray, salt: ByteArray, info: ByteArray, outLen: Int): ByteArray =
-        throw UnsupportedOperationException(
-            "HKDF is not bound in this build: the Phase 1 crypto core has not landed. " +
-                "Bind KeyDerivation in PairingSeamModule."
-        )
-}
-
-/** See [PairingKeyMaterial.isBound]. */
-private object Phase1NotLandedKeyMaterial : PairingKeyMaterial {
-    override val isBound: Boolean = false
-    override fun accountBundle(): AccountBundle? = null
-    override fun adopt(bundle: AccountBundle) =
-        throw UnsupportedOperationException(
-            "There is nowhere to store an ARK in this build: the Phase 1 crypto core has not " +
-                "landed. Bind PairingKeyMaterial in PairingSeamModule."
-        )
+        /**
+         * HKDF-SHA256, from `:core-crypto`.
+         *
+         * A `@Provides` of an existing object rather than a `@Binds` of an injectable class,
+         * because [HkdfKeyDerivation] is a stateless `object` with nothing to inject — the same
+         * instance the tests call directly, so nothing about the derivation differs between a test
+         * run and a device.
+         */
+        @Provides
+        @Singleton
+        fun provideKeyDerivation(): KeyDerivation = HkdfKeyDerivation
+    }
 }

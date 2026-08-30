@@ -17,8 +17,12 @@ package my.cheysoff.core_crypto.sync
  * Only encoding is provided. Blinded record IDs travel as strings and are never decoded back to
  * bytes anywhere in the protocol — the 16 raw bytes are recomputed from `K_id` when they are
  * needed, they are not recovered from the string.
+ *
+ * Public rather than `internal` because `accountId` is rendered with it outside this module too:
+ * the pairing bundle carries the account handle as a string, and it must be the same 22 characters
+ * on both devices.
  */
-internal object Base64Url {
+object Base64Url {
 
     /** RFC 4648 §5 "URL and Filename safe" alphabet: `-` and `_` in place of `+` and `/`. */
     private const val ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"

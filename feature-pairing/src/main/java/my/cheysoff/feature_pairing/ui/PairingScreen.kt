@@ -371,15 +371,22 @@ private fun StartOverButton(onClick: () -> Unit) {
     }
 }
 
-/** The Phase-1 gate. Says exactly what is missing rather than pretending the feature is broken. */
+/**
+ * The `PairingKeyMaterial.isBound` gate. Says exactly what is missing rather than pretending the
+ * feature is broken.
+ *
+ * Unreachable in a build where the sync key hierarchy is bound, which is every shipped build since
+ * `SecureUnlockArkStore` replaced the placeholder. Kept as the backstop for a build where it is
+ * not.
+ */
 @Composable
 private fun UnavailableCard() {
     Card {
-        CardTitle("Not in this build yet")
+        CardTitle("Not available in this build")
         CardBody(
-            "Pairing shares the key that encrypts your synced notes, and that key does not " +
-                "exist yet — the part of the app that creates it has not shipped. " +
-                "Everything else here is ready and waiting for it."
+            "Pairing shares the key that encrypts your synced notes, and this build has no " +
+                "way to create or store that key. Everything else here is ready and waiting " +
+                "for it."
         )
     }
 }
