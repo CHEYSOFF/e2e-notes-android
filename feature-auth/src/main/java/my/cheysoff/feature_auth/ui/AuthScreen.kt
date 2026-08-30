@@ -433,7 +433,7 @@ private fun KeypadSheet(
 @Preview(showBackground = true, showSystemUi = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
 @Composable
 fun AuthScreenPreview() {
-    NotesTheme(darkTheme = true) {
+    NotesTheme {
         AuthScreen(AuthScreenState(mode = AuthMode.ENTER_PIN, pinLength = 3), {})
     }
 }

@@ -1,17 +1,11 @@
 package my.cheysoff.core_ui.theme
 
-import android.os.Build
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 
 
 val LocalSpacing = staticCompositionLocalOf { Spacing() }
@@ -39,64 +33,24 @@ private val DarkColorScheme = darkColorScheme(
     outline = OutlineDark,
 )
 
-//private val LightColorScheme = lightColorScheme(
-//    primary = Purple40,
-//    secondary = PurpleGrey40,
-//    tertiary = Pink40
 //
-//    /* Other default colors to override
-//    background = Color(0xFFFFFBFE),
-//    surface = Color(0xFFFFFBFE),
-//    onPrimary = Color.White,
-//    onSecondary = Color.White,
-//    onTertiary = Color.White,
-//    onBackground = Color(0xFF1C1B1F),
-//    onSurface = Color(0xFF1C1B1F),
-//    */
-//)
 
-private val LightColorScheme = lightColorScheme(
-    // PRIMARY (brand / main actions)
-    primary = FrozenLake,
-    onPrimary = BrightSnow,
-    primaryContainer = AzureMist,
-    onPrimaryContainer = Graphite,
-
-    // SECONDARY (supporting actions)
-    secondary = Emerald,
-    onSecondary = Graphite,
-
-    // BACKGROUND & SURFACE
-    background = BrightSnow,
-    onBackground = Graphite,
-
-    surface = White,
-    onSurface = Graphite,
-    surfaceContainer = Honeydew,
-    surfaceVariant = DarkPlatinum,
-    onSurfaceVariant = Graphite,
-
-    // OUTLINE
-    outline = Silver,
-)
-
-
+/**
+ * Mañana is DARK-ONLY, deliberately — there is no light variant and no theme parameter to pass.
+ *
+ * The palette is a locked one (see the redesign design system): near-black surfaces with a single
+ * indigo accent, and the whole UI is designed against that ground. A light scheme was never built
+ * to match it, and dynamic color would replace the accent with whatever the wallpaper suggests,
+ * which is the one thing this palette cannot absorb.
+ *
+ * The system's own light/dark setting is therefore ignored here. The only place it still shows is
+ * the Recents card (android:colorBackground in themes.xml).
+ */
 @Composable
 fun NotesTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    // Dynamic color is available on Android 12+
-    dynamicColor: Boolean = false,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
-
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
-    }
+    val colorScheme = DarkColorScheme
 
     val spacing = Spacing()
     val radii = Radii()
