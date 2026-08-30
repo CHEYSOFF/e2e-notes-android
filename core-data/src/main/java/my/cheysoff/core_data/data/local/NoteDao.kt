@@ -52,14 +52,18 @@ interface NoteDao {
      * createdAt (initializing the legacy 0) AND its isFavorite — the editor/save path doesn't own
      * those fields, so they're never clobbered — while title/content/isPinned/folderId/updatedAt
      * are updated. (Toggling favorite, when added, should use a dedicated update.)
+     *
+     * contentFormat travels with content and is overwritten alongside it — the two must never
+     * drift apart, or a body would be read back with the wrong parser.
      */
     @Query(
         """
-        INSERT INTO notes (id, title, content, checklist, isPinned, isFavorite, folderId, createdAt, updatedAt)
-        VALUES (:id, :title, :content, :checklist, :isPinned, 0, :folderId, :timestamp, :timestamp)
+        INSERT INTO notes (id, title, content, contentFormat, checklist, isPinned, isFavorite, folderId, createdAt, updatedAt)
+        VALUES (:id, :title, :content, :contentFormat, :checklist, :isPinned, 0, :folderId, :timestamp, :timestamp)
         ON CONFLICT(id) DO UPDATE SET
             title = excluded.title,
             content = excluded.content,
+            contentFormat = excluded.contentFormat,
             checklist = excluded.checklist,
             isPinned = excluded.isPinned,
             folderId = excluded.folderId,
@@ -71,6 +75,7 @@ interface NoteDao {
         id: String,
         title: String,
         content: String,
+        contentFormat: String,
         checklist: String,
         isPinned: Boolean,
         folderId: String?,
