@@ -18,6 +18,7 @@ import my.cheysoff.core_data.data.local.NoteDatabase
 import my.cheysoff.core_domain.repository.NotesRepository
 import my.cheysoff.core_domain.repository.SettingsRepository
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
+import java.io.File
 import javax.inject.Singleton
 
 @Module
@@ -55,7 +56,7 @@ abstract class DataModule {
             // permanently undecryptable. Drop it, or SQLCipher fails with "file is not a database"
             // on every launch with no recovery path. Mirrors the old wasPassphraseReset handling.
             if (secureUnlockManager.wasStateReset) {
-                context.deleteDatabase(EncryptionManager.DATABASE_NAME)
+                deleteUndecryptableDatabase(context)
             }
 
             val passphrase = secureUnlockManager.currentPassphrase()
@@ -82,6 +83,45 @@ abstract class DataModule {
                 NoteDatabase.MIGRATION_4_5,
             )
             .build()
+        }
+
+        /**
+         * Remove the notes database left undecryptable by a secure-unlock state reset, or fail
+         * loudly rather than let Room open it.
+         *
+         * `deleteDatabase()` alone is not enough. If a file survives (an open handle from another
+         * process, a read-only or otherwise unwritable databases dir), Room proceeds to open stale
+         * ciphertext with the brand-new passphrase and SQLCipher raises "file is not a database"
+         * on every launch forever — precisely the crash-loop this whole branch exists to prevent,
+         * only now with a useless error message.
+         *
+         * Its return value cannot drive the decision either, because false means both "the main
+         * file survived" and "there was nothing to delete", and a journal sibling can outlive the
+         * main file in either case. So every member of the set gets a hand-rolled second pass —
+         * SQLite's deleteDatabase gives up on the set as a whole if one member resists — and only
+         * a file that is still there afterwards throws, so the crash at least names the cause.
+         */
+        private fun deleteUndecryptableDatabase(context: Context) {
+            val dbFile = context.getDatabasePath(EncryptionManager.DATABASE_NAME)
+            context.deleteDatabase(EncryptionManager.DATABASE_NAME)
+
+            // Sweep the siblings whatever deleteDatabase reported, and do NOT short-circuit on the
+            // main file being absent. deleteDatabase returns false both when the main file
+            // survived and when there was nothing to delete, and in the second case it may still
+            // have failed to remove a sibling: a stale `notes.db-wal` with no `notes.db` is enough
+            // on its own, because SQLCipher then creates a fresh database and tries to recover a
+            // WAL written under the OLD passphrase — the same "file is not a database" crash-loop
+            // by another route. Nothing here is undecryptable-but-wanted; it is all being dropped.
+            val undeletable = listOf("", "-wal", "-shm", "-journal")
+                .map { suffix -> File(dbFile.path + suffix) }
+                .filter { it.exists() && !it.delete() }
+            if (undeletable.isNotEmpty()) {
+                throw IllegalStateException(
+                    "Secure-unlock state was reset but the undecryptable database could not be " +
+                        "deleted (${undeletable.joinToString { it.name }}). Opening it with the " +
+                        "new passphrase would fail with \"file is not a database\" on every launch."
+                )
+            }
         }
 
         @Provides
