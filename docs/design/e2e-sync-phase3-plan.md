@@ -1,0 +1,557 @@
+# E2E sync — Phase 3: the client sync engine
+
+> Status: **plan, not implementation.** Written 2026-08-31 on `sync-phase4-server`, immediately
+> after implementing the reference server, against `master` @ `e8bf8f3`.
+>
+> Companions: [`e2e-sync-architecture.md`](e2e-sync-architecture.md) is the accepted design,
+> [`e2e-sync-open-questions.md`](e2e-sync-open-questions.md) corrects several of its stale claims and
+> is the authority where the two disagree, and [`../../server/README.md`](../../server/README.md) is
+> the server contract this plan speaks to — it is implemented, tested and running, so the wire
+> format is settled rather than proposed.
+
+---
+
+## 0. What this plan assumes, and what is actually built
+
+Being precise about this is the point of the section. Phase 3 is the first phase that cannot be
+built in isolation, and three of the four things it depends on are not finished.
+
+### Built and merged
+
+| Thing | Where | Status |
+|---|---|---|
+| HKDF-SHA256 | `core-crypto/.../sync/Hkdf.kt` | done, RFC 5869 vectors |
+| `ARK → K_content, K_id, accountId` | `core-crypto/.../sync/AccountKeys.kt` | done; **no production call site yet** |
+| Blinded record IDs | `core-crypto/.../sync/BlindedRecordId.kt` | done |
+| Record envelope (AES-256-GCM, per-record keys, AAD) | `core-crypto/.../sync/RecordEnvelope.kt` | done |
+| 256-byte bucket padding | `core-crypto/.../sync/RecordPadding.kt` | done |
+| Protocol constants | `core-crypto/.../sync/SyncProtocol.kt` | done |
+| QR pairing, ECDH, SAS, `ServerHint` | `feature-pairing/` | done |
+| Device identity key (P-256, Keystore, `SHA256withECDSA`) | `feature-pairing/.../identity/DeviceIdentityKey.kt` | done, **`sign()` has no caller yet** |
+| The server | `server/` | done, 114 tests |
+
+### Not built — Phase 3 must either wait for it or build it
+
+1. **The Phase 0 schema debt.** `deviceId`, the HLC columns, `dirty`, `lastSyncedSeq` and the
+   `sync_state` table **do not exist anywhere in the codebase**. The exact list is in
+   `e2e-sync-open-questions.md` §4 and is restated as §2 below because this plan's column names have
+   to match it or nothing lines up. Tombstones, folder timestamps and `exportSchema = true` *did*
+   ship with Trash (`MIGRATION_5_6`); the sync half did not.
+2. **ARK storage.** `AccountRootKey.generateArk()` has no call site, `SecureUnlockManager` has no
+   `currentArk()`, and no `ark_ct`/`ark_iv` is written to `secret_shared_prefs`. Without this there
+   is no `K_content`, no `K_id` and no `accountId`, so **nothing in Phase 3 can run**. It is a small
+   piece of work — one wrap under `HKDF(dbPassphrase, ".../arkwrap")`, one accessor — but it is a
+   hard prerequisite and it belongs to Phase 0/1, not here.
+3. **An app-scoped `CoroutineScope`.** The only `CoroutineScope(` in the repository is
+   `rememberCoroutineScope()` in `AuthScreen.kt`. Everything else is `viewModelScope`, which is
+   cancelled by navigation — mid-push. §7.
+4. **Any HTTP client at all.** The app declares zero permissions and has no network code.
+   `INTERNET` has to be added, along with a client dependency and a decision about certificate
+   pinning against `ServerHint.spkiPinSha256`.
+
+**If Phase 3 starts before (1) and (2) land, it will start by building them badly.** The
+recommendation is to ship them as their own PR, with the migration test, before any network code
+exists.
+
+---
+
+## 1. Module layout and the classes to write
+
+### A new module: `core-sync`
+
+Pure JVM, no Android, no Room, no coroutines in the merge path — the discipline `PassphraseCipher`,
+`LockoutPolicy` and `TrashPolicy` already follow, and the reason those have real unit tests. This is
+not architectural taste: `e2e-sync-open-questions.md` §3 shows that the N-replica convergence
+harness is a cheap JVM property test **if and only if** `merge` is a pure function, and an emulator
+matrix otherwise.
+
+```
+core-sync/
+  clock/     Hlc.kt  HlcGenerator.kt
+  model/     SyncRecord.kt  NotePayload.kt  FolderPayload.kt  FieldClocks.kt
+  merge/     Merge.kt  MergeResult.kt  ConflictCopy.kt
+  wire/      SyncApi.kt  SyncWire.kt  SyncError.kt
+```
+
+`core-data` and `feature-notes` depend on `core-sync`; `core-sync` depends on `core-domain` and
+`core-crypto` and on nothing else.
+
+### The classes, by name and job
+
+| Class | Module | Responsibility |
+|---|---|---|
+| `Hlc(ms: Long, counter: Int, node: String)` | `core-sync` | one hybrid logical clock reading; `Comparable`, tie-broken on `node` |
+| `HlcGenerator` | `core-sync` | `next(wallMs): Hlc` and `observe(remote: Hlc)`; the only thing that mints clocks. One instance, `@Singleton` |
+| `FieldClocks` | `core-sync` | `Map<String, Hlc>` with a compact serialisation; what the `fieldHlc` column holds |
+| `NotePayload` / `FolderPayload` | `core-sync` | `@Serializable` plaintext, versioned, with the inner `hlc` copy |
+| `SyncRecord` | `core-sync` | `(recType, uuid, rowHlc, fieldClocks, payload)` — the merge's unit |
+| `Merge` | `core-sync` | **pure**: `merge(local: SyncRecord?, remote: SyncRecord): MergeResult` |
+| `MergeResult` | `core-sync` | `Applied(record)`, `NoChange`, `ConflictCopy(winner, loser)`, `Rejected(reason)` |
+| `SyncApi` | `core-sync` | interface over the endpoints the client uses; `SyncError` for every failure |
+| `KtorSyncApi` | `core-data` | the implementation; owns the token, the `Retry-After` back-off and the SPKI pin |
+| `RecordCodec` | `core-data` | seal/open, and the **only** place that performs the outer/inner `hlc` check (§4) |
+| `SyncCursorDao` / `SyncStateEntity` | `core-data` | the `sync_state` table |
+| `SyncQueries` | `core-data` | `dirtyNotes()`, `dirtyFolders()`, `applyRemoteNote()`, `applyRemoteFolder()` — the write path §5.6 |
+| `SyncCoordinator` | `core-data` | the loop of §3; `@Singleton`, holds the app scope, gated on unlock |
+| `SyncScheduler` | `app` | when the loop runs — unlock, foreground tick, pull-to-refresh |
+| `SyncModule` | `core-data/di` | Hilt bindings |
+
+---
+
+## 2. Schema — what Phase 0 owes, restated so this plan is self-contained
+
+`MIGRATION_6_7`, additive `ALTER TABLE … ADD COLUMN` only, on **both** `notes` and `folders`:
+
+| Column | Type | Default | Why |
+|---|---|---|---|
+| `hlcMs` | `INTEGER NOT NULL` | `0` | row clock, physical part; goes in the envelope AAD |
+| `hlcCounter` | `INTEGER NOT NULL` | `0` | row clock, logical part |
+| `hlcNode` | `TEXT NOT NULL` | `''` | minting device; **the tie-breaker** |
+| `fieldHlc` | `TEXT NOT NULL` | `''` | serialised per-field clocks; `''` means "every field is at the row clock" |
+| `dirty` | `INTEGER NOT NULL` | **`1`** | see below |
+| `lastSyncedSeq` | `INTEGER NOT NULL` | `0` | the CAS baseline sent as `baseSeq` |
+
+⚠️ **`dirty` must default to `1`.** Every row that exists at migration time has never been pushed. A
+`DEFAULT 0` declares the user's entire pre-sync library already uploaded, and the first pull then
+overwrites or deletes it against an empty server. One character in the DDL, and the most destructive
+way to get Phase 0 wrong.
+
+```sql
+CREATE TABLE IF NOT EXISTS sync_state (
+    accountId  TEXT    NOT NULL PRIMARY KEY,
+    cursor     INTEGER NOT NULL DEFAULT 0,   -- server seq, NOT a timestamp
+    lastPullAt INTEGER NOT NULL DEFAULT 0
+)
+```
+
+`deviceId` lives **outside the database**, in `secret_shared_prefs` next to the existing keys
+(`EncryptedPrefsStore.kt:90`, `PREFS_NAME = "secret_shared_prefs"`), because the HLC needs it while the app is locked and
+the database is not open. It is a locally generated random string and is **not** the server's
+`deviceId`, which is server-assigned and only meaningful to the server. Keep both; do not conflate
+them (§10, decision D4).
+
+### The `updatedAt` / `hlc` split stays exactly as the architecture doc describes
+
+`updatedAt` is bumped only by `upsertNote` and drives `ORDER BY updatedAt DESC`. `hlc` is bumped by
+**every** write, including the three metadata paths (`setNotePinned`, `setNoteFavorite`,
+`setNoteFolder`) that deliberately leave `updatedAt` alone. The UI never reads `hlc`. This is
+confirmed against the current DAO in `e2e-sync-open-questions.md` §4 and it dissolves the PR #32
+tension completely.
+
+`clearFolder` is a **mass** update and must allocate **one** clock for the whole statement, shared
+with the `softDeleteFolder` in the same `withTransaction` — it is one user action.
+`RoomNotesRepository.deleteFolder:104-116` already shares a single `now` between them; the HLC
+follows the same rule.
+
+---
+
+## 3. The push/pull loop
+
+One pass, run to quiescence. `SyncCoordinator.syncOnce()` returns a `SyncOutcome` and never throws
+past its own boundary.
+
+```
+0. PRECONDITIONS
+   - SecureUnlockManager is unlocked (else return Skipped(Locked) -- see §7)
+   - ARK is available; derive AccountKeys once per pass and destroy() at the end
+   - a session token exists and is unexpired, else run the handshake (§3.1)
+
+1. PULL
+   cursor = sync_state.cursor
+   loop:
+     GET /v1/changes?since=cursor&limit=200
+       409 cursor_ahead_of_server -> HALT the whole engine, surface to the user (§8, F7)
+     for each record, in seq order:
+       open the envelope (§4). If it will not open, HALT this record, count it, continue.
+       merge (§5) inside ONE Room transaction per record
+       cursor = record.seq          <-- only after the transaction commits
+     persist cursor
+     repeat while hasMore
+
+2. PUSH
+   items = dirtyNotes() + dirtyFolders(), oldest row clock first, chunked to 64
+   for each chunk:
+     POST /v1/records  { blindedId, recType, hlc, baseSeq = row.lastSyncedSeq, envelope }
+     for each per-item result:
+       ok       -> lastSyncedSeq = seq, dirty = 0   (only if the row's hlc is unchanged, §3.2)
+       conflict -> merge the inline `current` exactly as if it had arrived from a pull,
+                   leave dirty = 1, and let the NEXT pass push the merged row
+
+3. If anything was merged in step 2, loop back to 1. Cap at 3 iterations per pass.
+```
+
+**Pull before push, always.** Pushing first maximises the number of `409`s, because every conflict
+the server would report is one the client could have merged locally a moment earlier. Pulling first
+also means a device that has been offline for a week applies the world before it argues with it.
+
+### 3.1 The session handshake
+
+```
+POST /v1/session/challenge  { accountId, deviceId }        -> { challenge, expiresAt }
+sign SignedMessage.session(accountId, deviceId, challenge) with DeviceIdentityKey.sign()
+POST /v1/session            { accountId, deviceId, challenge, signature } -> { token, expiresAt }
+```
+
+Cache the token in memory only, in `KtorSyncApi`. **Do not persist it**: it is a bearer credential,
+the handshake costs one round trip and one ECDSA operation, and a token in
+`secret_shared_prefs` is a token in an Auto Backup discussion. On `401` from any call, discard the
+token, redo the handshake once, retry the call once, then give up for this pass.
+
+The canonical signed-message encoding is specified byte-for-byte in `server/README.md` and
+implemented in `server/.../SignedMessage.kt`. The client must reproduce it exactly; there is no
+negotiation step and the failure mode is "every signature is rejected". Put it in `core-crypto` next
+to `SyncProtocol` so both halves of the app can see it, and give it the same "changing this file is
+a breaking protocol change" KDoc.
+
+### 3.2 `baseSeq` bookkeeping — the part that is easy to get subtly wrong
+
+`baseSeq` is `row.lastSyncedSeq`: the server `seq` of the version this device last agreed with. `0`
+means "this record has never been on the server", which the server reads as "must not exist".
+
+Three rules, each of which corresponds to a bug that is otherwise guaranteed:
+
+1. **Clear `dirty` only if the row has not changed since the envelope was sealed.** The user can
+   edit a note while its push is in flight. Seal the envelope and *capture the row clock at the same
+   moment*; when the `ok` comes back, write
+   `UPDATE … SET dirty = 0, lastSyncedSeq = :seq WHERE id = :id AND hlcMs = :sealedMs AND hlcCounter = :sealedCounter`.
+   If the row moved, the update matches nothing, the row stays dirty, and the next pass pushes the
+   newer version. Unconditionally clearing `dirty` here silently drops that edit forever.
+2. **Always write `lastSyncedSeq` on `ok`, even when the row moved.** Otherwise the next push sends
+   a stale `baseSeq` and takes a guaranteed `409` for no reason. Split the two updates if rule 1's
+   guard fails.
+3. **A `409` is not an error.** It is data. The `current` version comes back inline, so handle it in
+   the same code path as a pulled record — do not add a second, subtly different merge path for the
+   conflict case. `RecordsTest.aStaleBaseSeqIsRejectedWithTheConflictingEnvelopeInline` shows the
+   exact response shape.
+
+### 3.3 Crash points, and what each costs
+
+| Dies at | Consequence | Why it is safe |
+|---|---|---|
+| after a merge commits, before `cursor` is persisted | that record is pulled and merged again next pass | merge must be **idempotent**: re-applying an already-applied remote record is `NoChange`. This is the single most important property in §5 |
+| after the server commits a push, before the `ok` is read | the row stays `dirty` with a stale `lastSyncedSeq`; the next push takes a `409` and merges its own write back | the conflicting envelope is this device's own, so the merge is a no-op |
+| mid-chunk | the applied prefix is committed, the rest is still dirty | the server applies a batch's non-conflicting items and reports per item; there is no half-applied item |
+
+---
+
+## 4. The envelope, and the outer-vs-inner `hlc` check
+
+This is the item the architecture doc flags as "easy to get wrong" and leaves un-owned. It is owned
+here by `RecordCodec`, and it is the only place allowed to call `RecordEnvelope.open`.
+
+### What is actually bound to what
+
+`RecordEnvelope.seal/open` take `(kContent, recType, blindedId, hlc, …)` and build the AAD from
+`ver ‖ recType ‖ blindedId ‖ hlc`, length-prefixed. So:
+
+- The **outer** `hlc` — the one the server stores in its `hlc` column and returns in `RecordDto.hlc`
+  — is an AEAD input. A server that alters it produces a tag failure, and `open` returns null.
+- The **inner** `hlc` — a copy inside the encrypted `NotePayload` — is *not* checked by anything in
+  `core-crypto`. `RecordEnvelope`'s own KDoc says so: *"this class authenticates the value it is
+  handed, it cannot know whether that value is the one the caller intended."*
+
+**Be precise about what the inner copy buys, because the architecture doc is not.** It does **not**
+defend against a malicious server: the AAD already makes `(recType, blindedId, hlc, envelope)`
+unforgeable as a tuple. What it catches is a *client* that seals with one clock and ships another —
+which is exactly the bug a refactor of the push path introduces, and which would otherwise produce
+records that decrypt perfectly and sort wrongly, forever, on every device. Treat it as an internal
+consistency assertion, not a security control, and say that in the code.
+
+### What actually defends against a rollback
+
+A server restored from a backup, or a malicious one, can replay an *older authentic* tuple. The AAD
+cannot see that. Three checks, all in `RecordCodec.open`:
+
+```kotlin
+fun open(remote: RecordDto, local: SyncRecord?): OpenResult {
+    val payload = RecordEnvelope.open(kContent, remote.recType, remote.blindedId, remote.hlc, bytes)
+        ?: return OpenResult.Unopenable          // wrong key, tampering, or a foreign account
+    if (payload.hlc != remote.hlc)               // consistency, see above
+        return OpenResult.InternalInconsistency
+    if (local != null && !local.dirty && payload.rowHlc < local.rowHlc)
+        return OpenResult.Rollback               // the server handed back something we already superseded
+    return OpenResult.Ok(payload)
+}
+```
+
+The third check is the real one. `local.dirty` matters: if the row *is* dirty, a lower remote clock
+is the ordinary "we have a newer local edit" case and the merge handles it. If the row is clean, the
+only way its clock got ahead of the server's is that the server went backwards.
+
+`GET /v1/changes` gives a fourth, cheaper signal for the same failure: the server answers
+`409 cursor_ahead_of_server` when the client's cursor exceeds its high-water mark, which is what a
+restored-from-backup server looks like from outside. Both must halt the engine loudly (§8, F7).
+
+### Sealing
+
+```
+plaintext  = Json.encodeToString(NotePayload(...))        // includes the inner hlc copy
+blindedId  = BlindedRecordId.compute(kId, "note", uuid)   // raw UUID never leaves the device
+envelope   = RecordEnvelope.seal(kContent, "note", blindedId, hlc.toString(), plaintext)
+```
+
+`RecordEnvelope.seal` pads to 256-byte buckets itself. `recType` is `"note"` or `"folder"`; the same
+string goes into the blinded-ID HMAC message *and* the AAD *and* the wire, and the server enforces
+`1..32` characters. `hlc.toString()` is the canonical `"$ms-$counter-$node"` and the server enforces
+`1..128` characters — with a random `node` that is comfortable, but it is a real bound and the
+`Hlc` serialisation must respect it.
+
+⚠️ **The `hlc` string is plaintext to the server**, because the client must read it before
+decrypting. If `node` is a stable device identifier, the operator learns which device made every
+edit. Use a **per-account random pseudonym** generated once and stored in `secret_shared_prefs`, not
+the server's `deviceId`, not `Settings.Secure.ANDROID_ID`, not the model name. This is stated in
+`server/README.md`'s honest-disclosure list and it is a client-side decision, not a server one.
+
+---
+
+## 5. Merge: field-level LWW with per-field HLCs
+
+### 5.1 The payload
+
+```kotlin
+@Serializable
+data class NotePayload(
+    val v: Int = 1,                      // payload schema version
+    val hlc: String,                     // inner copy of the row clock (§4)
+    val fields: Map<String, String>,     // canonical field name -> value, as text
+    val clocks: Map<String, String>,     // canonical field name -> that field's Hlc
+    val del: Boolean = false,            // tombstone. THE ONLY DELETE THE PROTOCOL HAS.
+    val serializer: Int = 1,             // contentSerializerVersion, see 5.5
+)
+```
+
+Field names for a note: `title`, `content`, `contentFormat`, `checklist`, `isPinned`, `isFavorite`,
+`folderId`, `createdAt`, `updatedAt`, `isDeleted`, `deletedAt`. For a folder: `name`, `colorArgb`,
+`createdAt`, `updatedAt`, `isDeleted`, `deletedAt`.
+
+Decode with `ignoreUnknownKeys = false` and **refuse the record** on a `v` this build does not know,
+rather than silently dropping fields — the "silent field loss when an older app re-serialises a
+newer payload" risk in the architecture doc's table. A refused record must not advance `dirty` or
+`lastSyncedSeq`; count it, surface it, and stop syncing rather than round-trip a lossy copy.
+
+### 5.2 The rule
+
+For each field independently: take the value whose clock is greater. `Hlc` compares
+`(ms, counter, node)` lexicographically, so ties break deterministically on `node` and two devices
+writing in the same millisecond cannot diverge. A field absent from `clocks` is at the row clock.
+
+Pin-on-phone plus edit-on-tablet merges losslessly, which is the whole reason for field-level rather
+than record-level LWW: those metadata gestures are exactly what people do casually on two devices.
+
+### 5.3 Fields that must move together
+
+- **`content` and `contentFormat` are one unit.** `NoteDao.kt:69-70` and
+  `SingleNoteViewModel.kt:723-725` both state they must never drift; a body read with the wrong
+  parser is silent corruption. Give them one shared clock entry, `content`, and merge them together
+  or not at all.
+- **`updatedAt` follows `content`.** When the remote `content` wins, take the remote `updatedAt`
+  too. Otherwise two devices show the same notes in a different order forever — a visible divergence
+  in the one field the user actually looks at.
+- **`isDeleted` and `deletedAt` are one unit**, for the same reason.
+
+### 5.4 Deletion
+
+`del` is an ordinary LWW field. Because the delete is *soft*, the deleting device still holds the
+content, so an undelete is a genuine restore rather than a blank note.
+
+Four hard `DELETE`s exist today and each is a resurrection bug waiting to happen:
+`purgeNote` (`NoteDao.kt:115-116`), `purgeNotesDeletedBefore`, `purgeFolder`,
+`purgeFoldersDeletedBefore`.
+
+- The blank-note discard (`SingleNoteViewModel.kt:536`) may purge **only** while the row has never
+  been pushed: `WHERE id = :id AND dirty = 1 AND lastSyncedSeq = 0`. Otherwise soft-delete it.
+- Age-based purge is not safe on its own. `TrashViewModel.kt:43-59` only sweeps when the user opens
+  the Trash screen, so one device purges daily and another never does — the worst case for
+  convergence. A tombstone may be purged only once **every enrolled device's cursor has passed the
+  tombstone's `seq`**, which the client cannot know, or the staleness threshold must be enforced as
+  a hard refusal to sync (§10, decision D3).
+
+### 5.5 Fields that merge as a whole blob, and why
+
+`checklist` has no stable item identity in storage: `parseChecklist` (`feature-notes/.../model/single/ChecklistItem.kt:37-46`)
+mints a fresh UUID per line on every read. `mergeChecklist` (`SingleNoteViewModel.kt:170-186`)
+preserves ids positionally within a live editor session and concedes in its own KDoc (`:167`) that *"a
+genuinely reordered list does get fresh ids"*. So the checklist merges as one LWW value. Accept it
+and say so in the UI copy if it ever bites.
+
+`content` is HTML, and `serializer` exists because `richeditor-compose` **1.1.0** (the pinned
+version as of `master` @ `e8bf8f3`, bumped from `1.0.0-rc14`) serialises the same content to
+different bytes than rc14 did. A device that receives a record with a different `serializer` must
+compare **decoded text**, not bytes, before deciding the content changed. A version bump is an
+explicit, once-only, offline re-baseline: re-serialise locally, mark rows `dirty` **without**
+bumping their HLC or `updatedAt`, then push throttled. It is not a sync event.
+
+### 5.6 The write path — do not reuse `upsertNote`
+
+`upsertNote`'s conflict branch **deliberately refuses to write `isFavorite`, `isDeleted` and
+`deletedAt`** (`NoteDao.kt:62-90`): *"the conflict branch leaves isDeleted/deletedAt exactly as it
+found them. So a save that races a delete cannot resurrect the note."* That is correct for the
+editor and **fatal for sync** — applying a merged remote record through it silently drops exactly
+the fields a remote delete or a remote favourite carries.
+
+Write a dedicated `applyRemoteNote` / `applyRemoteFolder` that writes **every** column including the
+sync columns, and make it the only path a merged record takes. Also delete the dead
+`insertNote` (`NoteDao.kt:60`): it is `@Insert(REPLACE)`, REPLACE is DELETE-then-INSERT, it has
+no callers, and it would wipe `createdAt`, both tombstone columns and every sync column.
+
+### 5.7 Idempotence, and how to be sure of it
+
+Re-applying an already-applied remote record must produce `NoChange` and must not mark the row
+dirty. This is not a nicety — §3.3 shows it is hit in production by any crash between commit and
+cursor persistence, and by every retry after a dropped response. The N-replica harness in
+`e2e-sync-open-questions.md` §3 exists mainly to hammer this and the commutativity property
+(`merge(a,b) == merge(b,a)`), and both are free once `Merge` is pure.
+
+---
+
+## 6. Conflict copies
+
+A conflict copy is written **only** when the `content` field is contested on both sides:
+
+```
+local.dirty AND local.clocks["content"] and remote.clocks["content"] are incomparable-in-practice
+  -- i.e. both devices edited content since their last common ancestor, which is detectable as
+     "the row is dirty in `content` AND the remote content clock is not an ancestor of ours"
+```
+
+Everything else merges silently. When it fires:
+
+1. The **higher clock wins** and stays under the original UUID, so the record's identity on the
+   server is stable and the other device converges on it.
+2. The **loser is written as a new local note** with a fresh UUID, `dirty = 1`,
+   `lastSyncedSeq = 0`, and title `"<original title> (conflict — <device label>, <dd MMM HH:mm>)"`.
+   It pushes on the next pass and appears on every device.
+3. Nothing is ever discarded. That is the whole point, and it is the mitigation for the highest-
+   severity risk in the architecture doc: a merge bug that propagates in seconds to every device
+   with no undo.
+
+The conflict copy carries the loser's `content`, `contentFormat` and `checklist` and **not** its
+metadata — no pin, no favourite, no folder. A duplicate note appearing pinned at the top of the list
+is worse than one appearing in Recent.
+
+Deduplicate: if a conflict copy for `(uuid, loserContentHlc)` already exists locally, do not write a
+second one. Two devices can otherwise each write a copy of the other's loser and the account gains
+two duplicates per conflict instead of one.
+
+---
+
+## 7. Scheduling: foreground only, and why there is no choice
+
+`DataModule.provideNoteDatabase` throws when `currentPassphrase()` is null
+(`DataModule.kt:62`), and `MainApplication.onStop` locks (`MainApplication.kt:41`). A cold
+start while locked therefore cannot open the database at all.
+
+Sync *appears* to work after a lock today, because `NoteDatabase` is a Hilt `@Singleton` so the
+provider never re-runs, and SQLCipher's `SupportOpenHelperFactory` retains the passphrase internally
+— a limitation documented at `DataModule.kt:64-69` and explicitly slated for removal. **Do not build
+on it.** A background sync that works only until that bug is fixed is a background sync that breaks
+in a release nobody connects to it.
+
+So:
+
+- **Triggers:** on successful unlock; on a timer while the app is foregrounded (60 s is plenty); on
+  pull-to-refresh in the notes list; after a successful pairing.
+- **Scope:** an app-scoped `CoroutineScope(SupervisorJob() + Dispatchers.IO)` in `MainApplication`,
+  injected into `SyncCoordinator`. Not `viewModelScope` — navigation cancels it mid-push, and §3.3
+  shows what a cancelled push costs.
+- **Gate:** `SyncCoordinator` checks `SecureUnlockManager` before every pass and returns
+  `Skipped(Locked)` rather than touching the database. It must also **stop between chunks** when a
+  lock arrives, not only at pass boundaries.
+- **Mutual exclusion:** one pass at a time, a `Mutex` in the coordinator. Two overlapping passes
+  would both read `dirty` rows and both push them, and the second would take a `409` against the
+  first.
+- **`Room` invalidation is not ordered against the write coroutine** (`SingleNoteViewModel.kt:664-675`:
+  *"writer-first is near-certain in practice, not enforced here"*). A sync engine writing behind the
+  user's back makes that a live race with the editor's 300 ms autosave. Applying a remote record to
+  a note that is currently open must go through the editor's own merge path, or be deferred while
+  that note has an open editor. **This is unresolved and is decision D5.**
+- Background sync via a ciphertext outbox is Phase 5 and is explicitly out of scope. Do not
+  half-build it.
+
+---
+
+## 8. Failure modes
+
+| # | Failure | Detection | Response |
+|---|---|---|---|
+| F1 | envelope will not open | `RecordEnvelope.open` returns null | count it, skip the record, **do not advance the cursor past it**; if more than a handful, halt and surface "records from this account cannot be read" |
+| F2 | payload `v` is newer than this build | version check in `RecordCodec` | halt the engine; never round-trip a lossily decoded payload |
+| F3 | outer/inner `hlc` mismatch | §4 check | halt; this is a client bug and must be loud in a bug report, not silently repaired |
+| F4 | `409` on push | per-item `status: "conflict"` | merge the inline `current`, keep `dirty`, retry next pass |
+| F5 | `429` | HTTP status | honour `Retry-After` **with jitter**; three devices without jitter form a herd against one VPS |
+| F6 | `401` mid-pass | HTTP status | re-handshake once, retry the call once, else abandon the pass |
+| F7 | server rolled back | `409 cursor_ahead_of_server`, or the §4 rollback check | **halt the whole engine** and require an explicit user re-baseline. Never silently reset the cursor to 0: with `dirty = 0` rows that is indistinguishable from "the account is empty" and the next pass would be a mass delete |
+| F8 | clock moved backwards | `HlcGenerator` sees `wallMs < lastMs` | keep `ms`, increment `counter`. Never emit a decreasing clock. The codebase already defends against a user-settable clock in `LockoutPolicy.remainingMillis` and `TrashPolicy.isExpired` |
+| F9 | process death mid-pass | none needed | §3.3; idempotent merge covers all three cases |
+| F10 | `richeditor` serialiser bump | `serializer` field differs | offline re-baseline, throttled push, no HLC bump (§5.5) |
+| F11 | ARK missing or regenerated | `ark_ct` absent while `accountId` is known | refuse to sync and say so; a second `generateArk()` forks the account into two permanently unreadable halves |
+
+---
+
+## 9. Testing
+
+Three tiers, in the order they pay for themselves:
+
+1. **`Merge` unit tests and the N-replica convergence property** — pure JVM, no Android, no
+   emulator, seeded schedules, print the seed on failure. The recipe is in
+   `e2e-sync-open-questions.md` §3 and it is a days-not-weeks job **once `Merge` is pure**. It
+   catches non-commutative merges, non-idempotent apply, three-replica order dependence, HLC ties,
+   and deletion losing to a stale field write.
+2. **A contract test against the real server.** `server/` builds and runs standalone, so a JVM test
+   in `core-sync` can start it on a random port with `MANANA_DB=:memory:` and drive the real HTTP
+   surface. This is the only thing that catches a byte-level disagreement in the signed-message
+   encoding, the SEC1 point encoding or the base64url variant — the failures that a fake server,
+   written from the same misunderstanding as the client, will happily agree with.
+3. **Two emulators, one scripted happy path.** `emulator -avd … -read-only` twice off the single
+   installed `android-33` image. Pair, edit on both, converge, verify. A smoke test for real Room,
+   real SQLCipher and the lifecycle races the simulation cannot reach — **not** the convergence
+   proof. A convergence bug found here is one tier 1 should have found and did not.
+
+---
+
+## 10. Open decisions
+
+These are the ones that should be settled before code is written, not discovered during it.
+
+**D1 — HTTP client.** Ktor client, OkHttp, or `HttpURLConnection`? OkHttp brings certificate pinning
+for `ServerHint.spkiPinSha256` for free and is the most boring option; Ktor client would share
+serialisation code with the server. Either adds the app's **second** dependency-with-a-transitive-graph
+and its first network permission. Recommendation: OkHttp, for the pinning.
+
+**D2 — Does `accountId` claim happen at ARK creation or at first sync?** Claiming at creation means
+a device that never syncs has still touched the server. Claiming at first sync means the TOFU race
+between two freshly paired devices is real, and one of them gets `409 account_exists` and must
+proceed as if it had been vouched for. Recommendation: claim at first sync, and treat
+`409 account_exists` on `POST /v1/account` as a normal branch, not an error.
+
+**D3 — Tombstone purge policy.** The server has no delete, so a tombstone pushed once is on the
+server until its history depth expires it. Locally, purging on age alone is unsafe (§5.4). The two
+candidates are "never purge tombstones that have been pushed" (simple, unbounded) and "refuse to
+sync a device that has been offline longer than the retention window, and force a re-baseline"
+(bounded, needs a re-baseline path that does not exist). **Unresolved.**
+
+**D4 — HLC node identity.** Confirmed above that it must be a per-account random pseudonym in
+`secret_shared_prefs`, distinct from the server's `deviceId`, because the `hlc` string is plaintext
+to the operator. What is *not* settled is whether it should be rotated when a device is revoked —
+rotating loses the tie-breaking history, not rotating means a revoked device's edits stay
+attributable.
+
+**D5 — Applying a remote record to the note that is currently open.** The editor holds live state
+behind two chained 300 ms trailing debounces and `Room`'s invalidation is not ordered against the
+write coroutine. Options: defer remote writes for the open note until it closes (simple, can stall
+indefinitely); route them through the editor's existing `mergeChecklist`-style path (correct,
+invasive); or take the remote version and write the local one as a conflict copy (safe, noisy).
+**Unresolved, and it is the one most likely to be discovered the expensive way.**
+
+**D6 — Does restoring a folder need to restore its notes?** `deleteFolder` unfiles its notes and
+nothing records which they were (`RoomNotesRepository.kt:104-116`, `FolderDao.kt:46`), so device A restoring a folder and device B
+re-filing a note into it do not compose. Either accept it explicitly in the UI, or make
+`clearFolder` remember the prior `folderId`. That is a **Phase 0** change, not a Phase 3 one, so it
+has to be decided before the migration is written.
+
+**D7 — Conflict-copy detection.** §6 describes the condition as "both devices edited `content` since
+their last common ancestor", but the schema carries no ancestor — only `dirty` and one field clock.
+The proposed test (`local.dirty` and the remote content clock is not one this device has already
+seen) is sound but conservative: it produces a conflict copy in some cases where the two edits were
+actually the same. Whether that is acceptable, or whether a per-field `lastSyncedHlc` is worth a
+column, is open.
