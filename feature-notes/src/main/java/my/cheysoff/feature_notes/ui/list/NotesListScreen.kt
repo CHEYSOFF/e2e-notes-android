@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -267,8 +268,10 @@ fun NotesListScreen(
                 HeaderLine(state.headerLine, state.statsLine)
             }
             item(span = StaggeredGridItemSpan.FullLine, contentType = "chips") {
-                // The sort pill rides at the end of the chip row but OUTSIDE the chips' own
-                // horizontal scroll, so it stays on screen however many folders exist.
+                // The trash and sort pills ride at the end of the chip row but OUTSIDE the chips'
+                // own horizontal scroll, so they stay on screen however many folders exist. Trash
+                // in particular has to be reachable without scrolling past every folder — it is
+                // the only route to an undo.
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(modifier = Modifier.weight(1f)) {
                         FolderChips(
@@ -281,6 +284,7 @@ fun NotesListScreen(
                             onDeleteFolder = { deleteFolderTarget = it },
                         )
                     }
+                    TrashPill(onClick = { onIntent(NotesListIntent.TrashClicked) })
                     SortPill(
                         order = state.sortOrder,
                         onSelect = { onIntent(NotesListIntent.SortOrderSelected(it)) },
@@ -331,7 +335,16 @@ fun NotesListScreen(
             containerColor = SurfaceDark,
             onDismissRequest = { deleteFolderTarget = null },
             title = { Text("Delete folder?", color = TitleGrey) },
-            text = { Text("\"${f.name}\" — its ${f.notesAmount} notes will move to All.", color = BodyGrey) },
+            // The copy names both halves of what happens, because only one of them is undoable:
+            // the folder goes to Trash and can be restored, but its notes are unfiled immediately
+            // and restoring the folder does NOT re-file them.
+            text = {
+                Text(
+                    "\"${f.name}\" — its ${f.notesAmount} notes will move to All, " +
+                        "and the folder goes to Trash.",
+                    color = BodyGrey,
+                )
+            },
             confirmButton = { TextButton(onClick = { onIntent(NotesListIntent.DeleteFolder(f.id)); deleteFolderTarget = null }) { Text("Delete", color = AccentIndigo) } },
             dismissButton = { TextButton(onClick = { deleteFolderTarget = null }) { Text("Cancel", color = BodyGrey) } },
         )
@@ -568,6 +581,34 @@ private fun Chip(
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp, vertical = 10.dp),
     )
+}
+
+/**
+ * Opens Trash. Icon-only so it costs almost no width next to the sort pill, and styled as a sibling
+ * of [Chip]/[SortPill] (same pill radius, same SurfaceDark ground) — but, like the sort pill, it
+ * never takes the chips' selected/indigo fill, because it is a destination rather than a filter.
+ */
+@Composable
+private fun TrashPill(onClick: () -> Unit) {
+    val sw = LocalConfiguration.current.screenWidthDp
+    Box(modifier = Modifier.padding(start = 8.dp)) {
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(percent = 50))
+                .background(SurfaceDark)
+                // The Box is the tap target, so the accessible name and role live here; the Icon
+                // stays contentDescription = null so it is not announced a second time.
+                .clickable(onClickLabel = "Open trash", role = Role.Button, onClick = onClick)
+                .padding(horizontal = 11.dp, vertical = 10.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.DeleteOutline,
+                contentDescription = null,
+                tint = Color(0xFF8A8A8A),
+                modifier = Modifier.size((sw * 0.045f).dp),
+            )
+        }
+    }
 }
 
 /**

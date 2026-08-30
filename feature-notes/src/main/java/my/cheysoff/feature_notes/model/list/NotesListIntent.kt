@@ -17,4 +17,7 @@ sealed interface NotesListIntent {
     data class SortOrderSelected(val order: NotesSortOrder) : NotesListIntent
     /** The search field's text changed (or was cleared, with an empty string). */
     data class SearchQueryChanged(val query: String) : NotesListIntent
+
+    /** Open Trash. Deliberately not a bottom-bar item — those four slots are already spoken for. */
+    data object TrashClicked : NotesListIntent
 }
