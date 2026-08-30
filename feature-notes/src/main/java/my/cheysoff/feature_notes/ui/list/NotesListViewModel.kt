@@ -5,15 +5,19 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
@@ -30,6 +34,8 @@ import my.cheysoff.feature_notes.model.list.NotePreviewUi
 import my.cheysoff.feature_notes.model.list.NotesListIntent
 import my.cheysoff.feature_notes.model.list.NotesListScreenState
 import my.cheysoff.feature_notes.model.list.normalizeFolderName
+import my.cheysoff.feature_notes.model.list.normalizeSearchText
+import my.cheysoff.feature_notes.model.list.searchPreviews
 import my.cheysoff.feature_notes.model.list.toUi
 import my.cheysoff.feature_notes.ui.list.NotesListEvent.NavigateToNote
 import java.time.LocalTime
@@ -47,7 +53,15 @@ sealed class NotesListEvent {
 
     /** The Profile tab was tapped — open the settings screen on top of the list. */
     data object NavigateToProfile : NotesListEvent()
+
+    data object NavigateToTrash : NotesListEvent()
 }
+
+/**
+ * Quiet period the search field waits out before a query is actually run, matching the editor's
+ * autosave/serialize debounce (SingleNoteScreen.CONTENT_SERIALIZE_DEBOUNCE_MS).
+ */
+private const val SEARCH_DEBOUNCE_MS = 300L
 
 /** Carries the off-main-thread result (previews already parsed) to the main-thread state update. */
 private data class ListData(
@@ -70,7 +84,15 @@ class NotesListViewModel @Inject constructor(
 
     // Latest full (unfiltered) previews, kept so folder selection can re-filter without re-parsing
     // (each preview's HTML→plain-text conversion already happened off the main thread on load).
-    private var allPreviews: List<NotePreviewUi> = emptyList()
+    //
+    // It is a flow rather than a plain field because the Search tab also reads it and has to
+    // re-run its query when the notes change (an edit, a delete) — see the search pipeline below.
+    private val allPreviewsFlow = MutableStateFlow<List<NotePreviewUi>>(emptyList())
+    private val allPreviews: List<NotePreviewUi> get() = allPreviewsFlow.value
+
+    // The raw search field text. Kept separate from _state so the debounce below sees every
+    // keystroke as its own emission.
+    private val searchQuery = MutableStateFlow("")
 
     // The notes query itself carries the ordering (one verified @Query per order), so a change to
     // the persisted preference has to re-subscribe rather than re-sort what we already have —
@@ -133,7 +155,7 @@ class NotesListViewModel @Inject constructor(
             }
             .flowOn(Dispatchers.Default)
             .onEach { (settings, folders, previews, sortOrder) ->
-                allPreviews = previews
+                allPreviewsFlow.value = previews
                 val countByFolder = previews.groupingBy { it.folderId }.eachCount()
                 val folderPreviews = folders.map { folder ->
                     folder.toUi(notesAmount = countByFolder[folder.id] ?: 0)
@@ -151,6 +173,53 @@ class NotesListViewModel @Inject constructor(
                         sortOrder = sortOrder,
                         isLoading = false,
                     )
+                }
+            }
+            .launchIn(viewModelScope)
+
+        observeSearchQuery()
+    }
+
+    /**
+     * Search (the SEARCH bottom-bar tab).
+     *
+     * The query runs over [allPreviewsFlow] — the previews the list itself is built from — rather
+     * than over a second database query. Three consequences, all deliberate:
+     *
+     *  1. Correctness on HTML bodies. These previews are already plain text: `Note.toUi()` ran the
+     *     stored body through HtmlCompat for rows recorded as HTML. A SQL `content LIKE` would
+     *     instead scan the stored markup, matching tag and attribute names the user cannot see and
+     *     missing rendered words that inline markup splits (`he<b>llo</b>` renders as "hello" but
+     *     does not contain that substring).
+     *  2. Search and the list see the same set of notes, because there is exactly one query that
+     *     decides which rows exist for this screen and both read its output. (The folder chips are
+     *     a separate, list-only view filter applied in [visiblePreviews]; search deliberately spans
+     *     every folder, which is why it reads [allPreviewsFlow] and not the filtered slice.)
+     *  3. No extra parsing. The HTML→text conversion has already been paid for by the list; search
+     *     re-reads the result instead of repeating it.
+     *
+     * Cost model: one pass over every preview's title and body per settled keystroke, on
+     * Dispatchers.Default, with no I/O. Linear in total library text.
+     *
+     * Re-emitting on [allPreviewsFlow] (not just on the query) keeps an open result list live: an
+     * edit or delete elsewhere re-runs the current query immediately, without waiting out another
+     * debounce window.
+     */
+    @OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
+    private fun observeSearchQuery() {
+        combine(
+            searchQuery.debounce(SEARCH_DEBOUNCE_MS),
+            allPreviewsFlow,
+        ) { query, previews -> query to previews }
+            // mapLatest so a newer query cancels a scan still in flight; its result would only be
+            // overwritten anyway.
+            .mapLatest { (query, previews) ->
+                normalizeSearchText(query) to searchPreviews(previews, query)
+            }
+            .flowOn(Dispatchers.Default)
+            .onEach { (normalizedQuery, results) ->
+                _state.update {
+                    it.copy(searchResults = results, searchResultsQuery = normalizedQuery)
                 }
             }
             .launchIn(viewModelScope)
@@ -206,21 +275,23 @@ class NotesListViewModel @Inject constructor(
                 createNewNote()
             }
 
-            NotesListIntent.AllNotesClicked -> {
-                _state.update { it.copy(selectedBottomBarItem = BottomBarItem.ALL_NOTES) }
-            }
-            NotesListIntent.CalendarClicked -> {
-                _state.update { it.copy(selectedBottomBarItem = BottomBarItem.CALENDAR) }
-            }
+            NotesListIntent.AllNotesClicked -> selectBottomBarItem(BottomBarItem.ALL_NOTES)
+            NotesListIntent.CalendarClicked -> selectBottomBarItem(BottomBarItem.CALENDAR)
+            NotesListIntent.SearchClicked -> selectBottomBarItem(BottomBarItem.SEARCH)
+
             NotesListIntent.ProfileClicked -> {
-                // Profile is a destination pushed on top of this screen, not a tab this screen
-                // switches into, so selectedBottomBarItem deliberately stays on ALL_NOTES.
-                // Marking PROFILE selected would leave the person icon lit while the user is
-                // looking at the notes list again, having come back.
+                // Deliberately NOT selectBottomBarItem: Profile is a destination pushed on top of
+                // this screen, not a tab this screen switches into. Marking PROFILE selected would
+                // leave the person icon lit once the user backs out and is looking at the list.
                 viewModelScope.launch { _events.send(NotesListEvent.NavigateToProfile) }
             }
-            NotesListIntent.SearchClicked -> {
-                _state.update { it.copy(selectedBottomBarItem = BottomBarItem.SEARCH) }
+
+            is NotesListIntent.SearchQueryChanged -> {
+                // Two writes on purpose. The field itself is state, so it has to echo the
+                // keystroke immediately or typing would feel dropped; the matching is driven off
+                // searchQuery, where the debounce lives.
+                _state.update { it.copy(searchQuery = intent.query) }
+                searchQuery.value = intent.query
             }
 
             is NotesListIntent.CreateFolder -> {
@@ -260,6 +331,10 @@ class NotesListViewModel @Inject constructor(
                 viewModelScope.launch { notesRepository.setNoteFolder(intent.noteId, intent.folderId) }
             }
 
+            NotesListIntent.TrashClicked -> {
+                viewModelScope.launch { _events.send(NotesListEvent.NavigateToTrash) }
+            }
+
             is NotesListIntent.SortOrderSelected -> {
                 // Persist only. The new value comes back through the settings flow, which
                 // re-subscribes the notes query and re-emits the list (and the picker's state)
@@ -267,6 +342,27 @@ class NotesListViewModel @Inject constructor(
                 // in sync with what the database actually returns.
                 viewModelScope.launch { settingsRepository.setNotesSortOrder(intent.order) }
             }
+        }
+    }
+
+    /**
+     * Switches bottom-bar tab, dropping the search query on the way OUT of the Search tab. Leaving
+     * the tab is the user saying they are done searching, and a query left behind would keep the
+     * search pipeline re-running on every note change while a different tab is on screen.
+     *
+     * Opening a note from a result does not come through here — that is a navigation, not a tab
+     * switch — so returning from the editor still finds the query and its results in place.
+     */
+    private fun selectBottomBarItem(item: BottomBarItem) {
+        val leavingSearch = item != BottomBarItem.SEARCH
+        if (leavingSearch) searchQuery.value = ""
+        _state.update { current ->
+            current.copy(
+                selectedBottomBarItem = item,
+                searchQuery = if (leavingSearch) "" else current.searchQuery,
+                searchResults = if (leavingSearch) emptyList() else current.searchResults,
+                searchResultsQuery = if (leavingSearch) "" else current.searchResultsQuery,
+            )
         }
     }
 
