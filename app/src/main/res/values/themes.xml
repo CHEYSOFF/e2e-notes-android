@@ -23,9 +23,15 @@
              in both system themes: the app's first frame is the black unlock screen either way. -->
         <item name="android:windowSplashScreenBackground">@color/black</item>
         <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_moon</item>
-        <!-- Matches the 700ms of splash_moon; the platform cuts a splash animation off at 1000ms.
-             This attribute is only read on API 31/32 — from API 33 the platform measures the
-             AnimatedVectorDrawable itself. -->
-        <item name="android:windowSplashScreenAnimationDuration">700</item>
+        <!-- windowSplashScreenIconBackgroundColor is deliberately NOT set. It would put a filled
+             disc behind the moon in a colour the app does not otherwise use, and it shrinks the
+             icon: measured on a 420dpi device, setting it gives a 160dp visible circle, leaving it
+             unset gives 192dp. splash_moon is sized against the unset case. -->
+
+        <!-- Matches the 924ms of splash_moon's two heartbeats; the platform cuts a splash
+             animation off at 1000ms. This attribute is only read on API 31/32 — from API 33 the
+             platform measures the animated drawable itself, which is why splash_moon is a
+             non-looping (oneshot) AnimationDrawable and so has an end to measure. -->
+        <item name="android:windowSplashScreenAnimationDuration">924</item>
     </style>
 </resources>
