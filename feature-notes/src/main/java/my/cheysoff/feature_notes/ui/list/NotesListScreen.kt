@@ -2,6 +2,7 @@ package my.cheysoff.feature_notes.ui.list
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -33,10 +34,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CalendarToday
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -86,6 +89,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import my.cheysoff.core_domain.model.NotesSortOrder
 import my.cheysoff.core_ui.theme.AccentIndigo
 import my.cheysoff.core_ui.theme.AppBlack
 import my.cheysoff.core_ui.theme.BodyGrey
@@ -101,6 +105,8 @@ import my.cheysoff.feature_notes.model.list.HeaderLineUi
 import my.cheysoff.feature_notes.model.list.NotePreviewUi
 import my.cheysoff.feature_notes.model.list.NotesListIntent
 import my.cheysoff.feature_notes.model.list.NotesListScreenState
+import my.cheysoff.feature_notes.model.list.menuLabel
+import my.cheysoff.feature_notes.model.list.pillLabel
 import my.cheysoff.feature_notes.ui.folder.FolderChooser
 import my.cheysoff.feature_notes.ui.folder.FolderEditDialog
 import my.cheysoff.feature_notes.ui.folder.FolderRef
@@ -229,15 +235,25 @@ fun NotesListScreen(
                 HeaderLine(state.headerLine, state.statsLine)
             }
             item(span = StaggeredGridItemSpan.FullLine, contentType = "chips") {
-                FolderChips(
-                    folders = state.folderPreviews,
-                    selectedFolderId = state.selectedFolderId,
-                    onAllClick = { state.selectedFolderId?.let { onIntent(NotesListIntent.FolderClicked(it)) } },
-                    onFolderClick = { onIntent(NotesListIntent.FolderClicked(it)) },
-                    onCreateFolder = { showCreateFolder = true },
-                    onEditFolder = { editFolderTarget = it },
-                    onDeleteFolder = { deleteFolderTarget = it },
-                )
+                // The sort pill rides at the end of the chip row but OUTSIDE the chips' own
+                // horizontal scroll, so it stays on screen however many folders exist.
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(modifier = Modifier.weight(1f)) {
+                        FolderChips(
+                            folders = state.folderPreviews,
+                            selectedFolderId = state.selectedFolderId,
+                            onAllClick = { state.selectedFolderId?.let { onIntent(NotesListIntent.FolderClicked(it)) } },
+                            onFolderClick = { onIntent(NotesListIntent.FolderClicked(it)) },
+                            onCreateFolder = { showCreateFolder = true },
+                            onEditFolder = { editFolderTarget = it },
+                            onDeleteFolder = { deleteFolderTarget = it },
+                        )
+                    }
+                    SortPill(
+                        order = state.sortOrder,
+                        onSelect = { onIntent(NotesListIntent.SortOrderSelected(it)) },
+                    )
+                }
             }
 
             if (state.pinnedPreviews.isNotEmpty()) {
@@ -520,6 +536,83 @@ private fun Chip(
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp, vertical = 10.dp),
     )
+}
+
+/**
+ * The notes-list sort picker: a chip-sized pill showing the active order's short name, which
+ * opens a menu of all three orders. Styled as a sibling of [Chip] (same pill radius, same
+ * SurfaceDark ground, same type ramp) so it reads as part of the chip row - but it never takes
+ * the chips' selected/indigo fill, because it is a mode switch, not another filter.
+ */
+@Composable
+private fun SortPill(order: NotesSortOrder, onSelect: (NotesSortOrder) -> Unit) {
+    val sw = LocalConfiguration.current.screenWidthDp
+    var menuOpen by remember { mutableStateOf(false) }
+
+    Box(modifier = Modifier.padding(start = 8.dp, end = 4.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+            modifier = Modifier
+                .clip(RoundedCornerShape(percent = 50))
+                .background(SurfaceDark)
+                .clickable { menuOpen = true }
+                .padding(start = 11.dp, end = 14.dp, top = 10.dp, bottom = 10.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Default.SwapVert,
+                contentDescription = "Change sort order",
+                tint = IndigoTint,
+                modifier = Modifier.size((sw * 0.045f).dp),
+            )
+            Text(
+                text = order.pillLabel,
+                color = Color(0xFF8A8A8A),
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontSize = (sw * 0.038f).sp,
+                    fontWeight = FontWeight.Medium,
+                ),
+            )
+        }
+        DropdownMenu(
+            expanded = menuOpen,
+            onDismissRequest = { menuOpen = false },
+            containerColor = SurfaceDark,
+            shape = RoundedCornerShape(14.dp),
+        ) {
+            NotesSortOrder.entries.forEach { candidate ->
+                val active = candidate == order
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = candidate.menuLabel,
+                            color = if (active) IndigoTint else TitleGrey,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontWeight = if (active) FontWeight.Medium else FontWeight.Normal,
+                            ),
+                        )
+                    },
+                    // Every row reserves the trailing slot (a blank spacer when it is not the
+                    // active one) so all three labels stay left-aligned at the same x; otherwise
+                    // only the checked row would carry the icon's width and the menu would
+                    // re-lay-out each time the selection moved.
+                    trailingIcon = {
+                        if (active) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = null,
+                                tint = IndigoTint,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        } else {
+                            Spacer(Modifier.size(18.dp))
+                        }
+                    },
+                    onClick = { menuOpen = false; onSelect(candidate) },
+                )
+            }
+        }
+    }
 }
 
 @Composable
