@@ -1,5 +1,11 @@
 package my.cheysoff.feature_notes.ui.single
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.os.Build
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -34,19 +40,28 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBackIos
 import androidx.compose.material.icons.automirrored.outlined.FormatListBulleted
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.FileCopy
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FormatBold
 import androidx.compose.material.icons.outlined.FormatItalic
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.TextFields
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -72,6 +87,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -95,14 +111,18 @@ import my.cheysoff.core_ui.theme.AccentIndigo
 import my.cheysoff.core_ui.theme.AppBlack
 import my.cheysoff.core_ui.theme.BodyGrey
 import my.cheysoff.core_ui.theme.LocalSpacing
+import my.cheysoff.core_ui.theme.SurfaceDark
 import my.cheysoff.core_ui.theme.TitleGrey
 import my.cheysoff.core_ui.theme.ToolbarDark
+import my.cheysoff.core_domain.model.TrashPolicy
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_ui.theme.folderAccentColor
 import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.feature_notes.model.single.ChecklistItem
 import my.cheysoff.feature_notes.model.single.SingleNoteIntent
 import my.cheysoff.feature_notes.model.single.SingleNoteScreenState
+import my.cheysoff.feature_notes.model.single.buildNoteShareText
+import my.cheysoff.feature_notes.model.single.noteShareTitle
 import androidx.activity.compose.BackHandler
 import my.cheysoff.feature_notes.ui.folder.FolderChooser
 import my.cheysoff.feature_notes.ui.folder.FolderRef
@@ -122,6 +142,8 @@ fun SingleNoteScreen(
 ) {
     val focusManager = LocalFocusManager.current
     val isImeVisible = WindowInsets.isImeVisible
+    // Only used by the overflow actions, which start an activity / write the clipboard.
+    val context = LocalContext.current
 
     val accent = remember(state.folderId, state.folders) { editorAccent(state.folderId, state.folders) }
     val richTextState = rememberRichTextState()
@@ -131,11 +153,11 @@ fun SingleNoteScreen(
     // never bumps updatedAt, which orders the list). Deliberately NOT a Compose state — writing one
     // per keystroke would recompose this whole screen, which is the cost this debounce removes.
     val contentDirty = remember { AtomicBoolean(false) }
-    // The two lambdas below are remembered so they keep one identity for the life of the
-    // composition. The compiler will not memoize them on its own — they capture RichTextState and
-    // AtomicBoolean, both unstable — so unmemoized every recomposition handed EditorTopBar a
-    // brand-new onBack, which is one unstable argument fewer now. (It is not yet skippable:
-    // onUndo/onRedo and the onIntent it receives are still rebuilt each pass.)
+    // The lambdas below are remembered so they keep one identity for the life of the composition.
+    // The compiler will not memoize them on its own — they capture RichTextState and AtomicBoolean,
+    // both unstable — so unmemoized every recomposition handed EditorTopBar brand-new
+    // onBack/onUndo/onRedo. (It is still not skippable: the onIntent it receives is rebuilt each
+    // pass.)
     //
     // onIntent is a plain parameter that the caller rebuilds inline on each of ITS recompositions,
     // so capturing it directly inside a remember would pin the very first instance forever.
@@ -159,6 +181,22 @@ fun SingleNoteScreen(
         {
             flushContent()
             currentOnIntent(SingleNoteIntent.BackClicked)
+        }
+    }
+    // Undo/redo flush first for the same reason back does: the body reaches the ViewModel only
+    // after the serialize debounce, so without a flush the newest keystrokes would not be on the
+    // history stack at all. Undo would then take back some older edit instead — and if that edit
+    // was a body one, the re-seed it triggers would discard the un-forwarded characters with it.
+    val onUndo = remember {
+        {
+            flushContent()
+            currentOnIntent(SingleNoteIntent.Undo)
+        }
+    }
+    val onRedo = remember {
+        {
+            flushContent()
+            currentOnIntent(SingleNoteIntent.Redo)
         }
     }
 
@@ -199,9 +237,19 @@ fun SingleNoteScreen(
     // such text to setHtml would parse stray "<"/">" as tags and drop characters, so plain text
     // goes through setText instead. The row's recorded contentFormat decides — never a guess at
     // the string, which used to mistake "<john@example.com>" for markup and eat it.
-    LaunchedEffect(state.isLoaded) {
+    //
+    // The same effect also re-seeds the editor after an undo/redo of the body: the ViewModel bumps
+    // contentRevision when (and only when) it replaces `content` itself, so restarting on it feeds
+    // the restored body back in through the very same drop(1) path that suppresses the seeding
+    // echo. contentRevision does not move when the editor reports its own content, so ordinary
+    // typing never restarts this effect and never moves the cursor.
+    LaunchedEffect(state.isLoaded, state.contentRevision) {
         if (state.isLoaded) {
             richTextState.config.listIndent = 18
+            // The editor is about to be replaced wholesale from state, so a pending "not yet
+            // forwarded" mark belongs to content that no longer exists. Clearing it stops a later
+            // flush from handing this programmatic seed back as if it were the user's own edit.
+            contentDirty.set(false)
             if (state.contentFormat == NoteContentFormat.HTML) {
                 richTextState.setHtml(state.content)
             } else {
@@ -232,12 +280,27 @@ fun SingleNoteScreen(
                 isPinned = state.isPinned,
                 isFavorite = state.isFavorite,
                 accent = accent,
-                canUndo = richTextState.history.canUndo,
-                canRedo = richTextState.history.canRedo,
-                onUndo = { richTextState.history.undo() },
-                onRedo = { richTextState.history.redo() },
+                // The ViewModel owns the history for the whole editor — title, body and checklist
+                // in one stack — so these no longer read RichTextState's own (body-only) history.
+                canUndo = state.canUndo,
+                canRedo = state.canRedo,
+                onUndo = onUndo,
+                onRedo = onRedo,
                 onBack = onBack,
                 onIntent = onIntent,
+                // Flush first: the ViewModel builds the copy from _state, and ContentChanged
+                // updates _state synchronously, so by the time DuplicateNote is handled the body
+                // it reads is the one on screen rather than one debounce behind.
+                onDuplicate = {
+                    flushContent()
+                    currentOnIntent(SingleNoteIntent.DuplicateNote)
+                },
+                // These two read the note through noteAsPlainText() at click time instead. They
+                // deliberately do NOT go via a flush + `state`: a flush only reaches the
+                // ViewModel, and this composition still holds the pre-flush `state`, so reading
+                // it here would export the note as it was up to a debounce ago.
+                onCopyText = { copyNoteToClipboard(context, noteAsPlainText(state, richTextState)) },
+                onShare = { shareNote(context, state.title, noteAsPlainText(state, richTextState)) },
             )
         },
         floatingActionButton = {
@@ -483,6 +546,9 @@ private fun EditorTopBar(
     onRedo: () -> Unit,
     onBack: () -> Unit,
     onIntent: (SingleNoteIntent) -> Unit,
+    onDuplicate: () -> Unit,
+    onCopyText: () -> Unit,
+    onShare: () -> Unit,
 ) {
     val spacing = LocalSpacing.current
     Row(
@@ -507,9 +573,167 @@ private fun EditorTopBar(
                 "Favorite",
                 if (isFavorite) accent else BodyGrey,
             ) { onIntent(SingleNoteIntent.ToggleFavorite) }
-            TopIcon(Icons.Outlined.MoreVert, "More", BodyGrey) { onIntent(SingleNoteIntent.MoreClicked) }
+            OverflowMenu(
+                accent = accent,
+                onDuplicate = onDuplicate,
+                onCopyText = onCopyText,
+                onShare = onShare,
+                onIntent = onIntent,
+            )
         }
     }
+}
+
+/**
+ * The top bar's three-dot menu.
+ *
+ * Styled after the notes list's sort menu — same [SurfaceDark] ground, same 14.dp radius, same
+ * [TitleGrey] labels — so the app has one menu look rather than two. It departs from that menu in
+ * one place: the row icons take the note's [accent] (the folder color, indigo when unfiled),
+ * because every other affordance in this editor already does.
+ *
+ * "Move to Trash" is the only route a user has to deleting a note; Trash then offers Restore and
+ * Delete forever. It is separated from the rest by a divider and confirms before acting, because
+ * it is the one row here that changes what is in the library rather than just copying it out.
+ * The dialog says "Trash", not "delete", because that is what the intent does — the note keeps its
+ * content and is restorable for [TrashPolicy.RETENTION_DAYS] days.
+ *
+ * Menu state is local because it is a property of this bar being on screen: the ViewModel is
+ * retained across configuration changes and would otherwise re-open the menu after a rotation.
+ */
+@Composable
+private fun OverflowMenu(
+    accent: Color,
+    onDuplicate: () -> Unit,
+    onCopyText: () -> Unit,
+    onShare: () -> Unit,
+    onIntent: (SingleNoteIntent) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+
+    // A DropdownMenu positions itself against the layout node it sits in, so it is wrapped in a
+    // Box together with the button it belongs to. That is the anchoring pattern Material's own
+    // docs use, and it is what lines the menu up under the three-dot icon.
+    Box {
+        TopIcon(Icons.Outlined.MoreVert, "More options", if (open) accent else BodyGrey) {
+            open = true
+        }
+        DropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            containerColor = SurfaceDark,
+            shape = RoundedCornerShape(14.dp),
+        ) {
+            OverflowItem(Icons.Outlined.FileCopy, "Duplicate", accent) { open = false; onDuplicate() }
+            OverflowItem(Icons.Outlined.ContentCopy, "Copy text", accent) { open = false; onCopyText() }
+            OverflowItem(Icons.Outlined.Share, "Share", accent) { open = false; onShare() }
+            HorizontalDivider(color = ToolbarDark)
+            // Tinted BodyGrey rather than the note's accent: this row is not one of the copy-out
+            // actions above it and should not read as another of them.
+            OverflowItem(Icons.Outlined.DeleteOutline, "Move to Trash", BodyGrey) {
+                open = false
+                confirmDelete = true
+            }
+        }
+    }
+
+    if (confirmDelete) {
+        AlertDialog(
+            containerColor = SurfaceDark,
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Move to Trash?", color = TitleGrey) },
+            text = {
+                Text(
+                    "You can restore it from Trash for the next ${TrashPolicy.RETENTION_DAYS} days.",
+                    color = BodyGrey,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDelete = false
+                    onIntent(SingleNoteIntent.DeleteNote)
+                }) { Text("Move to Trash", color = AccentIndigo) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) { Text("Cancel", color = BodyGrey) }
+            },
+        )
+    }
+}
+
+@Composable
+private fun OverflowItem(icon: ImageVector, label: String, accent: Color, onClick: () -> Unit) {
+    DropdownMenuItem(
+        text = {
+            Text(
+                text = label,
+                color = TitleGrey,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        },
+        // Null description on purpose: the label beside it already names the row, and a described
+        // icon would have the action announced twice.
+        leadingIcon = {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = accent,
+                modifier = Modifier.size(18.dp),
+            )
+        },
+        onClick = onClick,
+    )
+}
+
+/**
+ * The note as text for the clipboard and for share targets.
+ *
+ * The body comes from the rich-text editor's own `annotatedString.text` — the characters currently
+ * on screen — rather than from `state.content`, which holds HTML for every note the editor has
+ * written to. Nothing here parses that HTML: taking the editor's text avoids the round trip
+ * entirely, and it is the same source the word count in the meta line already uses.
+ */
+private fun noteAsPlainText(state: SingleNoteScreenState, richTextState: RichTextState): String =
+    buildNoteShareText(
+        title = state.title,
+        plainBody = richTextState.annotatedString.text,
+        checklist = state.checklist,
+    )
+
+/**
+ * Puts [text] on the system clipboard.
+ *
+ * Android 13 (TIRAMISU) and up show their own confirmation UI for every clipboard write, so an app
+ * toast there would be a second, redundant one — hence the version check. Below 13 nothing else
+ * tells the user anything happened.
+ */
+private fun copyNoteToClipboard(context: Context, text: String) {
+    if (text.isEmpty()) {
+        Toast.makeText(context, "Nothing to copy — this note is empty", Toast.LENGTH_SHORT).show()
+        return
+    }
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+    clipboard.setPrimaryClip(ClipData.newPlainText("Note", text))
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+        Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+    }
+}
+
+/** Hands the note to any app that accepts plain text, through the system share sheet. */
+private fun shareNote(context: Context, title: String, text: String) {
+    if (text.isEmpty()) {
+        Toast.makeText(context, "Nothing to share — this note is empty", Toast.LENGTH_SHORT).show()
+        return
+    }
+    val send = Intent(Intent.ACTION_SEND).apply {
+        // text/plain, and the body is plain text: a share that emitted the stored "<p>…</p>" would
+        // paste raw markup into whatever the user picked.
+        type = "text/plain"
+        putExtra(Intent.EXTRA_SUBJECT, noteShareTitle(title))
+        putExtra(Intent.EXTRA_TEXT, text)
+    }
+    context.startActivity(Intent.createChooser(send, "Share note"))
 }
 
 @Composable
