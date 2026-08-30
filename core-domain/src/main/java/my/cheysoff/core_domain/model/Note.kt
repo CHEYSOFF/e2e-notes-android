@@ -14,4 +14,10 @@ data class Note(
     val folderId: String? = null,
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L,
+    // Trash tombstone. A deleted note keeps its row (and therefore its content, pin, favorite and
+    // folder) so Restore is lossless; it is purged for good after TrashPolicy.RETENTION_MILLIS.
+    // Every ordinary read query filters `isDeleted = 0`, so a Note reaching the notes list or the
+    // editor always has isDeleted = false — only the Trash queries return the other kind.
+    val isDeleted: Boolean = false,
+    val deletedAt: Long? = null,
 )
