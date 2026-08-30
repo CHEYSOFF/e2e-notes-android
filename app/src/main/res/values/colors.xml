@@ -8,8 +8,10 @@
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
 
-    <!-- The window / Recents-card colour, light-theme value; values-night/colors.xml has the dark
-         one. The app's own UI is dark-only, so on a device set to light this is the one surface
-         that turns white. -->
+    <!-- The Recents-card colour ONLY (android:colorBackground); the window background is pinned
+         black separately. Light-theme value here, dark one in values-night/colors.xml.
+         The app's own UI is dark on both themes, so on a device set to light this is the single
+         surface in Mañana that turns white: you close a black app and the switcher shows a white
+         card. Setting this to #FF000000 makes the card match the app in every theme. -->
     <color name="brand_window">#FFFFFFFF</color>
 </resources>

@@ -2,9 +2,13 @@
 <resources>
 
     <style name="Theme.Notes" parent="android:Theme.Material.Light.NoActionBar">
-        <!-- Opaque window background so cold start and screen transitions don't flash through
-             (Compose draws the dark UI on top of this window). -->
-        <item name="android:windowBackground">@color/brand_window</item>
+        <!-- Black in EVERY system theme, deliberately. This is what shows during cold start and
+             screen transitions, and the app's UI is dark on both, so a light-theme value here
+             would be a white flash before a black app. It is currently masked by the splash
+             (which is also black unconditionally), but relying on that would make the flash
+             reappear the moment the splash timing changed. It is NOT the Recents colour — see
+             android:colorBackground below, which is the attribute that drives that card. -->
+        <item name="android:windowBackground">@color/black</item>
 
         <!-- The Recents placeholder. MainActivity disables Recents screenshots to keep note
              plaintext out of the app switcher, and the card the system draws instead is a flat
