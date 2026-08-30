@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      The one and only permission this feature adds.
+
+      Declared HERE rather than in app/src/main/AndroidManifest.xml on purpose: the permission
+      exists because of this module and disappears with it, so a future "offline flavour" that
+      drops :feature-pairing drops the permission with it and needs no manifest edit.
+
+      Deliberately NOT declared: INTERNET. Pairing is a screen-to-camera exchange between two
+      phones in the same room; it opens no socket. INTERNET belongs to Phase 3 (the sync engine),
+      and adding it early would retire the "this app talks to nobody" property months before
+      anything actually needs it.
+    -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <!--
+      Both pairing roles have to scan (device A scans QR1, device B scans QR2), so the feature
+      genuinely needs a camera. `required="false"` keeps the app installable on a camera-less
+      device (an emulator image, some tablets) where every other screen still works; the
+      runtime check in the scanner reports the absence instead of crashing.
+    -->
+    <uses-feature
+        android:name="android.hardware.camera.any"
+        android:required="false" />
+
+</manifest>
