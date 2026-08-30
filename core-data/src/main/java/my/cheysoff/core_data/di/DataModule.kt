@@ -49,6 +49,15 @@ abstract class DataModule {
             // post-unlock (nav gates on the auth screen), so currentPassphrase() is non-null here.
             // Migration preserves data: a migrated install reuses the legacy passphrase, so the DB
             // opens with the same key it was encrypted with.
+            // If the secure-unlock state had to be discarded (Keystore key gone — e.g. a restore
+            // onto a new device brings back the prefs file but never the non-exportable master
+            // key), every wrap of the old passphrase is gone with it, so any surviving notes.db is
+            // permanently undecryptable. Drop it, or SQLCipher fails with "file is not a database"
+            // on every launch with no recovery path. Mirrors the old wasPassphraseReset handling.
+            if (secureUnlockManager.wasStateReset) {
+                context.deleteDatabase(EncryptionManager.DATABASE_NAME)
+            }
+
             val passphrase = secureUnlockManager.currentPassphrase()
                 ?: throw IllegalStateException("Database requested while locked; unlock must precede DB access")
 
