@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ksp)
 }
 
 kotlin {
@@ -10,7 +11,7 @@ kotlin {
 }
 
 android {
-    namespace = "my.cheysoff.core_ui"
+    namespace = "my.cheysoff.feature_settings"
     compileSdk = 36
 
     defaultConfig {
@@ -39,19 +40,30 @@ android {
 }
 
 dependencies {
-    // core-ui owns the display names for a few domain enums (see model/NotesSortOrderLabels.kt),
-    // so it needs the domain types. core-domain depends on nothing in this project, so this
-    // cannot cycle.
+    implementation(project(":core-ui"))
     implementation(project(":core-domain"))
+    // The biometric toggle reads and clears the biometric wrap directly (SecureUnlockManager) and
+    // asks the device whether biometrics are usable at all (AuthRepository).
+    implementation(project(":core-crypto"))
+    // ...and turns biometric unlock ON through feature-auth's BiometricEnroller, the same path the
+    // post-PIN-setup enrollment uses. This is the only reason a feature module depends on another
+    // feature module: duplicating the enrollment sequence is the alternative, and it is worse.
+    implementation(project(":feature-auth"))
 
+    implementation(libs.androidx.core.ktx)
+    // For FragmentActivity, which the biometric prompt must be hosted by.
+    implementation(libs.androidx.appcompat)
+    implementation(libs.material)
+    implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
+    implementation(libs.androidx.compose.ui.tooling.preview)
+    implementation(libs.androidx.compose.ui.tooling)
     implementation(libs.androidx.compose.material3)
-
-    implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.appcompat)
-    implementation(libs.material)
+    implementation(libs.androidx.compose.material.icons.extended)
+    implementation(libs.hilt.android)
+    ksp(libs.hilt.compiler)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

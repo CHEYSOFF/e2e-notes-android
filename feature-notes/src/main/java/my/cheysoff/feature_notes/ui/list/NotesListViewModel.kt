@@ -10,7 +10,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.launchIn
@@ -45,6 +44,9 @@ sealed class NotesListEvent {
      * with it set would make that note deletable by simply emptying it and backing out.
      */
     data class NavigateToNote(val noteId: String, val isNew: Boolean = false) : NotesListEvent()
+
+    /** The Profile tab was tapped — open the settings screen on top of the list. */
+    data object NavigateToProfile : NotesListEvent()
 }
 
 /** Carries the off-main-thread result (previews already parsed) to the main-thread state update. */
@@ -81,9 +83,10 @@ class NotesListViewModel @Inject constructor(
             notesRepository.getNotes(order).map { notes -> order to notes }
         }
 
-    // Declared before init: the init coroutine can resume synchronously (Main.immediate + a
-    // DataStore flow that emits its first value without suspending), so pickMotivationalLine()
-    // may run during construction — this list must already be initialized by then.
+    // Declared before init: the header-settings collector in init can run synchronously
+    // (Main.immediate + a DataStore flow that emits its first value without suspending), so
+    // pickMotivationalLine() may run during construction — this list must already be
+    // initialized by then.
     private val dailyPhrases = listOf(
         HeaderLineUi("One thing", "at a time."),
         HeaderLineUi("Tomorrow", "starts here."),
@@ -93,11 +96,20 @@ class NotesListViewModel @Inject constructor(
     )
 
     init {
-        // Pick the motivational line once per screen open (random greeting/phrase among the enabled).
-        viewModelScope.launch {
-            val settings = settingsRepository.headerSettings.first()
-            _state.update { it.copy(headerLine = pickMotivationalLine(settings)) }
-        }
+        // Pick the motivational line once per screen open (random greeting/phrase among the
+        // enabled) — and re-pick whenever the header settings themselves change.
+        //
+        // Re-picking on a settings change is the point: the settings screen is a separate
+        // destination pushed ON TOP of this one, so this ViewModel survives the round trip and a
+        // one-shot pick would leave a greeting on screen after the user had just switched
+        // greetings off. It does not make the line reshuffle at random: headerSettings is
+        // distinctUntilChanged, so unrelated DataStore writes (the sort order, say) do not
+        // re-emit here.
+        settingsRepository.headerSettings
+            .onEach { settings ->
+                _state.update { it.copy(headerLine = pickMotivationalLine(settings)) }
+            }
+            .launchIn(viewModelScope)
 
         // Stats is a separate, always-visible sub-line (not part of the random rotation) and tracks
         // the live note counts.
@@ -201,7 +213,11 @@ class NotesListViewModel @Inject constructor(
                 _state.update { it.copy(selectedBottomBarItem = BottomBarItem.CALENDAR) }
             }
             NotesListIntent.ProfileClicked -> {
-                _state.update { it.copy(selectedBottomBarItem = BottomBarItem.PROFILE) }
+                // Profile is a destination pushed on top of this screen, not a tab this screen
+                // switches into, so selectedBottomBarItem deliberately stays on ALL_NOTES.
+                // Marking PROFILE selected would leave the person icon lit while the user is
+                // looking at the notes list again, having come back.
+                viewModelScope.launch { _events.send(NotesListEvent.NavigateToProfile) }
             }
             NotesListIntent.SearchClicked -> {
                 _state.update { it.copy(selectedBottomBarItem = BottomBarItem.SEARCH) }
