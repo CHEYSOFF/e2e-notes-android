@@ -15,6 +15,12 @@ abstract class NoteDatabase : RoomDatabase() {
     abstract val folderDao: FolderDao
 
     companion object {
+        /**
+         * On-disk filename of the encrypted database. Existing installs already have a file with
+         * this exact name, so it must never change — renaming it would orphan every user's notes.
+         */
+        const val DATABASE_NAME = "notes.db"
+
         // v1 -> v2: add isFavorite + createdAt/updatedAt. Additive, so existing notes survive.
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
