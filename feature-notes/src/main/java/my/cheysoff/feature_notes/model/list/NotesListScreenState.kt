@@ -2,6 +2,8 @@ package my.cheysoff.feature_notes.model.list
 
 import androidx.compose.runtime.Immutable
 import my.cheysoff.core_domain.model.NotesSortOrder
+import java.time.LocalDate
+import java.time.YearMonth
 
 @Immutable
 data class NotesListScreenState(
@@ -29,6 +31,27 @@ data class NotesListScreenState(
      * means the same thing in both cases.
      */
     val searchResultsQuery: String = "",
+
+    // --- Calendar tab ---
+    /**
+     * The month the grid is showing. Null until the first calendar state emission, which is what
+     * lets the screen tell "not computed yet" from "computed, and this month is empty" — the same
+     * distinction [searchResultsQuery] draws for search. The ViewModel seeds it from the clock on
+     * the first emission rather than at construction, so the value cannot be a stale month if the
+     * ViewModel outlives midnight.
+     */
+    val calendarMonth: YearMonth? = null,
+    /** The day whose notes are listed under the grid. */
+    val calendarSelectedDay: LocalDate? = null,
+    /** Note count per day, for every day that has any. Days absent from the map have none. */
+    val calendarCounts: Map<LocalDate, Int> = emptyMap(),
+    /** The notes on [calendarSelectedDay], in the list's own order. */
+    val calendarDayNotes: List<NotePreviewUi> = emptyList(),
+    /**
+     * Notes with no usable timestamp, which therefore appear on no day. Surfaced rather than
+     * dropped: a note that is invisible in every view is indistinguishable from a lost note.
+     */
+    val calendarUndatedCount: Int = 0,
 )
 
 enum class BottomBarItem {
