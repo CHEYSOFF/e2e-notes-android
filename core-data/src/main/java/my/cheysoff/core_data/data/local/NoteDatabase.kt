@@ -61,7 +61,11 @@ abstract class NoteDatabase : RoomDatabase() {
                 // Collect first, then update: mutating the table while its cursor is open is not
                 // something SQLite guarantees anything sensible about.
                 val htmlIds = mutableListOf<String>()
-                db.query("SELECT id, content FROM notes").use { cursor ->
+                // Read only a PREFIX of each body. The classifier is anchored, so it never looks
+                // past the first tag, while "SELECT content" would stream every note through a
+                // ~2MB CursorWindow — one pasted document over that limit throws, and a throw in
+                // here rolls the migration back on every launch, permanently.
+                db.query("SELECT id, substr(content, 1, 256) FROM notes").use { cursor ->
                     while (cursor.moveToNext()) {
                         val content = cursor.getString(1) ?: continue
                         if (looksLikeEditorHtml(content)) htmlIds += cursor.getString(0)

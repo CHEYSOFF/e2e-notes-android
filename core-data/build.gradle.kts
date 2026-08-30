@@ -10,8 +10,11 @@ kotlin {
     }
 }
 
-// Required by @Database(exportSchema = true): Room writes the generated schema JSON here so
-// migrations become testable (MigrationTestHelper) and schema drift shows up in review diffs.
+// Required by @Database(exportSchema = true): Room writes the generated schema JSON here, so
+// schema drift shows up in review diffs and FUTURE migrations become testable. Not testable yet:
+// MigrationTestHelper needs the STARTING version's schema, and export only began at v5, so the
+// earliest coverable step is 5 -> 6. Wiring it up will also need room-testing on the androidTest
+// classpath and schemas/ registered as an androidTest asset dir; neither is set up.
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }

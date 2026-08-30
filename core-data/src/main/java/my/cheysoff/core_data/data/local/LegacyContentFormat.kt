@@ -12,13 +12,17 @@ package my.cheysoff.core_data.data.local
  * Instead this is ANCHORED and WHITELISTED: content counts as editor HTML only when, after
  * leading whitespace, it *begins* with a tag whose name is one the rich-text editor actually
  * emits. `RichTextState.toHtml()` always opens with a block element, so every genuinely-HTML row
- * passes, while prose that merely mentions an angle-bracketed word mid-sentence does not — a
- * legacy note would have to literally start with "<p>" or "<h1>" to be misread.
+ * passes, while prose that merely mentions an angle-bracketed word mid-sentence does not.
  *
- * The residual error is therefore a false NEGATIVE: an HTML note classified as plain shows its
- * raw markup. That is ugly, immediately obvious, and losslessly recoverable — the opposite of the
- * silent, permanent truncation a false positive causes. Given the asymmetry, biasing every
- * uncertain row toward `plain` is the only defensible default for a table holding real notes.
+ * Anchoring shrinks the false-positive surface; it does NOT eliminate it. Prose that literally
+ * begins with a whitelisted tag — "<p> is the paragraph tag", "<br> is a line break" — is still
+ * classified as HTML and will be truncated by setHtml(). That residual case is accepted only
+ * because it requires a note to open with markup it is talking about, which is rare in a way that
+ * mid-sentence angle brackets are not.
+ *
+ * Everywhere the call is genuinely uncertain, this errs toward `plain`, because the two errors are
+ * not symmetric: a false negative shows raw markup (ugly, immediately obvious, losslessly
+ * recoverable) while a false positive silently and permanently truncates a real note.
  */
 internal fun looksLikeEditorHtml(content: String): Boolean {
     val trimmed = content.trimStart()
@@ -29,6 +33,11 @@ internal fun looksLikeEditorHtml(content: String): Boolean {
     var end = 1
     while (end < trimmed.length && trimmed[end].isLetterOrDigit()) end++
     if (end == 1) return false
+    // The name ran to the end of the content, so there is no delimiter to inspect and nothing
+    // closed the tag: "<div" is prose, not markup. Without this guard the read below is out of
+    // bounds, and since this runs inside MIGRATION_4_5 the throw would abort the migration on
+    // every launch — leaving the notes intact on disk but permanently unreachable.
+    if (end >= trimmed.length) return false
 
     // The name must actually terminate the tag; "<see attached spec>" must not read as tag "see"
     // with attributes. Only ">", "/" (self-closing) or whitespace-then-attributes qualify, and
@@ -40,9 +49,18 @@ internal fun looksLikeEditorHtml(content: String): Boolean {
 }
 
 // Block-level elements RichTextState.toHtml() can start its output with. Kept intentionally
-// narrow: adding inline tags here would widen the false-positive surface for no real gain, since
-// the editor never emits a bare inline element as the first thing in a document.
+// narrow: every extra name is false-positive surface, and a name that the editor cannot actually
+// lead with buys no recall in exchange.
+//
+// Deliberately absent, and why:
+//  - "html"/"body": toHtml() emits a document FRAGMENT, not a whole document. The block tags
+//    listed below are only reachable as the first tag if nothing wraps them, so listing a wrapper
+//    alongside them would be self-contradictory.
+//  - "li": a list item is always nested inside "ul"/"ol", both of which are already here, so it
+//    can never be the first tag of a well-formed document.
+// If either judgement is wrong the cost is a false negative — the note shows its raw markup and
+// can be fixed by hand — which is the direction this classifier is supposed to fail in.
 private val EDITOR_BLOCK_TAGS = setOf(
     "p", "div", "h1", "h2", "h3", "h4", "h5", "h6",
-    "ul", "ol", "li", "blockquote", "pre", "br", "body", "html",
+    "ul", "ol", "blockquote", "pre", "br",
 )

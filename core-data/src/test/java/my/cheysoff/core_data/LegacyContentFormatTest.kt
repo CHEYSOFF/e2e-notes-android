@@ -55,4 +55,41 @@ class LegacyContentFormatTest {
         // "p" is whitelisted, but "please" is not — the name has to terminate the tag.
         assertFalse(looksLikeEditorHtml("<please review> the draft"))
     }
+
+    /**
+     * Regression: the tag-name scan can run to the end of the string, leaving no delimiter to
+     * read. This threw StringIndexOutOfBoundsException, and because the classifier runs inside
+     * MIGRATION_4_5 the throw rolled the migration back on every launch — the notes stayed on
+     * disk but the app could never open the database again. Only PLAIN rows can have this shape
+     * (real markup always contains a ">"), i.e. exactly the rows the migration walks.
+     */
+    @Test
+    fun `an unterminated tag name does not throw and is not html`() {
+        assertFalse(looksLikeEditorHtml("<div"))
+        assertFalse(looksLikeEditorHtml("<pre"))
+        assertFalse(looksLikeEditorHtml("<h1"))
+        assertFalse(looksLikeEditorHtml("<33"))
+        assertFalse(looksLikeEditorHtml("\n  <html"))
+        assertFalse(looksLikeEditorHtml("<p"))
+    }
+
+    /** Tags the editor cannot lead its output with are off the whitelist, so prose may use them. */
+    @Test
+    fun `wrapper and nested-only tags are not treated as a document start`() {
+        assertFalse(looksLikeEditorHtml("<html> is the root element"))
+        assertFalse(looksLikeEditorHtml("<body> language matters"))
+        assertFalse(looksLikeEditorHtml("<li> must live in a <ul>"))
+    }
+
+    /**
+     * Pins the KNOWN residual false positive rather than pretending it does not exist: prose that
+     * literally opens with a whitelisted tag is still read as HTML. Anchoring shrinks this surface
+     * to notes that begin by naming a tag; it does not remove it. If the classifier is ever
+     * tightened further, these assertions are the ones that should flip.
+     */
+    @Test
+    fun `prose that opens with a whitelisted tag is a known false positive`() {
+        assertTrue(looksLikeEditorHtml("<p> is the paragraph tag"))
+        assertTrue(looksLikeEditorHtml("<br> is a line break"))
+    }
 }
