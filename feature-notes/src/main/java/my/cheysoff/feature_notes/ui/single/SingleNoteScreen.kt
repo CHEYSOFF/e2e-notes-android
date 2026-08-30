@@ -1,5 +1,11 @@
 package my.cheysoff.feature_notes.ui.single
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.os.Build
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -34,14 +40,19 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBackIos
 import androidx.compose.material.icons.automirrored.outlined.FormatListBulleted
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.FileCopy
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FormatBold
 import androidx.compose.material.icons.outlined.FormatItalic
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.TextFields
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -72,6 +83,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -95,6 +107,7 @@ import my.cheysoff.core_ui.theme.AccentIndigo
 import my.cheysoff.core_ui.theme.AppBlack
 import my.cheysoff.core_ui.theme.BodyGrey
 import my.cheysoff.core_ui.theme.LocalSpacing
+import my.cheysoff.core_ui.theme.SurfaceDark
 import my.cheysoff.core_ui.theme.TitleGrey
 import my.cheysoff.core_ui.theme.ToolbarDark
 import my.cheysoff.core_domain.model.Folder
@@ -103,6 +116,8 @@ import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.feature_notes.model.single.ChecklistItem
 import my.cheysoff.feature_notes.model.single.SingleNoteIntent
 import my.cheysoff.feature_notes.model.single.SingleNoteScreenState
+import my.cheysoff.feature_notes.model.single.buildNoteShareText
+import my.cheysoff.feature_notes.model.single.noteShareTitle
 import androidx.activity.compose.BackHandler
 import my.cheysoff.feature_notes.ui.folder.FolderChooser
 import my.cheysoff.feature_notes.ui.folder.FolderRef
@@ -122,6 +137,8 @@ fun SingleNoteScreen(
 ) {
     val focusManager = LocalFocusManager.current
     val isImeVisible = WindowInsets.isImeVisible
+    // Only used by the overflow actions, which start an activity / write the clipboard.
+    val context = LocalContext.current
 
     val accent = remember(state.folderId, state.folders) { editorAccent(state.folderId, state.folders) }
     val richTextState = rememberRichTextState()
@@ -238,6 +255,19 @@ fun SingleNoteScreen(
                 onRedo = { richTextState.history.redo() },
                 onBack = onBack,
                 onIntent = onIntent,
+                // Flush first: the ViewModel builds the copy from _state, and ContentChanged
+                // updates _state synchronously, so by the time DuplicateNote is handled the body
+                // it reads is the one on screen rather than one debounce behind.
+                onDuplicate = {
+                    flushContent()
+                    currentOnIntent(SingleNoteIntent.DuplicateNote)
+                },
+                // These two read the note through noteAsPlainText() at click time instead. They
+                // deliberately do NOT go via a flush + `state`: a flush only reaches the
+                // ViewModel, and this composition still holds the pre-flush `state`, so reading
+                // it here would export the note as it was up to a debounce ago.
+                onCopyText = { copyNoteToClipboard(context, noteAsPlainText(state, richTextState)) },
+                onShare = { shareNote(context, state.title, noteAsPlainText(state, richTextState)) },
             )
         },
         floatingActionButton = {
@@ -483,6 +513,9 @@ private fun EditorTopBar(
     onRedo: () -> Unit,
     onBack: () -> Unit,
     onIntent: (SingleNoteIntent) -> Unit,
+    onDuplicate: () -> Unit,
+    onCopyText: () -> Unit,
+    onShare: () -> Unit,
 ) {
     val spacing = LocalSpacing.current
     Row(
@@ -507,9 +540,129 @@ private fun EditorTopBar(
                 "Favorite",
                 if (isFavorite) accent else BodyGrey,
             ) { onIntent(SingleNoteIntent.ToggleFavorite) }
-            TopIcon(Icons.Outlined.MoreVert, "More", BodyGrey) { onIntent(SingleNoteIntent.MoreClicked) }
+            OverflowMenu(
+                accent = accent,
+                onDuplicate = onDuplicate,
+                onCopyText = onCopyText,
+                onShare = onShare,
+            )
         }
     }
+}
+
+/**
+ * The top bar's three-dot menu.
+ *
+ * Styled after the notes list's sort menu — same [SurfaceDark] ground, same 14.dp radius, same
+ * [TitleGrey] labels — so the app has one menu look rather than two. It departs from that menu in
+ * one place: the row icons take the note's [accent] (the folder color, indigo when unfiled),
+ * because every other affordance in this editor already does.
+ *
+ * There is deliberately no delete here. Deleting a note is being built as its own feature with its
+ * own semantics (a trash the user can recover from); a second, immediate delete added alongside it
+ * would be two different answers to the same gesture.
+ */
+@Composable
+private fun OverflowMenu(
+    accent: Color,
+    onDuplicate: () -> Unit,
+    onCopyText: () -> Unit,
+    onShare: () -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+
+    // A DropdownMenu positions itself against the layout node it sits in, so it is wrapped in a
+    // Box together with the button it belongs to. That is the anchoring pattern Material's own
+    // docs use, and it is what lines the menu up under the three-dot icon.
+    Box {
+        TopIcon(Icons.Outlined.MoreVert, "More options", if (open) accent else BodyGrey) {
+            open = true
+        }
+        DropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            containerColor = SurfaceDark,
+            shape = RoundedCornerShape(14.dp),
+        ) {
+            OverflowItem(Icons.Outlined.FileCopy, "Duplicate", accent) { open = false; onDuplicate() }
+            OverflowItem(Icons.Outlined.ContentCopy, "Copy text", accent) { open = false; onCopyText() }
+            OverflowItem(Icons.Outlined.Share, "Share", accent) { open = false; onShare() }
+        }
+    }
+}
+
+@Composable
+private fun OverflowItem(icon: ImageVector, label: String, accent: Color, onClick: () -> Unit) {
+    DropdownMenuItem(
+        text = {
+            Text(
+                text = label,
+                color = TitleGrey,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        },
+        // Null description on purpose: the label beside it already names the row, and a described
+        // icon would have the action announced twice.
+        leadingIcon = {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = accent,
+                modifier = Modifier.size(18.dp),
+            )
+        },
+        onClick = onClick,
+    )
+}
+
+/**
+ * The note as text for the clipboard and for share targets.
+ *
+ * The body comes from the rich-text editor's own `annotatedString.text` — the characters currently
+ * on screen — rather than from `state.content`, which holds HTML for every note the editor has
+ * written to. Nothing here parses that HTML: taking the editor's text avoids the round trip
+ * entirely, and it is the same source the word count in the meta line already uses.
+ */
+private fun noteAsPlainText(state: SingleNoteScreenState, richTextState: RichTextState): String =
+    buildNoteShareText(
+        title = state.title,
+        plainBody = richTextState.annotatedString.text,
+        checklist = state.checklist,
+    )
+
+/**
+ * Puts [text] on the system clipboard.
+ *
+ * Android 13 (TIRAMISU) and up show their own confirmation UI for every clipboard write, so an app
+ * toast there would be a second, redundant one — hence the version check. Below 13 nothing else
+ * tells the user anything happened.
+ */
+private fun copyNoteToClipboard(context: Context, text: String) {
+    if (text.isEmpty()) {
+        Toast.makeText(context, "Nothing to copy — this note is empty", Toast.LENGTH_SHORT).show()
+        return
+    }
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+    clipboard.setPrimaryClip(ClipData.newPlainText("Note", text))
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+        Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+    }
+}
+
+/** Hands the note to any app that accepts plain text, through the system share sheet. */
+private fun shareNote(context: Context, title: String, text: String) {
+    if (text.isEmpty()) {
+        Toast.makeText(context, "Nothing to share — this note is empty", Toast.LENGTH_SHORT).show()
+        return
+    }
+    val send = Intent(Intent.ACTION_SEND).apply {
+        // text/plain, and the body is plain text: a share that emitted the stored "<p>…</p>" would
+        // paste raw markup into whatever the user picked.
+        type = "text/plain"
+        putExtra(Intent.EXTRA_SUBJECT, noteShareTitle(title))
+        putExtra(Intent.EXTRA_TEXT, text)
+    }
+    context.startActivity(Intent.createChooser(send, "Share note"))
 }
 
 @Composable
