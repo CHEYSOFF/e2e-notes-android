@@ -6,6 +6,10 @@ import android.util.Base64
 import androidx.core.content.edit
 import androidx.security.crypto.EncryptedSharedPreferences
 import dagger.hilt.android.qualifiers.ApplicationContext
+import my.cheysoff.core_crypto.sync.AccountRootKey
+import my.cheysoff.core_crypto.sync.ArkCipher
+import my.cheysoff.core_crypto.sync.ArkWrap
+import my.cheysoff.core_crypto.sync.SyncProtocol
 import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.inject.Inject
@@ -40,6 +44,13 @@ sealed interface UnlockResult {
  *
  * The DB passphrase is created in exactly ONE place — [setupPin] — and never regenerated
  * implicitly anywhere (implicit regeneration would silently wipe the encrypted database).
+ *
+ * The same discipline, for the same reason, governs the Account Root Key: it is created in exactly
+ * ONE place — [ensureArk] — which refuses to create one whenever `ark_ct` is already present.
+ * A second ARK does not fail loudly; it forks the account into two halves that can never read each
+ * other. The ARK is stored wrapped under the DB passphrase ([ArkCipher]), so it is decrypted at
+ * exactly the moment the passphrase is and both unlock paths get it without either of them
+ * changing.
  *
  * The one part of this that genuinely needs a hardware Keystore — minting the master key and
  * opening [EncryptedSharedPreferences] under it — lives behind [EncryptedPrefsStore], so
@@ -152,6 +163,15 @@ class SecureUnlockManager @Inject constructor(
 
     /** In-memory unlocked passphrase, or null while locked. Owned/zeroed by this class. */
     private var inMem: ByteArray? = null
+
+    /**
+     * In-memory Account Root Key, or null while locked OR when this device has no ARK yet.
+     *
+     * Two different nulls on purpose: "locked" and "never had one" are both states in which there
+     * is no ARK to hand out, and no reader of [currentArk] can do anything different about them.
+     * [ensureArk] is the one place that tells them apart.
+     */
+    private var inMemArk: ByteArray? = null
 
     private val _unlocked = MutableStateFlow(false)
 
@@ -326,17 +346,127 @@ class SecureUnlockManager @Inject constructor(
     private fun setInMem(pp: ByteArray) {
         inMem?.fill(0)
         inMem = pp
+        // The ARK rides in on the passphrase. Unwrapping it HERE, rather than in each unlock
+        // method, is what makes "no change to the unlock flows" literally true: setupPin,
+        // unlockWithPin and unlockWithBiometric all pass through this one line, so all three
+        // produce an ARK on a device that has one and none of them had to learn about it.
+        setInMemArk(unwrapStoredArk(pp))
         _unlocked.value = true
+    }
+
+    /** Install a new in-memory ARK, zeroing any previous one. Null means "this device has none". */
+    private fun setInMemArk(ark: ByteArray?) {
+        inMemArk?.fill(0)
+        inMemArk = ark
     }
 
     /** A copy of the unlocked passphrase, or null if locked. Caller owns/zeroes the copy. */
     fun currentPassphrase(): ByteArray? = inMem?.copyOf()
 
-    /** Zero and drop the in-memory passphrase. */
+    /**
+     * A copy of the unlocked Account Root Key, or null. Caller owns/zeroes the copy.
+     *
+     * Mirrors [currentPassphrase], including the null — but unlike the passphrase, an ARK is not
+     * something every install has. A device that has never paired and never offered to share its
+     * account has none, and this returns null for it; see [ensureArk] for why that is deliberate.
+     * Never creates one.
+     */
+    fun currentArk(): ByteArray? = inMemArk?.copyOf()
+
+    /**
+     * The Account Root Key for this device, creating one on first use.
+     *
+     * **This is the only call site of [AccountRootKey.generateArk] in the codebase, and it must
+     * stay that way.** Every branch of the guard below matters:
+     *
+     *  - an ARK already in memory is returned as it is;
+     *  - a stored `ark_ct` that did not unwrap makes this return null rather than mint a
+     *    replacement. That case is a bug or a damaged file, and the account key is not recoverable
+     *    from a new one; overwriting it would turn "sync is broken today" into "half the notes on
+     *    this account are unreadable forever";
+     *  - a locked device returns null, because there is nothing to wrap a new key under.
+     *
+     * ## Why creation is lazy rather than eager in [setupPin]
+     *
+     * Eager creation cannot reach the installs that matter. [setupPin] runs once per device and
+     * every existing install has already run it, so an ARK minted there would reach only devices
+     * set up after this change and existing devices would still need a lazy path. Having both
+     * means two call sites of [AccountRootKey.generateArk] — exactly the thing that must never
+     * exist. Lazy is also the honest choice: an account key is created when the user first asks to
+     * share their notes with another device, not silently on everyone's next unlock whether they
+     * ever sync or not.
+     *
+     * The price is that [currentArk] can return null and callers must handle it.
+     *
+     * @return a copy the caller owns and should zero, or null if this device is locked or holds an
+     *   `ark_ct` that will not open.
+     */
+    fun ensureArk(): ByteArray? {
+        inMemArk?.let { return it.copyOf() }
+        val passphrase = inMem ?: return null
+        // The guard the design asks for by name: generation is unreachable once ark_ct exists.
+        if (prefs.contains(KEY_ARK_CT)) return null
+
+        val ark = AccountRootKey.generateArk()
+        try {
+            storeArk(ark, passphrase)
+            setInMemArk(ark.copyOf())
+            return ark.copyOf()
+        } finally {
+            ark.fill(0)
+        }
+    }
+
+    /**
+     * Store an ARK received from another device by pairing.
+     *
+     * The second — and only other — way an ARK arrives on a device. It does not go through
+     * [ensureArk] and never calls [AccountRootKey.generateArk]: these bytes were generated once,
+     * on the first device, and this device is joining that account rather than starting one.
+     *
+     * It REPLACES any ARK this device already had. That is what joining an account means, and
+     * there is no alternative that leaves re-pairing possible — but it is the one operation here
+     * that can discard an account key, so it is reachable only from the pairing screen and only
+     * after the user has compared the six-digit code on both phones.
+     *
+     * Caller owns [ark]; a copy is kept.
+     */
+    fun adoptArk(ark: ByteArray) {
+        require(ark.size == SyncProtocol.ARK_BYTES) {
+            "ARK must be ${SyncProtocol.ARK_BYTES} bytes, was ${ark.size}"
+        }
+        val passphrase = inMem ?: error("adoptArk() requires an unlocked passphrase")
+        storeArk(ark, passphrase)
+        setInMemArk(ark.copyOf())
+    }
+
+    /** Zero and drop the in-memory passphrase and ARK. */
     fun lock() {
         inMem?.fill(0)
         inMem = null
+        setInMemArk(null)
         _unlocked.value = false
+    }
+
+    private fun storeArk(ark: ByteArray, passphrase: ByteArray) {
+        val wrap = ArkCipher.wrap(ark, passphrase)
+        prefs.edit(commit = true) {
+            putString(KEY_ARK_IV, encode(wrap.iv))
+            putString(KEY_ARK_CT, encode(wrap.ciphertext))
+        }
+    }
+
+    /** The stored ARK unwrapped under [passphrase], or null if there is none or it will not open. */
+    private fun unwrapStoredArk(passphrase: ByteArray): ByteArray? {
+        val iv = prefs.getString(KEY_ARK_IV, null) ?: return null
+        val ct = prefs.getString(KEY_ARK_CT, null) ?: return null
+        return ArkCipher.unwrap(
+            ArkWrap(
+                iv = Base64.decode(iv, Base64.DEFAULT),
+                ciphertext = Base64.decode(ct, Base64.DEFAULT),
+            ),
+            passphrase,
+        )
     }
 
     private fun loadPinWrap(): PinWrap? {
@@ -385,6 +515,14 @@ class SecureUnlockManager @Inject constructor(
         const val KEY_FAIL_COUNT = "fail_count"
         const val KEY_LOCKOUT_UNTIL = "lockout_until"
         const val KEY_LOCKOUT_UNTIL_ELAPSED = "lockout_until_elapsed"
+
+        /**
+         * The wrapped Account Root Key. Both are new keys in an existing file and are absent on
+         * every install that has never paired — which is precisely what [ensureArk] reads to
+         * decide whether an ARK exists at all.
+         */
+        const val KEY_ARK_IV = "ark_iv"
+        const val KEY_ARK_CT = "ark_ct"
 
         const val KEY_LEGACY_PASSPHRASE = "db_passphrase"
     }

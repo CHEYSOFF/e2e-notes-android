@@ -199,9 +199,9 @@ fun AppNavHost(
 
         composable("pairing") {
             // Same lock guard as every other pushed destination. Pairing never opens the database,
-            // but the account key it shares is (once Phase 1 lands) wrapped under the database
-            // passphrase, which exists in memory only while unlocked -- so a locked session has
-            // nothing to pair with.
+            // but the account key it shares is wrapped under the database passphrase, which
+            // exists in memory only while unlocked -- so a locked session has nothing to pair
+            // with, and SecureUnlockManager.ensureArk() would refuse anyway.
             if (!unlocked) return@composable
 
             val viewModel: PairingViewModel = hiltViewModel()
