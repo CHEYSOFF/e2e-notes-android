@@ -5,7 +5,6 @@ import android.content.SharedPreferences
 import android.util.Base64
 import androidx.core.content.edit
 import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.security.SecureRandom
 import javax.crypto.Cipher
@@ -42,23 +41,17 @@ sealed interface UnlockResult {
  * The DB passphrase is created in exactly ONE place — [setupPin] — and never regenerated
  * implicitly anywhere (implicit regeneration would silently wipe the encrypted database).
  *
- * [EncryptedSharedPreferences]/Keystore are device-only, so this class is not unit-tested; it is
- * verified by compile + review + on-device phase. Never logs secrets.
+ * The one part of this that genuinely needs a hardware Keystore — minting the master key and
+ * opening [EncryptedSharedPreferences] under it — lives behind [EncryptedPrefsStore], so
+ * everything below is ordinary logic over a [SharedPreferences] and is unit-tested in
+ * `SecureUnlockManagerTest`. Never logs secrets.
  */
 @Singleton
 class SecureUnlockManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val biometricCipher: BiometricKeystoreCipher,
+    private val prefsStore: EncryptedPrefsStore,
 ) {
-    // Lazy for the same reason as [prefs]: building a MasterKey touches the Keystore, and this
-    // @Singleton is injected into Application, so an eager initializer would do that on the main
-    // thread during startup.
-    private val masterKey: MasterKey by lazy {
-        MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-    }
-
     /**
      * True when the prefs file had to be discarded because its Keystore key was gone (e.g. a
      * cloud/D2D restore brings back `secret_shared_prefs` but never the non-exportable master key).
@@ -69,8 +62,8 @@ class SecureUnlockManager @Inject constructor(
     var wasStateReset: Boolean = false
         private set
 
-    // Same file name and encryption schemes the pre-secure-unlock key manager used, so its
-    // `db_passphrase` is readable in place and can be migrated by setupPin.
+    // Lazy: opening the store touches the Keystore, and this @Singleton is injected into
+    // Application, so an eager initializer would do that work on the main thread during startup.
     private val prefs: SharedPreferences by lazy { openPrefs() }
 
     /**
@@ -132,7 +125,7 @@ class SecureUnlockManager @Inject constructor(
                 }
             }
             try {
-                val opened = createPrefs()
+                val opened = prefsStore.open()
                 // A launch that got in clears the history: only CONSECUTIVE failures are evidence.
                 if (healthPrefs.contains(KEY_OPEN_FAILURES)) {
                     healthPrefs.edit(commit = true) { remove(KEY_OPEN_FAILURES) }
@@ -143,7 +136,7 @@ class SecureUnlockManager @Inject constructor(
             }
         }
 
-        // Reached only after at least one createPrefs() failure, so lastError is set.
+        // Reached only after at least one prefsStore.open() failure, so lastError is set.
         val error = lastError!!
         // commit, not apply: the whole point is that this survives the crash on the next line.
         val failedLaunches = healthPrefs.getInt(KEY_OPEN_FAILURES, 0) + 1
@@ -151,19 +144,11 @@ class SecureUnlockManager @Inject constructor(
 
         if (!KeyLossPolicy.isProvableKeyLoss(error) && failedLaunches < OPEN_FAILURE_LAUNCHES) throw error
 
-        context.deleteSharedPreferences(PREFS_NAME)
+        prefsStore.discard()
         healthPrefs.edit(commit = true) { remove(KEY_OPEN_FAILURES) }
         wasStateReset = true
-        return createPrefs()
+        return prefsStore.open()
     }
-
-    private fun createPrefs(): SharedPreferences = EncryptedSharedPreferences.create(
-        context,
-        PREFS_NAME,
-        masterKey,
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-    )
 
     /** In-memory unlocked passphrase, or null while locked. Owned/zeroed by this class. */
     private var inMem: ByteArray? = null
@@ -371,7 +356,6 @@ class SecureUnlockManager @Inject constructor(
     private fun encode(bytes: ByteArray): String = Base64.encodeToString(bytes, Base64.DEFAULT)
 
     private companion object {
-        const val PREFS_NAME = "secret_shared_prefs"
         const val PASSPHRASE_BYTES = 32
 
         /** Total tries at opening the encrypted prefs before classifying the failure. */
