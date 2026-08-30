@@ -299,6 +299,17 @@ Effort is calendar-honest, including the read-the-code time.
 | **P6** | **Run the instrumented suites in the merge checklist.** `./gradlew :core-data:assembleDebugAndroidTest` + `adb install` + `am instrument`, recorded as a step somewhere a human reads | none | **yes** | 1 h | Exactly the rot in §6. Any instrumented test not in this loop will be red within two months |
 | **P7** | Delete the six `ExampleUnitTest` and six `ExampleInstrumentedTest` files | none | **yes** | 10 min | None. Stops "181 tests" from meaning slightly less than it says |
 
+Tracking issues (P0 is this PR; P7 is folded into P1 as the same file-hygiene sweep):
+
+| | | |
+|---|---|---|
+| **P1** | [#53](https://github.com/CHEYSOFF/e2e-notes-android/issues/53) | Unblock the six androidTest source sets |
+| **P2** | [#54](https://github.com/CHEYSOFF/e2e-notes-android/issues/54) | Extract the auth PIN keypad state machine |
+| **P3** | [#55](https://github.com/CHEYSOFF/e2e-notes-android/issues/55) | Cover `SingleNoteViewModel`'s write paths |
+| **P4** | [#56](https://github.com/CHEYSOFF/e2e-notes-android/issues/56) | Rewrite `Migration5to6Test` on `MigrationTestHelper` |
+| **P5** | [#57](https://github.com/CHEYSOFF/e2e-notes-android/issues/57) | Cover `SecureUnlockManager` |
+| **P6** | [#58](https://github.com/CHEYSOFF/e2e-notes-android/issues/58) | Put the instrumented suites in the merge loop |
+
 ### Only worth it if something changes
 
 | Work | Blocked on | Why it's blocked, precisely |
