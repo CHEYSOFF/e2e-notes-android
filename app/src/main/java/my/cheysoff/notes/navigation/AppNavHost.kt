@@ -1,5 +1,6 @@
 package my.cheysoff.notes.navigation
 
+import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -126,12 +127,26 @@ fun AppNavHost(
 
             val viewModel: SingleNoteViewModel = hiltViewModel()
             val state by viewModel.state.collectAsState()
+            val context = LocalContext.current
 
             LaunchedEffect(viewModel) {
                 viewModel.events.collect { event ->
                     when (event) {
                         SingleNoteEvent.NavigateBack -> {
                             navController.popBackStack()
+                        }
+
+                        // The editor stays on the original note, so nothing on screen changes when
+                        // a copy is written — this toast is the whole confirmation. The copy shows
+                        // up in the list behind this screen.
+                        is SingleNoteEvent.NoteDuplicated -> {
+                            Toast
+                                .makeText(
+                                    context,
+                                    "Duplicated as \"${event.title}\"",
+                                    Toast.LENGTH_SHORT,
+                                )
+                                .show()
                         }
                     }
                 }

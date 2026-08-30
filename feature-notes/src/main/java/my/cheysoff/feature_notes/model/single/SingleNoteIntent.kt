@@ -5,7 +5,13 @@ sealed interface SingleNoteIntent {
     data class ContentChanged(val content: String) : SingleNoteIntent
     data object TogglePin : SingleNoteIntent
     data object ToggleFavorite : SingleNoteIntent
-    data object MoreClicked : SingleNoteIntent
+
+    /**
+     * Write a copy of this note as a brand-new row, leaving the editor on the original.
+     * See `buildDuplicate` for exactly which fields the copy carries.
+     */
+    data object DuplicateNote : SingleNoteIntent
+
     data object BackClicked : SingleNoteIntent
 
     /** Append a new empty checklist item with [newId] after [afterId] (null = at the end). */
