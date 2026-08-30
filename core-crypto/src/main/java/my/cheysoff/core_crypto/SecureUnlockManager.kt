@@ -33,10 +33,11 @@ sealed interface UnlockResult {
  * primitives into a single secure-unlock manager.
  *
  * Stores the PIN-wrapped DB passphrase (and optional biometric-wrapped copy) in the SAME
- * [EncryptedSharedPreferences] file the legacy [EncryptionManager] uses, so it can migrate the
- * legacy raw `db_passphrase`. Holds the unlocked passphrase in memory until [lock].
+ * [EncryptedSharedPreferences] file (`secret_shared_prefs`) the pre-secure-unlock key manager used,
+ * so a pre-existing install's raw `db_passphrase` can be migrated in place ([needsMigration] /
+ * [setupPin]). Holds the unlocked passphrase in memory until [lock].
  *
- * ADDITIVE: this class has no consumers yet; the cutover from [EncryptionManager] happens later.
+ * This is the only key manager: it owns the DB passphrase for every install, migrated or fresh.
  *
  * The DB passphrase is created in exactly ONE place — [setupPin] — and never regenerated
  * implicitly anywhere (implicit regeneration would silently wipe the encrypted database).
@@ -68,7 +69,8 @@ class SecureUnlockManager @Inject constructor(
     var wasStateReset: Boolean = false
         private set
 
-    // Mirror EncryptionManager.createSharedPreferences() so we share the legacy prefs file.
+    // Same file name and encryption schemes the pre-secure-unlock key manager used, so its
+    // `db_passphrase` is readable in place and can be migrated by setupPin.
     private val prefs: SharedPreferences by lazy { openPrefs() }
 
     /**
