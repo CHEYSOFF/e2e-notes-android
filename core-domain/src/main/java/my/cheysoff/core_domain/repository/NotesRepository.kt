@@ -11,6 +11,7 @@ interface NotesRepository {
     suspend fun deleteNote(id: String)
     suspend fun setNoteFolder(noteId: String, folderId: String?)
     suspend fun setNoteFavorite(noteId: String, isFavorite: Boolean)
+    suspend fun setNotePinned(noteId: String, isPinned: Boolean)
 
     fun getFolders(): Flow<List<Folder>>
     suspend fun saveFolder(folder: Folder)
