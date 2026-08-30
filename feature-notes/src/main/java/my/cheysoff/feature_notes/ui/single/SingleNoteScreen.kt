@@ -53,6 +53,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -87,7 +88,6 @@ import com.mohamedrejeb.richeditor.ui.BasicRichTextEditor
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.FlowPreview
-import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.onEach
@@ -131,29 +131,53 @@ fun SingleNoteScreen(
     // never bumps updatedAt, which orders the list). Deliberately NOT a Compose state — writing one
     // per keystroke would recompose this whole screen, which is the cost this debounce removes.
     val contentDirty = remember { AtomicBoolean(false) }
+    // The two lambdas below are remembered so they keep one identity for the life of the
+    // composition. The compiler will not memoize them on its own — they capture RichTextState and
+    // AtomicBoolean, both unstable — so unmemoized every recomposition handed EditorTopBar a
+    // brand-new onBack, which is one unstable argument fewer now. (It is not yet skippable:
+    // onUndo/onRedo and the onIntent it receives are still rebuilt each pass.)
+    //
+    // onIntent is a plain parameter that the caller rebuilds inline on each of ITS recompositions,
+    // so capturing it directly inside a remember would pin the very first instance forever.
+    // rememberUpdatedState keeps a holder that always points at the current one, read at call time,
+    // so no intent can be stranded on a stale lambda.
+    val currentOnIntent by rememberUpdatedState(onIntent)
     // Serializes the editor to HTML and hands it to the ViewModel *right now*, on the caller's
     // thread. onIntent → _state.update is synchronous, so anything invoked after this call already
     // sees the latest content.
-    val flushContent = {
-        if (contentDirty.getAndSet(false)) {
-            onIntent(SingleNoteIntent.ContentChanged(richTextState.toHtml()))
+    val flushContent = remember {
+        {
+            if (contentDirty.getAndSet(false)) {
+                currentOnIntent(SingleNoteIntent.ContentChanged(richTextState.toHtml()))
+            }
         }
     }
     // Back must flush BEFORE BackClicked: the ViewModel decides there whether to delete, save, or
     // skip, and that decision compares _state.value against the persisted row. A debounced
     // forwarding alone would let it read stale content and silently skip a real save.
-    val onBack = {
-        flushContent()
-        onIntent(SingleNoteIntent.BackClicked)
+    val onBack = remember {
+        {
+            flushContent()
+            currentOnIntent(SingleNoteIntent.BackClicked)
+        }
     }
 
     // System back must run the same flush/discard logic as the top-bar arrow — a plain nav pop
     // would skip the final save and leave an abandoned empty note behind.
     BackHandler { onBack() }
 
-    // Nav-away is already covered by onBack; this catches the other way the editor can vanish —
-    // the activity being recreated (rotation) or destroyed while a debounce is still pending. The
-    // ViewModel outlives the composition, so handing it the final HTML here keeps those edits.
+    // Nav-away is already covered by onBack; this catches the editor vanishing because the activity
+    // is *recreated* (rotation, night-mode/locale change, "don't keep activities" off) with a
+    // debounce still pending. There the ViewModel is retained across the recreation, so its own
+    // autosave still runs on a live viewModelScope and the HTML handed over here is persisted.
+    //
+    // It deliberately does NOT rescue the backgrounding case, and cannot: on ON_STOP
+    // MainApplication locks the session, AppNavHost's unlocked-observer navigates to "auth" with
+    // popUpTo(0) { inclusive = true }, and that clears this destination's ViewModelStore —
+    // cancelling viewModelScope (and therefore the debounced write) before it can fire. The
+    // passphrase is dropped by then, so the database could not be written anyway. Those edits are
+    // lost, exactly as they are without this debounce; closing that hole needs a save driven from
+    // ON_STOP itself, not a flush here.
     DisposableEffect(Unit) {
         onDispose { flushContent() }
     }
@@ -184,14 +208,15 @@ fun SingleNoteScreen(
             }
             // toHtml() walks the whole document, so doing it per keystroke is main-thread work
             // that grows with the note. Debounce the *serialization* (the DB write is debounced
-            // separately in the ViewModel) and conflate, so a burst of typing costs one pass
-            // instead of one per character. Nothing is lost by waiting: every exit path flushes
-            // synchronously above, and toHtml() is read at collection time, so the value forwarded
-            // is always the editor's current content rather than the emission that triggered it.
+            // separately in the ViewModel), so a burst of typing costs one pass instead of one per
+            // character — debounce already discards every emission inside the quiet window, so
+            // there is nothing left for a conflate() to drop. Nothing is lost by waiting: every
+            // exit path flushes synchronously above, and toHtml() is read at collection time, so
+            // the value forwarded is always the editor's current content rather than the emission
+            // that triggered it.
             snapshotFlow { richTextState.annotatedString }
                 .drop(1)
                 .onEach { contentDirty.set(true) }
-                .conflate()
                 .debounce(CONTENT_SERIALIZE_DEBOUNCE_MS)
                 .collect { flushContent() }
         }
