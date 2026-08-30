@@ -186,8 +186,9 @@ internal fun mergeChecklist(current: List<ChecklistItem>, incoming: String): Lis
  * screen opening — which the upsert's own backfill defeats: a legacy row stores createdAt = 0, and
  * `createdAt = CASE WHEN notes.createdAt = 0 THEN excluded.createdAt ELSE notes.createdAt END`
  * rewrites it to now on the first post-migration save, setting createdAt = updatedAt = now. All
- * three clauses then hold for an ordinary note, making it silently deletable. There is no other
- * delete path in the app and no undo.
+ * three clauses then hold for an ordinary note, making it silently deletable — and this discard is
+ * a PURGE, not a move to Trash (see BackClicked), so there would be no undo for it. The user-facing
+ * delete added alongside Trash is a separate path and is always soft.
  *
  * "Blank" alone is deliberately NOT sufficient either: a user who empties an existing note and
  * reopens it would otherwise lose it — along with its pin/favorite/folder — by backing out.
@@ -371,7 +372,25 @@ class SingleNoteViewModel @Inject constructor(
             }
 
             is SingleNoteIntent.MoreClicked -> {
-                // TODO: Implement more options
+                // The overflow menu is opened by the screen itself (it is local UI state), so there
+                // is nothing for the ViewModel to do. The intent is kept so the top bar's icon set
+                // stays uniform and a future menu action has somewhere to land.
+            }
+
+            is SingleNoteIntent.DeleteNote -> {
+                val id = noteId ?: return
+                viewModelScope.launch {
+                    // Cancel any pending autosave first. It would run against a note that is on its
+                    // way to Trash; the upsert leaves the tombstone alone (see NoteDao.upsertNote),
+                    // so it could not resurrect the note, but it would still bump updatedAt for an
+                    // edit the user has just discarded.
+                    saveJob?.cancel()
+                    metaWriteJob?.join()
+                    // SOFT delete: the row keeps its content, pin, favorite and folder so Restore is
+                    // lossless. Contrast the blank-note discard in BackClicked, which purges.
+                    saveMutex.withLock { notesRepository.deleteNote(id) }
+                    _events.send(SingleNoteEvent.NavigateBack)
+                }
             }
 
             is SingleNoteIntent.BackClicked -> {
@@ -389,7 +408,13 @@ class SingleNoteViewModel @Inject constructor(
                         id != null && createdBlankNote && current.title.isBlank() &&
                                 current.content.isBlank() && current.checklist.isEmpty() -> {
                             saveJob?.cancel()
-                            saveMutex.withLock { notesRepository.deleteNote(id) }
+                            // purgeNote, NOT deleteNote: this is a discard, not a deletion the user
+                            // asked for. deleteNote became a soft delete when Trash landed, and
+                            // routing an abandoned "+" tap through it would fill Trash with empty
+                            // notes the user never knowingly created — each one then needing a
+                            // manual "delete forever". There is nothing here worth keeping: the
+                            // guard above has already established the row is blank in every field.
+                            saveMutex.withLock { notesRepository.purgeNote(id) }
                         }
 
                         current.hasUnsavedContent() -> saveNote(debounce = false)?.join()
