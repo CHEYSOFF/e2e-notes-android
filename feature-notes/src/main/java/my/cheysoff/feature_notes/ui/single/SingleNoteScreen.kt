@@ -34,6 +34,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBackIos
 import androidx.compose.material.icons.automirrored.outlined.FormatListBulleted
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FormatBold
 import androidx.compose.material.icons.outlined.FormatItalic
@@ -42,11 +43,15 @@ import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.TextFields
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -95,8 +100,10 @@ import my.cheysoff.core_ui.theme.AccentIndigo
 import my.cheysoff.core_ui.theme.AppBlack
 import my.cheysoff.core_ui.theme.BodyGrey
 import my.cheysoff.core_ui.theme.LocalSpacing
+import my.cheysoff.core_ui.theme.SurfaceDark
 import my.cheysoff.core_ui.theme.TitleGrey
 import my.cheysoff.core_ui.theme.ToolbarDark
+import my.cheysoff.core_domain.model.TrashPolicy
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_ui.theme.folderAccentColor
 import my.cheysoff.core_domain.model.NoteContentFormat
@@ -535,8 +542,74 @@ private fun EditorTopBar(
                 "Favorite",
                 if (isFavorite) accent else BodyGrey,
             ) { onIntent(SingleNoteIntent.ToggleFavorite) }
-            TopIcon(Icons.Outlined.MoreVert, "More", BodyGrey) { onIntent(SingleNoteIntent.MoreClicked) }
+            EditorOverflow(onIntent = onIntent)
         }
+    }
+}
+
+/**
+ * The top bar's overflow: the only way a user can send a note to Trash. (Trash itself then offers
+ * Restore and Delete forever; nothing else in the app deletes a note the user asked to keep.)
+ *
+ * Menu state is local because it is a property of this bar being on screen — the ViewModel is
+ * retained across configuration changes and would otherwise re-open the menu after a rotation.
+ * MoreClicked is still emitted so the ViewModel sees the gesture; it does not drive the menu.
+ *
+ * The confirm dialog says "Trash", not "delete", because that is what the intent does — the note
+ * keeps its content and is restorable for 30 days.
+ */
+@Composable
+private fun EditorOverflow(onIntent: (SingleNoteIntent) -> Unit) {
+    var menuOpen by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+
+    Box {
+        TopIcon(Icons.Outlined.MoreVert, "More", BodyGrey) {
+            menuOpen = true
+            onIntent(SingleNoteIntent.MoreClicked)
+        }
+        DropdownMenu(
+            expanded = menuOpen,
+            onDismissRequest = { menuOpen = false },
+            containerColor = ToolbarDark,
+            shape = RoundedCornerShape(14.dp),
+        ) {
+            DropdownMenuItem(
+                text = { Text("Move to Trash", color = TitleGrey) },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Outlined.DeleteOutline,
+                        contentDescription = null,
+                        tint = BodyGrey,
+                        modifier = Modifier.size(20.dp),
+                    )
+                },
+                onClick = { menuOpen = false; confirmDelete = true },
+            )
+        }
+    }
+
+    if (confirmDelete) {
+        AlertDialog(
+            containerColor = SurfaceDark,
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Move to Trash?", color = TitleGrey) },
+            text = {
+                Text(
+                    "You can restore it from Trash for the next ${TrashPolicy.RETENTION_DAYS} days.",
+                    color = BodyGrey,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDelete = false
+                    onIntent(SingleNoteIntent.DeleteNote)
+                }) { Text("Move to Trash", color = AccentIndigo) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) { Text("Cancel", color = BodyGrey) }
+            },
+        )
     }
 }
 

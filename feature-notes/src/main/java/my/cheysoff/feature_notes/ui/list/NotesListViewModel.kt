@@ -50,6 +50,8 @@ sealed class NotesListEvent {
      * with it set would make that note deletable by simply emptying it and backing out.
      */
     data class NavigateToNote(val noteId: String, val isNew: Boolean = false) : NotesListEvent()
+
+    data object NavigateToTrash : NotesListEvent()
 }
 
 /**
@@ -308,6 +310,10 @@ class NotesListViewModel @Inject constructor(
 
             is NotesListIntent.MoveNoteToFolder -> {
                 viewModelScope.launch { notesRepository.setNoteFolder(intent.noteId, intent.folderId) }
+            }
+
+            NotesListIntent.TrashClicked -> {
+                viewModelScope.launch { _events.send(NotesListEvent.NavigateToTrash) }
             }
 
             is NotesListIntent.SortOrderSelected -> {

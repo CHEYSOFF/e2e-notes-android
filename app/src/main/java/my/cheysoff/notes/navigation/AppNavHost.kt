@@ -23,6 +23,9 @@ import my.cheysoff.feature_notes.ui.list.NotesListViewModel
 import my.cheysoff.feature_notes.ui.single.SingleNoteEvent
 import my.cheysoff.feature_notes.ui.single.SingleNoteScreen
 import my.cheysoff.feature_notes.ui.single.SingleNoteViewModel
+import my.cheysoff.feature_notes.ui.trash.TrashEvent
+import my.cheysoff.feature_notes.ui.trash.TrashScreen
+import my.cheysoff.feature_notes.ui.trash.TrashViewModel
 
 @Composable
 fun AppNavHost(
@@ -96,6 +99,10 @@ fun AppNavHost(
                         is NotesListEvent.NavigateToNote -> {
                             navController.navigate("note/${event.noteId}?isNew=${event.isNew}")
                         }
+
+                        NotesListEvent.NavigateToTrash -> {
+                            navController.navigate("trash")
+                        }
                     }
                 }
             }
@@ -138,6 +145,30 @@ fun AppNavHost(
             }
 
             SingleNoteScreen(
+                state = state,
+                onIntent = { intent -> viewModel.onIntent(intent) }
+            )
+        }
+
+        composable("trash") {
+            // Same lock guard as the notes list and the editor — this destination reads the
+            // database too, and hiltViewModel() would build NoteDatabase while locked.
+            if (!unlocked) return@composable
+
+            val viewModel: TrashViewModel = hiltViewModel()
+            val state by viewModel.state.collectAsState()
+
+            LaunchedEffect(viewModel) {
+                viewModel.events.collect { event ->
+                    when (event) {
+                        TrashEvent.NavigateBack -> {
+                            navController.popBackStack()
+                        }
+                    }
+                }
+            }
+
+            TrashScreen(
                 state = state,
                 onIntent = { intent -> viewModel.onIntent(intent) }
             )
