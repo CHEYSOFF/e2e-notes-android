@@ -22,6 +22,7 @@ import my.cheysoff.core_domain.repository.NotesRepository
 import my.cheysoff.feature_notes.model.single.ChecklistItem
 import my.cheysoff.feature_notes.model.single.SingleNoteIntent
 import my.cheysoff.feature_notes.model.single.SingleNoteScreenState
+import my.cheysoff.feature_notes.model.single.normalizeChecklistText
 import my.cheysoff.feature_notes.model.single.parseChecklist
 import my.cheysoff.feature_notes.model.single.serializeChecklist
 import javax.inject.Inject
@@ -155,40 +156,35 @@ internal fun mergeChecklist(current: List<ChecklistItem>, incoming: String): Lis
             item
         }
     }
-    // Hand back the original instance when nothing moved, so the StateFlow's equality check sees
-    // "no change" and the list doesn't recompose at all.
+    // Nothing moved, so hand back the original instance rather than an equal copy. That is an
+    // allocation concern, not a correctness one: List equality is structural and `merged` is
+    // element-wise identical to `current` here, so the StateFlow would suppress the emission either
+    // way. What keeps focus and in-flight intents alive is the positional match above, which reuses
+    // the existing ChecklistItem instances and therefore their ids.
     return if (merged == current) current else merged
 }
 
 /**
- * How much slack to allow between the "+" button persisting a blank note and this screen's
- * ViewModel being constructed. Generous: the two are separated only by one INSERT and a navigation.
+ * True when this screen is allowed to auto-discard [note] — that is, [openedForNewNote] (the list
+ * screen inserted this row specifically so this screen could open it) and the row is still empty.
+ *
+ * [openedForNewNote] is an explicit nav argument, not an inference. It used to be inferred from
+ * timestamps — createdAt != 0, createdAt == updatedAt, and createdAt inside a grace window of the
+ * screen opening — which the upsert's own backfill defeats: a legacy row stores createdAt = 0, and
+ * `createdAt = CASE WHEN notes.createdAt = 0 THEN excluded.createdAt ELSE notes.createdAt END`
+ * rewrites it to now on the first post-migration save, setting createdAt = updatedAt = now. All
+ * three clauses then hold for an ordinary note, making it silently deletable. There is no other
+ * delete path in the app and no undo.
+ *
+ * "Blank" alone is deliberately NOT sufficient either: a user who empties an existing note and
+ * reopens it would otherwise lose it — along with its pin/favorite/folder — by backing out.
+ *
+ * Erring stays one-directional: [openedForNewNote] is false for every route that doesn't set it, so
+ * a missed detection just leaves an abandoned blank note in the list.
  */
-internal const val NEW_NOTE_GRACE_MS = 10_000L
-
-/**
- * True when [note] is the blank row the "+" button inserted moments before this screen opened —
- * the only note this screen is ever allowed to auto-discard.
- *
- * "Blank on open" alone is NOT sufficient and used to be the test, which made this a data-loss
- * path: a user who empties an existing note, backs out (correctly not deleted), then reopens it,
- * would see a blank first emission and lose the note — along with its pin/favorite/folder and
- * createdAt — by simply backing out again. There is no other delete path in the app and no undo.
- *
- * The three extra conditions each rule that out:
- *  - createdAt != 0L skips legacy pre-migration rows, which carry no real timestamps.
- *  - createdAt == updatedAt means nothing has been written since the INSERT; emptying an existing
- *    note goes through saveNote, which bumps updatedAt.
- *  - the grace window means the INSERT happened while this screen was being opened, not in some
- *    earlier session.
- *
- * Erring is one-directional: a missed detection just leaves an abandoned blank note in the list.
- */
-internal fun isFreshlyCreatedBlankNote(note: Note, screenOpenedAt: Long): Boolean =
-    note.title.isBlank() && note.content.isBlank() && note.checklist.isBlank() &&
-            note.createdAt != 0L &&
-            note.createdAt == note.updatedAt &&
-            note.createdAt >= screenOpenedAt - NEW_NOTE_GRACE_MS
+internal fun isDiscardableOnOpen(openedForNewNote: Boolean, note: Note): Boolean =
+    openedForNewNote &&
+            note.title.isBlank() && note.content.isBlank() && note.checklist.isBlank()
 
 @HiltViewModel
 class SingleNoteViewModel @Inject constructor(
@@ -196,6 +192,11 @@ class SingleNoteViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
     private val noteId: String? = savedStateHandle["noteId"]
+
+    // Set only by the route NotesListViewModel.createNewNote() navigates to, immediately after it
+    // inserted this row. Absent (and therefore false) on every other way into this screen.
+    private val openedForNewNote: Boolean = savedStateHandle["isNew"] ?: false
+
     private val _state = MutableStateFlow(SingleNoteScreenState())
     val state = _state.asStateFlow()
 
@@ -219,11 +220,8 @@ class SingleNoteViewModel @Inject constructor(
     // is also what hasUnsavedContent() compares against.
     private var baseline: EditorBaseline? = null
 
-    // When this screen opened, used to recognise the blank row the "+" button inserted a moment ago.
-    private val screenOpenedAt: Long = System.currentTimeMillis()
-
     // True only for a note that was created-as-blank for this very screen (see
-    // isFreshlyCreatedBlankNote). Such a note is discarded if it's still empty on back. Any other
+    // isDiscardableOnOpen). Such a note is discarded if it's still empty on back. Any other
     // note — including an existing one the user has emptied out, in this session or a previous
     // one — is NEVER auto-deleted: that would be data loss with no undo.
     private var createdBlankNote = false
@@ -236,11 +234,13 @@ class SingleNoteViewModel @Inject constructor(
                 // screen side, where edits are forwarded regardless of load state.
                 .filterNotNull()
                 .onEach { note ->
-                    // Decided once, on the first row: whether this screen is looking at a note that
-                    // was just created for it. Later emissions can't be trusted for this — a note
-                    // the user empties out looks identical to a brand new one.
+                    // Decided once, on the first row this ViewModel sees. The nav argument alone
+                    // would be enough for a fresh screen, but it is restored verbatim when this
+                    // ViewModel is rebuilt for the same back-stack entry (rotation, process death),
+                    // by which point the user may already have typed into the note — so the first
+                    // row still has to be blank.
                     if (baseline == null) {
-                        createdBlankNote = isFreshlyCreatedBlankNote(note, screenOpenedAt)
+                        createdBlankNote = isDiscardableOnOpen(openedForNewNote, note)
                     }
                     // Read/merge/assign rather than update {}: the merge also has to move the
                     // baseline, which must happen exactly once per emission (update {} may retry
@@ -316,9 +316,15 @@ class SingleNoteViewModel @Inject constructor(
             }
 
             is SingleNoteIntent.ChecklistItemTextChanged -> {
+                // Normalize here rather than at serialization time: this is the only way text
+                // enters the checklist (parseChecklist can't produce a newline), so it is the one
+                // choke point that keeps state and its serialized form in exact correspondence.
+                // Without it, a multi-line paste round-trips to different text and mergeChecklist
+                // re-ids the row the user is typing into. See normalizeChecklistText.
+                val text = normalizeChecklistText(intent.text)
                 _state.update { s ->
                     s.copy(checklist = s.checklist.map {
-                        if (it.id == intent.id) it.copy(text = intent.text) else it
+                        if (it.id == intent.id) it.copy(text = text) else it
                     })
                 }
                 saveNote(debounce = true)
@@ -398,8 +404,13 @@ class SingleNoteViewModel @Inject constructor(
             saveMutex.withLock {
                 val current = _state.value
                 persist(current)
-                // No suspension between the write and this line, so the load flow cannot slip in
-                // between and see a baseline that predates the write.
+                // Nothing suspends between persist() returning and this assignment, so no coroutine
+                // can interleave between these two statements. That is the whole of the guarantee:
+                // it does NOT order this line against the load flow, because Room delivers its
+                // invalidation emission on its own schedule rather than on this coroutine's
+                // continuation. The row for this write can in principle reach the collector first
+                // and be merged against a baseline that predates the write; writer-first is
+                // near-certain in practice, not enforced here.
                 baseline = baseline?.let { record(it, current) }
             }
         }
