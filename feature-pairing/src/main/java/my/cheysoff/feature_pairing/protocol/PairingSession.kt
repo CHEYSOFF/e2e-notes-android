@@ -29,9 +29,9 @@ sealed interface SealOutcome {
     /**
      * QR2 opened. The account key is now on this device.
      *
-     * [bundle] carries the ARK and must be handed straight to the (Phase 1) code that wraps it
-     * under this device's own passphrase. It is not stored by this module and the session drops
-     * its own reference the moment this is returned.
+     * [bundle] carries the ARK and must be handed straight to `SecureUnlockManager.adoptArk`,
+     * which wraps it under this device's own passphrase. It is not stored by this module and the
+     * session drops its own reference the moment this is returned.
      */
     data class Paired(val bundle: AccountBundle, val sas: String) : SealOutcome
 

@@ -60,7 +60,7 @@ class PairingViewModel @Inject constructor(
     private val _state = MutableStateFlow(
         PairingScreenState(
             available = keyMaterial.isBound,
-            canShareAccount = keyMaterial.isBound && keyMaterial.accountBundle() != null,
+            canShareAccount = keyMaterial.isBound && keyMaterial.canShareAccount(),
         )
     )
     val state = _state.asStateFlow()
@@ -125,9 +125,11 @@ class PairingViewModel @Inject constructor(
             }
 
             PairingRole.HasMyNotes -> {
-                // A device with no account key has nothing to seal. The chooser already hides this
-                // option (`canShareAccount`), so reaching it means the state and the UI disagreed;
-                // failing loudly is better than sealing something empty.
+                // The one call that can mint an ARK, and it is here rather than in `init` on
+                // purpose: an account is created when the user says this phone holds the notes,
+                // not when they open the screen. A null means the device locked between the
+                // chooser and this line, or that a stored account key will not open -- both are
+                // states where sealing something would be worse than stopping.
                 val bundle = keyMaterial.accountBundle() ?: return abandon(
                     PairingFailure.SESSION_CLOSED,
                     "This device does not have an account key to share yet.",
@@ -306,7 +308,7 @@ class PairingViewModel @Inject constructor(
         _state.update {
             it.copy(
                 stage = PairingStage.ChoosingRole,
-                canShareAccount = keyMaterial.isBound && keyMaterial.accountBundle() != null,
+                canShareAccount = keyMaterial.isBound && keyMaterial.canShareAccount(),
             )
         }
     }
