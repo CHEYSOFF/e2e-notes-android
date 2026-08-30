@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.Notes" parent="android:Theme.Material.Light.NoActionBar">
+    <!-- Dark platform parent, matching the app. The Light parent this used to inherit from is
+         where the #FAFAFA Recents card came from, and every other platform default it supplies
+         (dialog and non-Compose widget colours) was light too, for an app that never is. -->
+    <style name="Theme.Notes" parent="android:Theme.Material.NoActionBar">
         <!-- Black in EVERY system theme, deliberately. This is what shows during cold start and
              screen transitions, and the app's UI is dark on both, so a light-theme value here
              would be a white flash before a black app. It is currently masked by the splash
