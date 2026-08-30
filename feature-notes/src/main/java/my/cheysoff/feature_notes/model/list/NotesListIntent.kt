@@ -1,5 +1,7 @@
 package my.cheysoff.feature_notes.model.list
 
+import my.cheysoff.core_domain.model.NotesSortOrder
+
 sealed interface NotesListIntent {
     data class NoteClicked(val noteId: String) : NotesListIntent
     data class FolderClicked(val folderId: String) : NotesListIntent
@@ -12,4 +14,5 @@ sealed interface NotesListIntent {
     data class UpdateFolder(val id: String, val name: String, val colorArgb: Long?) : NotesListIntent
     data class DeleteFolder(val id: String) : NotesListIntent
     data class MoveNoteToFolder(val noteId: String, val folderId: String?) : NotesListIntent
+    data class SortOrderSelected(val order: NotesSortOrder) : NotesListIntent
 }
