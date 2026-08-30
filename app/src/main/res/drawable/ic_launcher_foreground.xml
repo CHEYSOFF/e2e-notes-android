@@ -1,30 +1,24 @@
+<!-- Adaptive-icon foreground: the app's crescent (same paths as
+     feature-auth/res/drawable/ic_crescent_moon.xml, Microsoft Fluent Emoji 1F319, MIT-licensed).
+     The 32x32 artwork is scaled 1.78x, which puts its ~49dp bounding circle well inside the 66dp
+     safe zone of the 108dp canvas so no launcher mask crops it. The translation is 2dp left and
+     1.6dp above a true centring: a crescent's filled mass sits low and right of its bounding box,
+     so centring the box makes the moon look off-centre inside the launcher's circular mask. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path android:pathData="M31,63.928c0,0 6.4,-11 12.1,-13.1c7.2,-2.6 26,-1.4 26,-1.4l38.1,38.1L107,108.928l-32,-1L31,63.928z">
-        <aapt:attr name="android:fillColor">
-            <gradient
-                android:endX="85.84757"
-                android:endY="92.4963"
-                android:startX="42.9492"
-                android:startY="49.59793"
-                android:type="linear">
-                <item
-                    android:color="#44000000"
-                    android:offset="0.0" />
-                <item
-                    android:color="#00000000"
-                    android:offset="1.0" />
-            </gradient>
-        </aapt:attr>
-    </path>
-    <path
-        android:fillColor="#FFFFFF"
-        android:fillType="nonZero"
-        android:pathData="M65.3,45.828l3.8,-6.6c0.2,-0.4 0.1,-0.9 -0.3,-1.1c-0.4,-0.2 -0.9,-0.1 -1.1,0.3l-3.9,6.7c-6.3,-2.8 -13.4,-2.8 -19.7,0l-3.9,-6.7c-0.2,-0.4 -0.7,-0.5 -1.1,-0.3C38.8,38.328 38.7,38.828 38.9,39.228l3.8,6.6C36.2,49.428 31.7,56.028 31,63.928h46C76.3,56.028 71.8,49.428 65.3,45.828zM43.4,57.328c-0.8,0 -1.5,-0.5 -1.8,-1.2c-0.3,-0.7 -0.1,-1.5 0.4,-2.1c0.5,-0.5 1.4,-0.7 2.1,-0.4c0.7,0.3 1.2,1 1.2,1.8C45.3,56.528 44.5,57.328 43.4,57.328L43.4,57.328zM64.6,57.328c-0.8,0 -1.5,-0.5 -1.8,-1.2s-0.1,-1.5 0.4,-2.1c0.5,-0.5 1.4,-0.7 2.1,-0.4c0.7,0.3 1.2,1 1.2,1.8C66.5,56.528 65.6,57.328 64.6,57.328L64.6,57.328z"
-        android:strokeWidth="1"
-        android:strokeColor="#00000000" />
+    <group
+        android:scaleX="1.78"
+        android:scaleY="1.78"
+        android:translateX="22.36"
+        android:translateY="21.39">
+        <path
+            android:fillColor="#FCD53F"
+            android:pathData="M23.4106 5.63236C23.9106 7.67236 23.9706 9.89235 23.4306 12.1924C22.1706 17.5224 17.7906 21.7024 12.4106 22.6724C9.50056 23.2024 6.73057 22.8024 4.32056 21.7524C3.76056 21.5024 3.23056 22.1424 3.52056 22.6824C6.17057 27.5624 11.6306 30.6824 17.7406 29.8724C23.9706 29.0424 28.9606 23.9624 29.7106 17.7224C30.3106 12.5424 28.1106 7.86236 24.4306 4.97236C23.9606 4.61236 23.2706 5.05236 23.4106 5.63236Z" />
+        <path
+            android:fillColor="#F9C23C"
+            android:pathData="M27.8706 12.5623C27.8706 13.4294 27.1677 14.1323 26.3006 14.1323C25.4335 14.1323 24.7306 13.4294 24.7306 12.5623C24.7306 11.6952 25.4335 10.9923 26.3006 10.9923C27.1677 10.9923 27.8706 11.6952 27.8706 12.5623ZM14.9505 25.4423C14.9505 26.3094 14.2476 27.0123 13.3805 27.0123C12.5135 27.0123 11.8105 26.3094 11.8105 25.4423C11.8105 24.5752 12.5135 23.8723 13.3805 23.8723C14.2476 23.8723 14.9505 24.5752 14.9505 25.4423ZM26.8005 18.9723C27.3473 18.9723 27.7905 18.5291 27.7905 17.9823C27.7905 17.4355 27.3473 16.9923 26.8005 16.9923C26.2538 16.9923 25.8105 17.4355 25.8105 17.9823C25.8105 18.5291 26.2538 18.9723 26.8005 18.9723ZM24.8005 21.9823C24.8005 23.6392 23.4574 24.9823 21.8005 24.9823C20.1437 24.9823 18.8005 23.6392 18.8005 21.9823C18.8005 20.3254 20.1437 18.9823 21.8005 18.9823C23.4574 18.9823 24.8005 20.3254 24.8005 21.9823Z" />
+    </group>
 </vector>
