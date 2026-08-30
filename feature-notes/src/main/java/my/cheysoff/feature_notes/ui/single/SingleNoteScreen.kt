@@ -131,11 +131,11 @@ fun SingleNoteScreen(
     // never bumps updatedAt, which orders the list). Deliberately NOT a Compose state — writing one
     // per keystroke would recompose this whole screen, which is the cost this debounce removes.
     val contentDirty = remember { AtomicBoolean(false) }
-    // The two lambdas below are remembered so they keep one identity for the life of the
-    // composition. The compiler will not memoize them on its own — they capture RichTextState and
-    // AtomicBoolean, both unstable — so unmemoized every recomposition handed EditorTopBar a
-    // brand-new onBack, which is one unstable argument fewer now. (It is not yet skippable:
-    // onUndo/onRedo and the onIntent it receives are still rebuilt each pass.)
+    // The lambdas below are remembered so they keep one identity for the life of the composition.
+    // The compiler will not memoize them on its own — they capture RichTextState and AtomicBoolean,
+    // both unstable — so unmemoized every recomposition handed EditorTopBar brand-new
+    // onBack/onUndo/onRedo. (It is still not skippable: the onIntent it receives is rebuilt each
+    // pass.)
     //
     // onIntent is a plain parameter that the caller rebuilds inline on each of ITS recompositions,
     // so capturing it directly inside a remember would pin the very first instance forever.
@@ -159,6 +159,22 @@ fun SingleNoteScreen(
         {
             flushContent()
             currentOnIntent(SingleNoteIntent.BackClicked)
+        }
+    }
+    // Undo/redo flush first for the same reason back does: the body reaches the ViewModel only
+    // after the serialize debounce, so without a flush the newest keystrokes would not be on the
+    // history stack at all. Undo would then take back some older edit instead — and if that edit
+    // was a body one, the re-seed it triggers would discard the un-forwarded characters with it.
+    val onUndo = remember {
+        {
+            flushContent()
+            currentOnIntent(SingleNoteIntent.Undo)
+        }
+    }
+    val onRedo = remember {
+        {
+            flushContent()
+            currentOnIntent(SingleNoteIntent.Redo)
         }
     }
 
@@ -199,9 +215,19 @@ fun SingleNoteScreen(
     // such text to setHtml would parse stray "<"/">" as tags and drop characters, so plain text
     // goes through setText instead. The row's recorded contentFormat decides — never a guess at
     // the string, which used to mistake "<john@example.com>" for markup and eat it.
-    LaunchedEffect(state.isLoaded) {
+    //
+    // The same effect also re-seeds the editor after an undo/redo of the body: the ViewModel bumps
+    // contentRevision when (and only when) it replaces `content` itself, so restarting on it feeds
+    // the restored body back in through the very same drop(1) path that suppresses the seeding
+    // echo. contentRevision does not move when the editor reports its own content, so ordinary
+    // typing never restarts this effect and never moves the cursor.
+    LaunchedEffect(state.isLoaded, state.contentRevision) {
         if (state.isLoaded) {
             richTextState.config.listIndent = 18
+            // The editor is about to be replaced wholesale from state, so a pending "not yet
+            // forwarded" mark belongs to content that no longer exists. Clearing it stops a later
+            // flush from handing this programmatic seed back as if it were the user's own edit.
+            contentDirty.set(false)
             if (state.contentFormat == NoteContentFormat.HTML) {
                 richTextState.setHtml(state.content)
             } else {
@@ -232,10 +258,12 @@ fun SingleNoteScreen(
                 isPinned = state.isPinned,
                 isFavorite = state.isFavorite,
                 accent = accent,
-                canUndo = richTextState.history.canUndo,
-                canRedo = richTextState.history.canRedo,
-                onUndo = { richTextState.history.undo() },
-                onRedo = { richTextState.history.redo() },
+                // The ViewModel owns the history for the whole editor — title, body and checklist
+                // in one stack — so these no longer read RichTextState's own (body-only) history.
+                canUndo = state.canUndo,
+                canRedo = state.canRedo,
+                onUndo = onUndo,
+                onRedo = onRedo,
                 onBack = onBack,
                 onIntent = onIntent,
             )

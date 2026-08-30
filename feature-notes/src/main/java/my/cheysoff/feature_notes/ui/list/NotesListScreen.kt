@@ -222,6 +222,19 @@ fun NotesListScreen(
         // so the grid's own draw scope reaches the bottom edge and can host the blur band.
         // The band is anchored to the top of the nav bar, whose height (plus whatever
         // system inset it sits on) is exactly the Scaffold's bottom content padding.
+        //
+        // That inset alone is NOT enough clearance for the content, for two reasons:
+        //  - it stops the last card exactly ON the bar's top edge, which reads as the list
+        //    being clipped rather than ending;
+        //  - the FAB is laid out fabSpacingAboveBar above the bar and then pulled back down by
+        //    fabOverlapOffset, so it still sticks up past the bar by the remainder and would
+        //    otherwise sit on top of whatever card is under it.
+        // Clear the taller of the two, then add the gap. coerceAtLeast keeps this correct if the
+        // offset is ever tuned past the point where the FAB no longer protrudes at all.
+        val fabOverhang = (spacing.fabSpacingAboveBar + spacing.fabSize - spacing.fabOverlapOffset)
+            .coerceAtLeast(0.dp)
+        val bottomClearance =
+            innerPadding.calculateBottomPadding() + fabOverhang + spacing.contentToNavBarGap
         LazyVerticalStaggeredGrid(
             modifier = Modifier
                 .fillMaxSize()
@@ -234,7 +247,7 @@ fun NotesListScreen(
                 top = innerPadding.calculateTopPadding() + spacing.screenVertical,
                 start = innerPadding.calculateStartPadding(androidx.compose.ui.platform.LocalLayoutDirection.current) + spacing.screenHorizontal,
                 end = innerPadding.calculateEndPadding(androidx.compose.ui.platform.LocalLayoutDirection.current) + spacing.screenHorizontal,
-                bottom = innerPadding.calculateBottomPadding() + spacing.screenVertical
+                bottom = bottomClearance
             ),
             verticalItemSpacing = spacing.interItemSpacingVertical,
             horizontalArrangement = Arrangement.spacedBy(spacing.interItemSpacingHorizontal)
