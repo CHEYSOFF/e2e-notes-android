@@ -1,6 +1,7 @@
 package my.cheysoff.feature_notes
 
 import my.cheysoff.core_domain.model.Note
+import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.feature_notes.model.single.ChecklistItem
 import my.cheysoff.feature_notes.model.single.SingleNoteScreenState
 import my.cheysoff.feature_notes.model.single.normalizeChecklistText
@@ -27,6 +28,7 @@ class SingleNoteMergeTest {
     private fun note(
         title: String = "",
         content: String = "",
+        contentFormat: NoteContentFormat = NoteContentFormat.PLAIN,
         checklist: String = "",
         isPinned: Boolean = false,
         isFavorite: Boolean = false,
@@ -37,6 +39,7 @@ class SingleNoteMergeTest {
         id = "n1",
         title = title,
         content = content,
+        contentFormat = contentFormat,
         checklist = checklist,
         isPinned = isPinned,
         isFavorite = isFavorite,
@@ -321,5 +324,57 @@ class SingleNoteMergeTest {
         assertFalse(isDiscardableOnOpen(openedForNewNote = true, note = note(title = "hi")))
         assertFalse(isDiscardableOnOpen(openedForNewNote = true, note = note(content = "hi")))
         assertFalse(isDiscardableOnOpen(openedForNewNote = true, note = note(checklist = "0hi")))
+    }
+
+    // --- content and its format marker move as one unit ---
+
+    /**
+     * The marker says how the stored bytes are to be read, so adopting the body without it (or the
+     * other way round) hands a plain note to the HTML reader and truncates it — the exact failure
+     * the format column was added to stop. These pin the pairing at the merge, which is where the
+     * two changes met.
+     */
+    @Test
+    fun `adopting an external body change adopts its format marker with it`() {
+        val baseline = note(content = "plain body").toEditorBaseline()
+        val state = SingleNoteScreenState(
+            content = "plain body",
+            contentFormat = NoteContentFormat.PLAIN,
+            isLoaded = true,
+        )
+        val incoming = note(content = "<p>rich</p>", contentFormat = NoteContentFormat.HTML)
+
+        val merged = mergeIncomingNote(state, baseline, incoming)
+
+        assertEquals("<p>rich</p>", merged.state.content)
+        assertEquals(NoteContentFormat.HTML, merged.state.contentFormat)
+    }
+
+    @Test
+    fun `an echo cannot downgrade the marker of a body the user has just rewritten`() {
+        // The user has typed rich text; the echo still carries the old plain row.
+        val baseline = note(content = "plain body").toEditorBaseline()
+        val state = SingleNoteScreenState(
+            content = "<p>typed</p>",
+            contentFormat = NoteContentFormat.HTML,
+            isLoaded = true,
+        )
+        val incoming = note(content = "plain body", contentFormat = NoteContentFormat.PLAIN)
+
+        val merged = mergeIncomingNote(state, baseline, incoming)
+
+        assertEquals("<p>typed</p>", merged.state.content)
+        assertEquals(NoteContentFormat.HTML, merged.state.contentFormat)
+    }
+
+    @Test
+    fun `the first row seeds the marker along with the body`() {
+        val merged = mergeIncomingNote(
+            SingleNoteScreenState(),
+            null,
+            note(content = "<p>stored</p>", contentFormat = NoteContentFormat.HTML),
+        )
+        assertEquals(NoteContentFormat.HTML, merged.state.contentFormat)
+        assertEquals(NoteContentFormat.HTML, merged.baseline.contentFormat)
     }
 }

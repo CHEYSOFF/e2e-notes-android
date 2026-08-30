@@ -3,8 +3,8 @@ package my.cheysoff.feature_notes.model.list
 import androidx.compose.runtime.Immutable
 import androidx.core.text.HtmlCompat
 import my.cheysoff.core_domain.model.Note
+import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.core_domain.model.NotePreview
-import my.cheysoff.feature_notes.model.looksLikeHtml
 import my.cheysoff.feature_notes.model.single.checklistProgress
 
 @Immutable
@@ -33,8 +33,9 @@ fun Note.toUi(): NotePreviewUi {
         id = id,
         title = title,
         // content is stored as HTML for rich-text notes; show a plain-text snippet in the list.
-        // Legacy plain-text notes are shown as-is so stray "<"/">" aren't parsed away.
-        content = previewSnippet(content),
+        // Plain-text notes are shown as-is so stray "<"/">" aren't parsed away. Which one it is
+        // comes from the row's recorded format, never from sniffing the string.
+        content = previewSnippet(content, contentFormat),
         isPinned = isPinned,
         isFavorite = isFavorite,
         folderId = folderId,
@@ -44,8 +45,8 @@ fun Note.toUi(): NotePreviewUi {
     )
 }
 
-private fun previewSnippet(content: String): String =
-    if (content.looksLikeHtml()) htmlToPlainText(content) else content.trim()
+private fun previewSnippet(content: String, format: NoteContentFormat): String =
+    if (format == NoteContentFormat.HTML) htmlToPlainText(content) else content.trim()
 
 private fun htmlToPlainText(html: String): String =
     HtmlCompat.fromHtml(html, HtmlCompat.FROM_HTML_MODE_COMPACT).toString().trim()

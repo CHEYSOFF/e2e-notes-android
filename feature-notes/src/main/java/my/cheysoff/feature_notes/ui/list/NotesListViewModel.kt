@@ -4,11 +4,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
@@ -19,6 +22,7 @@ import kotlinx.coroutines.launch
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.HeaderSettings
 import my.cheysoff.core_domain.model.Note
+import my.cheysoff.core_domain.model.NotesSortOrder
 import my.cheysoff.core_domain.repository.NotesRepository
 import my.cheysoff.core_domain.repository.SettingsRepository
 import my.cheysoff.feature_notes.model.list.BottomBarItem
@@ -48,6 +52,7 @@ private data class ListData(
     val settings: HeaderSettings,
     val folders: List<Folder>,
     val previews: List<NotePreviewUi>,
+    val sortOrder: NotesSortOrder,
 )
 
 @HiltViewModel
@@ -64,6 +69,17 @@ class NotesListViewModel @Inject constructor(
     // Latest full (unfiltered) previews, kept so folder selection can re-filter without re-parsing
     // (each preview's HTML→plain-text conversion already happened off the main thread on load).
     private var allPreviews: List<NotePreviewUi> = emptyList()
+
+    // The notes query itself carries the ordering (one verified @Query per order), so a change to
+    // the persisted preference has to re-subscribe rather than re-sort what we already have —
+    // hence flatMapLatest, which drops the old subscription. The order is carried alongside the
+    // notes so the state update below can echo it back to the picker without a second flow.
+    // Declared before init for the same reason as dailyPhrases: init may run it synchronously.
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val sortedNotes: Flow<Pair<NotesSortOrder, List<Note>>> =
+        settingsRepository.notesSortOrder.flatMapLatest { order ->
+            notesRepository.getNotes(order).map { notes -> order to notes }
+        }
 
     // Declared before init: the init coroutine can resume synchronously (Main.immediate + a
     // DataStore flow that emits its first value without suspending), so pickMotivationalLine()
@@ -88,11 +104,12 @@ class NotesListViewModel @Inject constructor(
         combine(
             settingsRepository.headerSettings,
             notesRepository.getFolders(),
-            notesRepository.getNotes(),
-        ) { settings, folders, notes -> Triple(settings, folders, notes) }
+            sortedNotes,
+        ) { settings, folders, sorted -> Triple(settings, folders, sorted) }
             // Map notes → previews on a background dispatcher: Note.toUi() parses each note's HTML
             // via HtmlCompat.fromHtml, which is O(content size) and would jank the UI on large lists.
-            .map { (settings, folders, notes) ->
+            .map { (settings, folders, sorted) ->
+                val (sortOrder, notes) = sorted
                 // Resolve each note's folder color here (we have the folder list) so the cards can
                 // render the chosen color without looking the folder up at draw time. Stays off-main
                 // thread via the .flowOn(Dispatchers.Default) below.
@@ -100,10 +117,10 @@ class NotesListViewModel @Inject constructor(
                 val previews = notes.map { note ->
                     note.toUi().copy(folderColorArgb = note.folderId?.let(colorByFolder::get))
                 }
-                ListData(settings, folders, previews)
+                ListData(settings, folders, previews, sortOrder)
             }
             .flowOn(Dispatchers.Default)
-            .onEach { (settings, folders, previews) ->
+            .onEach { (settings, folders, previews, sortOrder) ->
                 allPreviews = previews
                 val countByFolder = previews.groupingBy { it.folderId }.eachCount()
                 val folderPreviews = folders.map { folder ->
@@ -119,6 +136,7 @@ class NotesListViewModel @Inject constructor(
                         pinnedPreviews = visible.filter { it.isPinned },
                         notePreviews = visible.filter { !it.isPinned },
                         statsLine = stats,
+                        sortOrder = sortOrder,
                         isLoading = false,
                     )
                 }
@@ -224,6 +242,14 @@ class NotesListViewModel @Inject constructor(
 
             is NotesListIntent.MoveNoteToFolder -> {
                 viewModelScope.launch { notesRepository.setNoteFolder(intent.noteId, intent.folderId) }
+            }
+
+            is NotesListIntent.SortOrderSelected -> {
+                // Persist only. The new value comes back through the settings flow, which
+                // re-subscribes the notes query and re-emits the list (and the picker's state)
+                // already in the chosen order — so there is no second, optimistic path to keep
+                // in sync with what the database actually returns.
+                viewModelScope.launch { settingsRepository.setNotesSortOrder(intent.order) }
             }
         }
     }
