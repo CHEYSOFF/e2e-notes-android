@@ -38,7 +38,13 @@ import java.util.UUID
 import javax.inject.Inject
 
 sealed class NotesListEvent {
-    data class NavigateToNote(val noteId: String) : NotesListEvent()
+    /**
+     * [isNew] is true only when this screen inserted the row itself, moments ago, so the editor can
+     * open it. It is the editor's sole licence to auto-discard the row on back — see
+     * isDiscardableOnOpen. It must stay false for every other navigation: opening an existing note
+     * with it set would make that note deletable by simply emptying it and backing out.
+     */
+    data class NavigateToNote(val noteId: String, val isNew: Boolean = false) : NotesListEvent()
 }
 
 /** Carries the off-main-thread result (previews already parsed) to the main-thread state update. */
@@ -256,7 +262,8 @@ class NotesListViewModel @Inject constructor(
                 content = ""
             )
             notesRepository.saveNote(newNote)
-            _events.send(NavigateToNote(newNote.id))
+            // The one place isNew may be set: we own this id and just inserted it blank.
+            _events.send(NavigateToNote(newNote.id, isNew = true))
         }
     }
 }

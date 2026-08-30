@@ -15,12 +15,23 @@ data class ChecklistItem(
 )
 
 /**
+ * Folds an item's text into the only shape the serialized format can represent: single-line.
+ *
+ * Apply this before the text enters editor state, not just on the way out. [serializeChecklist] is
+ * lossy for text containing a newline, and the merge that keeps [ChecklistItem.id]s alive compares
+ * local text against text that has been through serialize + parse. Text held un-normalized in state
+ * therefore fails that comparison against its own echo, gets a fresh id, and steals focus from the
+ * row being typed into — reachable today by pasting multi-line text into the single-line field.
+ */
+fun normalizeChecklistText(text: String): String = text.replace("\n", " ")
+
+/**
  * Serialized form: one item per line, first char `1`/`0` = done/undone, the rest is the item
  * text. Items are single-line, so newlines in [text] are stripped to keep the format unambiguous.
  * An empty list serializes to "".
  */
 fun List<ChecklistItem>.serializeChecklist(): String =
-    joinToString("\n") { (if (it.isDone) "1" else "0") + it.text.replace("\n", " ") }
+    joinToString("\n") { (if (it.isDone) "1" else "0") + normalizeChecklistText(it.text) }
 
 /** Inverse of [serializeChecklist]. Assigns each parsed item a fresh ephemeral id. */
 fun parseChecklist(raw: String): List<ChecklistItem> =
