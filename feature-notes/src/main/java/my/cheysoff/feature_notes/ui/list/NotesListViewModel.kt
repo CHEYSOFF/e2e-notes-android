@@ -307,14 +307,25 @@ class NotesListViewModel @Inject constructor(
     )
 
     /**
-     * Steps the grid by [months], resolving "no month chosen yet" against the current selection
-     * (and ultimately against today) rather than against a value captured at construction.
+     * Steps the grid by [months], carrying the selected day-of-month with it.
+     *
+     * The selection moves rather than staying put because the screen is half grid and half
+     * "the selected day's notes". Leaving the selection behind would leave that lower half
+     * describing a day no longer on the grid — a July grid over a list headed "12 August" reads
+     * as a bug, and the same principle that picked `updatedAt` over `createdAt` applies: the two
+     * halves of the screen must never contradict each other.
+     *
+     * "No month chosen yet" resolves against the current selection, and ultimately against today,
+     * rather than against a value captured at construction.
      */
     private fun shiftCalendarMonth(months: Long) {
         calendarView.update { view ->
-            val base = view.month
-                ?: YearMonth.from(view.day ?: LocalDate.now(ZoneId.systemDefault()))
-            view.copy(month = base.plusMonths(months))
+            val current = view.day ?: LocalDate.now(ZoneId.systemDefault())
+            val target = (view.month ?: YearMonth.from(current)).plusMonths(months)
+            // Clamp the day: stepping off 31 January has to land on the 28th or 29th of
+            // February, and atDay would throw on a day the target month does not have.
+            val day = target.atDay(minOf(current.dayOfMonth, target.lengthOfMonth()))
+            CalendarView(month = target, day = day)
         }
     }
 

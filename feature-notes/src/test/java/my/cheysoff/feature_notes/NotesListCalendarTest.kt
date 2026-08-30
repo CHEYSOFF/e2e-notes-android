@@ -157,7 +157,7 @@ class NotesListCalendarTest {
     // --- moving the grid ---------------------------------------------------
 
     @Test
-    fun `stepping months moves the grid without moving the selection`() =
+    fun `stepping months carries the selected day into the month on screen`() =
         runTest(mainDispatcherRule.dispatcher) {
             val vm = viewModel()
             awaitState("the first calendar emission") { vm.state.value.calendarMonth != null }
@@ -168,18 +168,35 @@ class NotesListCalendarTest {
             awaitState("previous month") {
                 vm.state.value.calendarMonth == startMonth.minusMonths(1)
             }
+            // The selection must stay inside the month being shown, or the day-list under the
+            // grid would describe a day that is not on the grid.
+            val moved = vm.state.value.calendarSelectedDay!!
+            assertEquals(YearMonth.from(moved), vm.state.value.calendarMonth)
             assertEquals(
-                "the selected day must not move when only the month is stepped",
-                startDay,
-                vm.state.value.calendarSelectedDay,
+                "the day-of-month carries across",
+                startDay.dayOfMonth,
+                moved.dayOfMonth,
             )
+        }
+
+    @Test
+    fun `stepping onto a shorter month clamps the day instead of throwing`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            val vm = viewModel()
+            awaitState("the first calendar emission") { vm.state.value.calendarMonth != null }
+
+            // Land on 31 January, then step forward into February. Selecting the day directly
+            // also moves the grid to January, so this is one intent, not two.
+            val jan31 = LocalDate.of(2027, 1, 31)
+            vm.onIntent(NotesListIntent.CalendarDaySelected(jan31))
+            awaitState("31 January selected") { vm.state.value.calendarSelectedDay == jan31 }
 
             vm.onIntent(NotesListIntent.CalendarNextMonth)
-            vm.onIntent(NotesListIntent.CalendarNextMonth)
-            awaitState("two months forward") {
-                vm.state.value.calendarMonth == startMonth.plusMonths(1)
+            awaitState("February") {
+                vm.state.value.calendarMonth == YearMonth.of(2027, 2)
             }
-            assertEquals(startDay, vm.state.value.calendarSelectedDay)
+            // 2027 is not a leap year, so February ends on the 28th.
+            assertEquals(LocalDate.of(2027, 2, 28), vm.state.value.calendarSelectedDay)
         }
 
     @Test
