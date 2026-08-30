@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- AppBlack: matches what the app actually looks like inside. -->
+    <!-- AppBlack: matches what the app actually looks like inside. Only the Recents card
+         reads this; the window background is black in every theme. -->
     <color name="brand_window">#FF000000</color>
 </resources>
