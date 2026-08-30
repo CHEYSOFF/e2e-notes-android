@@ -97,6 +97,8 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import my.cheysoff.core_domain.model.NotesSortOrder
+import my.cheysoff.core_ui.model.menuLabel
+import my.cheysoff.core_ui.model.pillLabel
 import my.cheysoff.core_ui.theme.AccentIndigo
 import my.cheysoff.core_ui.theme.AppBlack
 import my.cheysoff.core_ui.theme.BodyGrey
@@ -113,9 +115,7 @@ import my.cheysoff.feature_notes.model.list.NotePreviewUi
 import my.cheysoff.feature_notes.model.list.NoteSearchMatchUi
 import my.cheysoff.feature_notes.model.list.NotesListIntent
 import my.cheysoff.feature_notes.model.list.NotesListScreenState
-import my.cheysoff.feature_notes.model.list.menuLabel
 import my.cheysoff.feature_notes.model.list.normalizeSearchText
-import my.cheysoff.feature_notes.model.list.pillLabel
 import my.cheysoff.feature_notes.ui.folder.FolderChooser
 import my.cheysoff.feature_notes.ui.folder.FolderEditDialog
 import my.cheysoff.feature_notes.ui.folder.FolderRef

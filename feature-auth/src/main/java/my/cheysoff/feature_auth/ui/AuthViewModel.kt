@@ -24,6 +24,7 @@ import my.cheysoff.feature_auth.model.AuthMode
 import my.cheysoff.feature_auth.model.AuthScreenIntent
 import my.cheysoff.feature_auth.model.AuthScreenState
 import my.cheysoff.feature_auth.util.BiometricAuthManager
+import my.cheysoff.feature_auth.util.BiometricEnroller
 import javax.crypto.Cipher
 import javax.inject.Inject
 import kotlin.math.ceil
@@ -46,6 +47,7 @@ sealed class AuthEvent {
 class AuthViewModel @Inject constructor(
     private val secureUnlockManager: SecureUnlockManager,
     private val authRepository: AuthRepository,
+    private val biometricEnroller: BiometricEnroller,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(AuthScreenState())
@@ -328,31 +330,15 @@ class AuthViewModel @Inject constructor(
     }
 
     private fun startBiometricEnroll(activity: FragmentActivity) {
-        val cipher: Cipher = try {
-            secureUnlockManager.biometricEncryptCipher()
-        } catch (e: Exception) {
-            // Can't provision the key — skip biometric, just continue.
+        // Delegated to the shared enroller, which is also what the settings screen's biometric
+        // toggle calls. Enrollment here is a one-shot offer made straight after the PIN is set,
+        // and it is entirely optional, so EVERY outcome — enabled, cancelled, unavailable,
+        // failed — continues into the app rather than holding the user on the auth screen. That
+        // is why the result is deliberately not inspected; the settings screen, where the user
+        // asked for this specifically, is the surface that reports what happened.
+        biometricEnroller.enroll(activity) {
             viewModelScope.launch { _events.send(AuthEvent.NavigationToNotesList) }
-            return
         }
-
-        showPrompt(
-            activity = activity,
-            cipher = cipher,
-            subtitle = "Enable biometric unlock",
-            onSuccess = { result ->
-                // Same main-thread doFinal hazard as unlock. Enrollment is optional, so a failure
-                // must not crash or block entry — just continue without biometric.
-                result.cryptoObject?.cipher?.let { c ->
-                    runCatching { secureUnlockManager.enableBiometric(c) }
-                }
-                viewModelScope.launch { _events.send(AuthEvent.NavigationToNotesList) }
-            },
-            onCancel = {
-                // Skipped enrollment — continue without biometric.
-                viewModelScope.launch { _events.send(AuthEvent.NavigationToNotesList) }
-            },
-        )
     }
 
     private fun showPrompt(

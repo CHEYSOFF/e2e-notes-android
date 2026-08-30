@@ -40,6 +40,9 @@ android {
     }
     buildFeatures {
         compose = true
+        // AGP does not generate BuildConfig unless asked. The settings screen's About section
+        // shows the app's version, which is read from BuildConfig by AppInfoModule.
+        buildConfig = true
     }
     // Preserve the prior android:extractNativeLibs="true" behaviour (AGP 9 forbids the manifest
     // attribute and routes it through the build script instead).
@@ -53,6 +56,7 @@ android {
 dependencies {
     implementation(project(":feature-auth"))
     implementation(project(":feature-notes"))
+    implementation(project(":feature-settings"))
     implementation(project(":core-ui"))
     implementation(project(":core-domain"))
     implementation(project(":core-data"))
