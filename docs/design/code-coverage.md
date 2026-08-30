@@ -1,3 +1,55 @@
+> **Status update (2026-08-31).** Two things changed since the measurement below.
+>
+> **1. Robolectric tests were being silently discarded.** `core-crypto` and `core-data` now run
+> JVM tests under Robolectric. Robolectric does not execute the classes on the test classpath: it
+> reads their bytes, rewrites them, and defines them in its own `SandboxClassLoader` with a
+> protection domain that has no code source. The JaCoCo agent skips such classes unless
+> `inclnolocationclasses=true`, and AGP hardcodes that option to `false` with no DSL to change it.
+> The failure is silent — the tests run and pass and simply score nothing. Measured here: 62
+> passing tests against `SecureUnlockManager` and `RoomNotesRepository` left both classes at
+> **exactly 0 lines covered** (0/134 and 0/53). The root build script now rewrites that one flag on AGP's
+> `-javaagent` argument (and pairs it with `excludes=jdk.internal.*`, without which the test JVM
+> dies at startup). Anything measured before this was an undercount for any Robolectric test.
+>
+> **2. New numbers.** Measured on this change alone, against the 10.6% baseline below, line
+> coverage goes **10.6% → 15.7%** (435/4115 → 649/4121). Merged together with the ViewModel tests
+> that landed in parallel, the project now stands at **28.3% line** (1165/4117), 23.1%
+> instruction, 35.4% branch, 36.7% method.
+>
+> The part of that attributable here is the two modules that own the user's data:
+>
+> | Package | Before | After |
+> |---|---|---|
+> | `core_crypto` (`SecureUnlockManager` was 0/144) | 22.2% | **78.4%** |
+> | `core_data/data` (repositories) | **0%** | **54.7%** |
+> | `core_data/data/local` (DAOs, exercised through the repository) | 46.6% | 66.9% |
+> | `core_domain/model` (`TrashPolicy` reached from the repository tests) | 61.1% | 77.8% |
+>
+> (`core_domain/model` reads 87.0% on the merged tree — the ViewModel tests reach it too. The other
+> three rows are unaffected by that merge and read the same either way.)
+>
+> `SecureUnlockManager` itself is **96.3%** (129/134); the five uncovered lines are the four that
+> call straight into the Android Keystore and one defensive `error(...)`. `RoomNotesRepository` is
+> **79.2%** (42/53) — every one of the eleven uncovered lines is a suspend function's closing
+> brace, which JaCoCo cannot attribute through a Kotlin coroutine state machine.
+>
+> The one new red entry is `KeystoreEncryptedPrefsStore` at 0/16: the `MasterKey` and
+> `EncryptedSharedPreferences` calls extracted out of `SecureUnlockManager` so the rest of it could
+> be tested. Those sixteen lines were inside `SecureUnlockManager`'s 0/144 before, so nothing
+> regressed — they are simply now named as what they are, code that only a real Keystore can run.
+>
+> **`connectedAndroidTest` also works now** (same mirror — AGP's Unified Test Platform can fetch
+> its own dependencies again). `./gradlew :core-data:connectedAndroidTest` ran all 8 instrumented
+> tests on `emulator-5554`, and the first run immediately caught a real regression:
+> `Migration4to5Test` had been broken since the v6 (Trash) change — it registered migrations only
+> up to `MIGRATION_4_5` while the database moved to v6 — and nobody saw it because the task could
+> not run at all.
+>
+> Note that instrumented coverage is still NOT in this report: `jacocoMergedReport` merges only
+> `testDebugUnitTest` execution data, so a test written under `androidTest` scores zero here no
+> matter how much it exercises. That is why `RoomNotesRepository` is tested under Robolectric
+> rather than alongside the migration tests it otherwise resembles.
+
 > **Status update (2026-08-30, later the same day).** Everything below was written while
 > `org.jacoco:org.jacoco.agent` could not be downloaded, so the document said no report could be
 > produced here. That is no longer true. The blocker was never JaCoCo specifically: **this network
@@ -87,7 +139,16 @@ would be more machinery than the thing it configures. A `subprojects { plugins.w
 keeps it readable in one place and picks up any module added to `settings.gradle.kts` in future
 without a further edit.
 
-Three details in that block are worth knowing:
+Four details in that block are worth knowing:
+
+* **The JaCoCo agent's `inclnolocationclasses` flag is rewritten to `true`.** Without it every
+  Robolectric test in the project contributes nothing to the report, silently — see the status
+  update at the top of this file for the measurement. AGP builds its `-javaagent` argument through
+  a `CommandLineArgumentProvider` and hardcodes the flag to `false`, and exposes no DSL for it, so
+  the root script wraps each provider and patches the one string on its way out. `excludes=jdk.internal.*`
+  goes with it and is not optional: with location-less classes in scope the agent also tries to
+  instrument the JDK's synthesized reflection accessors, and the test JVM dies at startup with
+  `NoClassDefFoundError: jdk/internal/reflect/GeneratedSerializationConstructorAccessor1`.
 
 * **The `jacoco` plugin is applied to the root project only.** The eight modules do not need it —
   AGP wires JaCoCo into their unit tests itself once `enableUnitTestCoverage` is set. The root

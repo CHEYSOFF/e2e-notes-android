@@ -91,6 +91,64 @@ subprojects {
             }
         }
     }
+
+    // Make the JaCoCo agent see classes Robolectric loaded.
+    //
+    // Robolectric does not run tests against the classes on the test classpath. It reads their
+    // bytes itself, rewrites them (that is how a call into the Android framework reaches a shadow),
+    // and defines them in its own SandboxClassLoader with a ProtectionDomain that has no code
+    // source. The JaCoCo agent skips such classes by default — `inclnolocationclasses` is false —
+    // because on a normal JVM "no location" usually means a runtime-synthesized proxy, not real
+    // code. The result is not an error: the tests run, pass, and simply contribute nothing.
+    //
+    // Measured here on 2026-08-30: with the flag off, `SecureUnlockManagerTest` (37 passing tests)
+    // and `RoomNotesRepositoryTest` (28 passing tests) left SecureUnlockManager at 0/134 lines and
+    // RoomNotesRepository at 0/53. Turning it on is what makes those tests count.
+    //
+    // `jdk.internal.*` is excluded because those classes are loaded by the bootstrap loader, which
+    // also reports no location, and instrumenting them fails with IllegalAccessError on JDK 9+.
+    // It is the exclusion the JaCoCo docs pair with this option.
+    //
+    // findByType rather than configure: the extension is contributed by AGP when unit-test
+    // coverage is on, so on a normal (`coverageEnabled == false`) build there is nothing here and
+    // this must do nothing rather than fail.
+    if (coverageEnabled) {
+        tasks.withType<Test>().configureEach {
+            doFirst {
+                // AGP builds the -javaagent argument itself, through a CommandLineArgumentProvider
+                // rather than the Gradle `jacoco` task extension, and hardcodes
+                // `inclnolocationclasses=false` into it. There is no DSL for that option, so each
+                // provider is wrapped in one that rewrites the flag on its way out. Wrapping rather
+                // than replacing keeps every other argument — and every provider's task inputs —
+                // exactly as AGP built them.
+                val originals = jvmArgumentProviders.toList()
+                jvmArgumentProviders.clear()
+                originals.forEach { original ->
+                    jvmArgumentProviders.add(
+                        CommandLineArgumentProvider {
+                            original.asArguments().map { arg ->
+                                if (arg.startsWith("-javaagent:") && arg.contains("jacocoagent.jar")) {
+                                    // `excludes` is not optional alongside the flag above. Once
+                                    // location-less classes are in scope, the agent also tries to
+                                    // instrument the accessor classes the JDK synthesizes for
+                                    // reflection, and the test JVM dies at startup with
+                                    // NoClassDefFoundError:
+                                    // jdk/internal/reflect/GeneratedSerializationConstructorAccessor1.
+                                    // Observed here before this exclusion was added.
+                                    arg.replace(
+                                        "inclnolocationclasses=false",
+                                        "inclnolocationclasses=true,excludes=jdk.internal.*",
+                                    )
+                                } else {
+                                    arg
+                                }
+                            }
+                        }
+                    )
+                }
+            }
+        }
+    }
 }
 
 // Class files that exist only because a code generator put them there, plus the Android build's
