@@ -58,14 +58,32 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageShader
+import androidx.compose.ui.graphics.Paint
+import androidx.compose.ui.graphics.ShaderBrush
+import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import my.cheysoff.core_ui.theme.AccentIndigo
@@ -86,6 +104,66 @@ import my.cheysoff.feature_notes.model.list.NotesListScreenState
 import my.cheysoff.feature_notes.ui.folder.FolderChooser
 import my.cheysoff.feature_notes.ui.folder.FolderEditDialog
 import my.cheysoff.feature_notes.ui.folder.FolderRef
+import kotlin.math.roundToInt
+
+// ── Progressive blur behind the floating nav bar (tunables) ──────────────────
+// The blurred band starts exactly at the TOP OF THE NAV BAR and runs to the bottom
+// of the screen — content above the bar stays completely sharp. Inside the band the
+// blur grows from nothing to `BlurMaxRadius` over `BlurRampHeight`, then holds at the
+// max for the rest of the bar. Ramping inside the band rather than starting at full
+// strength keeps the band's top edge from reading as a hard seam.
+
+/**
+ * Vertical distance over which the blur fades in, measured DOWN from the top of the
+ * nav bar. Must stay comfortably shorter than the bar's own height or the blur never
+ * reaches full strength before the screen ends.
+ */
+private val BlurRampHeight = 40.dp
+
+/** Blur radius once the ramp is finished — i.e. everything behind and below the bar. */
+private val BlurMaxRadius = 16.dp
+
+/**
+ * Number of cross-fade steps in the ramp. Each step is one extra GPU blur pass over
+ * a band-sized buffer, so this is the main perf/smoothness dial: 2 is cheap and still
+ * seam-free, 4 is smooth, above ~5 the extra steps are not visible.
+ */
+private const val BlurStepCount = 6
+
+/**
+ * Extra content sampled above the band. A blur near the top edge of its own buffer
+ * would otherwise clamp (smear the top row downwards); the bleed gives it real
+ * content to sample and is then clipped away.
+ */
+private val BlurEdgeBleed = 32.dp
+
+/**
+ * Size of the repeating dither tile, and the strength of one noise step.
+ *
+ * Blurring near-black content produces gradients so shallow that a single 8-bit step
+ * spans 5-30 rows, which the eye reads as flat contour bands — a "height map" over the
+ * band. Perturbing each pixel by well under one step breaks the contours up without
+ * being visible as grain. This is ordinary gradient dithering, just applied to a blur.
+ */
+private const val DitherTile = 64
+private const val DitherAlpha = 5 // out of 255, i.e. ~1 LSB of white on a near-black ground
+
+/** One tiled noise bitmap, built once and reused as a repeating shader. */
+private fun buildDitherShader(): ShaderBrush {
+    val pixels = IntArray(DitherTile * DitherTile)
+    val random = java.util.Random(20260830L) // fixed seed: identical every launch
+    for (i in pixels.indices) {
+        val a = if (random.nextBoolean()) DitherAlpha else 0
+        pixels[i] = (a shl 24) or 0x00FFFFFF
+    }
+    val bitmap = android.graphics.Bitmap.createBitmap(
+        DitherTile, DitherTile, android.graphics.Bitmap.Config.ARGB_8888,
+    )
+    bitmap.setPixels(pixels, 0, DitherTile, 0, 0, DitherTile, DitherTile)
+    return ShaderBrush(
+        ImageShader(bitmap.asImageBitmap(), TileMode.Repeated, TileMode.Repeated)
+    )
+}
 
 @Composable
 fun NotesListScreen(
@@ -126,8 +204,17 @@ fun NotesListScreen(
         floatingActionButtonPosition = FabPosition.Center,
         bottomBar = { FloatingNavBar(state.selectedBottomBarItem, onIntent) }
     ) { innerPadding ->
+        // The Scaffold body is laid out full-screen (the bar and FAB are drawn over it),
+        // so the grid's own draw scope reaches the bottom edge and can host the blur band.
+        // The band is anchored to the top of the nav bar, whose height (plus whatever
+        // system inset it sits on) is exactly the Scaffold's bottom content padding.
         LazyVerticalStaggeredGrid(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .progressiveBottomBlur(
+                    bandHeight = innerPadding.calculateBottomPadding(),
+                    background = MaterialTheme.colorScheme.background,
+                ),
             columns = StaggeredGridCells.Fixed(2),
             contentPadding = PaddingValues(
                 top = innerPadding.calculateTopPadding() + spacing.screenVertical,
@@ -208,6 +295,122 @@ fun NotesListScreen(
             onDismiss = { moveNoteTarget = null },
             onSelect = { folderId -> onIntent(NotesListIntent.MoveNoteToFolder(note.id, folderId)); moveNoteTarget = null },
         )
+    }
+}
+
+/**
+ * Softly blurs the bottom [bandHeight] of this composable's own content, with the blur
+ * ramping in from nothing so there is no visible edge where it starts.
+ *
+ * How it renders. The content draws itself exactly once, into `contentLayer` (a display
+ * list). That layer is then (a) played back as-is — the sharp, normal drawing — and
+ * (b) replayed into [BlurStepCount] small band-sized layers, each carrying a stronger
+ * `BlurEffect`. Every band is composited through a vertical alpha gradient
+ * (`saveLayer` + [BlendMode.DstIn]) that reaches full opacity right where the next,
+ * blurrier band starts fading in, so neighbouring radii cross-fade into one another
+ * and the result is a genuine blur *gradient* rather than a stack of visible steps.
+ *
+ * The [background] is painted into the layer before the content so the recorded band is
+ * opaque. That matters: cross-fading two opaque images of the same scene reads as a
+ * focus pull, whereas cross-fading translucent copies would leave the sharp card edges
+ * showing through the blurred ones as a ghosted double image.
+ *
+ * `Modifier.blur()` is deliberately not used — it blurs the whole content, not a band.
+ * Blur radii need API 31 (`RenderEffect`); below that the `renderEffect` is ignored and
+ * the band degrades to an unblurred copy of the same pixels, i.e. to nothing visible.
+ */
+@Composable
+private fun Modifier.progressiveBottomBlur(bandHeight: Dp, background: Color): Modifier {
+    val contentLayer = rememberGraphicsLayer()
+    val blurLayers = List(BlurStepCount) { rememberGraphicsLayer() }
+    // One reusable Paint for the saveLayer calls: this runs on every scroll frame.
+    val maskPaint = remember { Paint() }
+    val ditherBrush = remember { buildDitherShader() }
+
+    // The radii never change once density is known, so configure the layers here rather
+    // than churning the render nodes' properties on every frame. Radii grow quadratically:
+    // the first steps stay nearly sharp, which is what keeps the top of the ramp from
+    // announcing itself. `clip` keeps the bleed rows out of the drawn band.
+    val density = LocalDensity.current
+    remember(density, blurLayers) {
+        blurLayers.forEachIndexed { step, layer ->
+            val progress = (step + 1f) / BlurStepCount
+            val radius = with(density) { BlurMaxRadius.toPx() } * progress * progress
+            layer.renderEffect = BlurEffect(radius, radius)
+            layer.clip = true
+        }
+    }
+
+    return this.drawWithContent {
+        contentLayer.record {
+            drawRect(background)
+            this@drawWithContent.drawContent()
+        }
+        drawLayer(contentLayer)
+
+        val bandPx = bandHeight.toPx()
+        val rampPx = BlurRampHeight.toPx()
+        if (bandPx <= 0f || rampPx <= 0f || size.width < 1f || size.height < 1f) {
+            return@drawWithContent
+        }
+
+        val bandTop = (size.height - bandPx).coerceAtLeast(0f)
+        // Each blurred band is recorded from `sourceTop` so only the band — not the whole
+        // scrolling grid — is pushed through the blur, with the bleed on top of it.
+        val sourceTop = (bandTop - BlurEdgeBleed.toPx()).coerceAtLeast(0f)
+        val sourceSize = IntSize(
+            size.width.roundToInt(),
+            (size.height - sourceTop).roundToInt(),
+        )
+        val bandRect = Rect(0f, bandTop, size.width, size.height)
+
+        // Indexed loops, not forEachIndexed: these bodies run on every scroll frame.
+        // Recording happens outside the clip below — the layers hold their own canvas.
+        for (step in 0 until BlurStepCount) {
+            blurLayers[step].record(sourceSize) {
+                translate(top = -sourceTop) { drawLayer(contentLayer) }
+            }
+        }
+
+        clipRect(top = bandTop) {
+            for (step in 0 until BlurStepCount) {
+                val layer = blurLayers[step]
+                val progress = (step + 1f) / BlurStepCount
+                // This step owns the slice of the ramp between its own start and the next
+                // step's start; below that it stays fully opaque and simply gets covered by
+                // the blurrier steps that follow.
+                val fadeStart = bandTop + rampPx * (step.toFloat() / BlurStepCount)
+                val fadeEnd = bandTop + rampPx * progress
+                val mask = Brush.verticalGradient(
+                    0f to Color.Transparent,
+                    1f to Color.Black,
+                    startY = fadeStart,
+                    endY = fadeEnd,
+                )
+
+                // saveLayer so DstIn multiplies the blurred band by the mask's alpha only,
+                // instead of punching through everything already drawn beneath it.
+                drawContext.canvas.saveLayer(bandRect, maskPaint)
+                translate(top = sourceTop) { drawLayer(layer) }
+                drawRect(
+                    brush = mask,
+                    topLeft = Offset(0f, bandTop),
+                    size = Size(size.width, size.height - bandTop),
+                    blendMode = BlendMode.DstIn,
+                )
+                drawContext.canvas.restore()
+            }
+
+            // Finally dither the whole band. Everything above resolves to 8-bit, and the
+            // blurred near-black content changes so slowly that one step can span 30 rows —
+            // which reads as flat contour bands. Sub-step noise breaks the contours without
+            // being visible as grain.
+            drawRect(
+                brush = ditherBrush,
+                topLeft = Offset(0f, bandTop),
+                size = Size(size.width, size.height - bandTop),
+            )
+        }
     }
 }
 
