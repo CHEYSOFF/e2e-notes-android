@@ -198,8 +198,10 @@ tasks.register<JacocoReport>("jacocoMergedReport") {
         listOf(sub.file("src/main/java"), sub.file("src/main/kotlin"))
     }
     // Globbed rather than hard-coded because AGP has moved its unit-test coverage output more than
-    // once across releases, and a stale hard-coded path fails silently — it produces a report of
-    // 0% rather than an error. The `doFirst` check below turns that failure mode into a loud one.
+    // once across releases, and a stale hard-coded path fails SILENTLY rather than erroring. Note
+    // the miss is usually partial, not total: the pre-built-in-kotlinc directory still exists in
+    // this project and still holds some classes, so a stale path understates coverage instead of
+    // reporting an obvious zero. The `doFirst` check below can only catch the total case.
     val moduleExecutionData = subprojects.map { sub ->
         sub.fileTree(sub.layout.buildDirectory) { include("**/*.exec", "**/*.ec") }
     }
@@ -219,8 +221,10 @@ tasks.register<JacocoReport>("jacocoMergedReport") {
     }
 
     doFirst {
-        // Both of these are silent-0% failure modes rather than errors if left unchecked, and both
-        // are exactly what a future AGP directory-layout change would look like from here.
+        // Both of these are silent failure modes rather than errors if left unchecked, and both are
+        // what a future AGP directory-layout change would look like from here. They catch only the
+        // TOTAL miss; a layout change that still matched one of the globs would report a partial
+        // number that these guards cannot distinguish from a real one.
         if (classDirectories.isEmpty) {
             error(
                 "jacocoMergedReport found no production class files. The compiled-output layout " +

@@ -80,10 +80,16 @@ Three details in that block are worth knowing:
   in `build/intermediates/built_in_kotlinc/debug/compileDebugKotlin/classes` and
   `build/intermediates/javac/debug/compileDebugJavaWithJavac/classes`. Neither is the
   `build/tmp/kotlin-classes/debug` path that almost every published Android-JaCoCo recipe
-  hard-codes; that layout predates built-in Kotlin compilation. Copying a recipe here would have
-  produced a report of **0%** with no error at all. `tmp/kotlin-classes/debug` is kept in the
-  pattern list as a fallback, and the task fails loudly (`doFirst`) if it ends up with zero class
-  files or zero execution data, so the silent-zero failure mode cannot come back.
+  hard-codes; that layout predates built-in Kotlin compilation. `tmp/kotlin-classes/debug` is kept
+  in the pattern list as a fallback, and the task fails loudly (`doFirst`) if it ends up with zero
+  class files or zero execution data.
+
+  Worth being precise about the failure this avoids, because it is *not* a clean zero. That legacy
+  directory still exists here and still holds classes — measured on this checkout, 62 of
+  `feature-notes`' 168 compiled classes and 7 of `core-domain`'s 12. A recipe pointed only there
+  would therefore report a **plausible-looking but badly understated** number rather than an
+  obvious 0%, and nothing in the output would say which classes went missing. That is the harder
+  failure to notice, and the reason the globs are wide and the `doFirst` guards exist.
 
 ---
 
