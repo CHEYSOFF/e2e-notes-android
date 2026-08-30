@@ -1,24 +1,34 @@
-<!-- Adaptive-icon foreground: the app's crescent (same paths as
-     feature-auth/res/drawable/ic_crescent_moon.xml, Microsoft Fluent Emoji 1F319, MIT-licensed).
-     The 32x32 artwork is scaled 1.78x, which puts its ~49dp bounding circle well inside the 66dp
-     safe zone of the 108dp canvas so no launcher mask crops it. The translation is 2dp left and
-     1.6dp above a true centring: a crescent's filled mass sits low and right of its bounding box,
-     so centring the box makes the moon look off-centre inside the launcher's circular mask. -->
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <group
-        android:scaleX="1.78"
-        android:scaleY="1.78"
-        android:translateX="22.36"
-        android:translateY="21.39">
-        <path
-            android:fillColor="#FCD53F"
-            android:pathData="M23.4106 5.63236C23.9106 7.67236 23.9706 9.89235 23.4306 12.1924C22.1706 17.5224 17.7906 21.7024 12.4106 22.6724C9.50056 23.2024 6.73057 22.8024 4.32056 21.7524C3.76056 21.5024 3.23056 22.1424 3.52056 22.6824C6.17057 27.5624 11.6306 30.6824 17.7406 29.8724C23.9706 29.0424 28.9606 23.9624 29.7106 17.7224C30.3106 12.5424 28.1106 7.86236 24.4306 4.97236C23.9606 4.61236 23.2706 5.05236 23.4106 5.63236Z" />
-        <path
-            android:fillColor="#F9C23C"
-            android:pathData="M27.8706 12.5623C27.8706 13.4294 27.1677 14.1323 26.3006 14.1323C25.4335 14.1323 24.7306 13.4294 24.7306 12.5623C24.7306 11.6952 25.4335 10.9923 26.3006 10.9923C27.1677 10.9923 27.8706 11.6952 27.8706 12.5623ZM14.9505 25.4423C14.9505 26.3094 14.2476 27.0123 13.3805 27.0123C12.5135 27.0123 11.8105 26.3094 11.8105 25.4423C11.8105 24.5752 12.5135 23.8723 13.3805 23.8723C14.2476 23.8723 14.9505 24.5752 14.9505 25.4423ZM26.8005 18.9723C27.3473 18.9723 27.7905 18.5291 27.7905 17.9823C27.7905 17.4355 27.3473 16.9923 26.8005 16.9923C26.2538 16.9923 25.8105 17.4355 25.8105 17.9823C25.8105 18.5291 26.2538 18.9723 26.8005 18.9723ZM24.8005 21.9823C24.8005 23.6392 23.4574 24.9823 21.8005 24.9823C20.1437 24.9823 18.8005 23.6392 18.8005 21.9823C18.8005 20.3254 20.1437 18.9823 21.8005 18.9823C23.4574 18.9823 24.8005 20.3254 24.8005 21.9823Z" />
-    </group>
-</vector>
+<!-- Adaptive-icon foreground: the same shaded 3D crescent the unlock screen shows, not a flat
+     silhouette of it.
+
+     Where @drawable/ic_moon_3d comes from (a PNG cannot carry a comment, so it is recorded here
+     and referenced from splash_moon.xml, the only other thing that uses it): it is
+     feature-auth/res/drawable-nodpi/ic_crescent_moon_3d.png — the 256px Microsoft Fluent Emoji 3D
+     1F319, MIT-licensed, the exact file AuthScreen draws — cropped to (15,15)-(241,241) and
+     resampled to 384x384 with Lanczos. That crop is the square that bounds the artwork's minimal
+     enclosing circle (centre 127.71,127.66, radius 112.09), so in ic_moon_3d the crescent's
+     bounding circle IS the square canvas. Resampling was done on premultiplied pixels, because
+     the source stores RGB (0,0,0) under its transparent pixels and an unpremultiplied resize
+     would have bled black into the anti-aliased rim.
+
+     Because the bounding circle is the canvas, the inset below states the moon's diameter
+     directly: 25% off every side leaves 50% of the layer box, i.e. 54dp of the adaptive icon's
+     108dp canvas. That is inside the 66dp safe zone every launcher mask is guaranteed to keep, and
+     inside the 72dp circle the standard circular mask actually shows, with 25% clearance. 50% is
+     also exactly the fraction splash_moon rests at, so the moon is the same relative size on the
+     launcher and on the splash — the property the vector this replaced was hand-tuned to get.
+     Measured in the emulator's app drawer: a 157px mask disc with the moon reaching 58.2px from
+     its centre, i.e. 49.4% of the 108dp canvas and 25.9% clear of the mask edge.
+
+     The inset is a fraction rather than a dp value so it tracks whatever pixel size the launcher
+     rasterises the icon at. The bitmap inside an InsetDrawable is drawn with the BitmapDrawable
+     default gravity (fill), which stretches it to the inset bounds — uniform here only because
+     the adaptive-icon layer box is square.
+
+     Centring is the artwork's own: that enclosing circle is centred at (127.71, 127.66) of a
+     256px canvas, i.e. the crescent was drawn optically centred rather than bounding-box centred,
+     so a symmetric inset needs no extra nudge. (The vector this replaced had to hand-nudge itself
+     2dp left and 1.6dp up for exactly that reason.) -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/ic_moon_3d"
+    android:inset="25%" />

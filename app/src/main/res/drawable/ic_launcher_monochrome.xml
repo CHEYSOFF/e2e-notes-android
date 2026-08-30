@@ -1,16 +1,28 @@
 <!-- Themed-icon (Android 13+) layer: the crescent silhouette only. The system reads just the alpha
-     channel and tints it with the wallpaper palette, so the craters are dropped — at the same tint
-     as the body they would be invisible anyway. Same 1.78x safe-zone transform as the foreground. -->
+     channel and tints it with the wallpaper palette, so this layer stays a flat vector rather than
+     the shaded ic_moon_3d the foreground uses — a single-colour stencil cannot show shading, and
+     the craters are dropped because at one tint they would be invisible anyway.
+
+     The silhouette still matches: this path is Fluent Emoji Color 1F319 and ic_moon_3d is Fluent
+     Emoji 3D 1F319, the same glyph in two styles. Rasterising both into their own bounding-circle
+     squares and comparing gives an intersection-over-union of 0.965, i.e. the outlines differ only
+     by a hairline.
+
+     The transform puts this silhouette exactly where the foreground puts the shaded moon. The
+     path's minimal enclosing circle is centred at (15.80, 16.05) with radius 14.04 in its own
+     32x32 artwork units, so scaling by 1.9231 gives radius 27 — a 54dp diameter, the foreground's
+     50% of the 108dp canvas — and translating by (23.62, 23.14) lands that circle's centre on
+     (54, 54), the canvas centre. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
     <group
-        android:scaleX="1.78"
-        android:scaleY="1.78"
-        android:translateX="22.36"
-        android:translateY="21.39">
+        android:scaleX="1.9231"
+        android:scaleY="1.9231"
+        android:translateX="23.62"
+        android:translateY="23.14">
         <path
             android:fillColor="#FFFFFFFF"
             android:pathData="M23.4106 5.63236C23.9106 7.67236 23.9706 9.89235 23.4306 12.1924C22.1706 17.5224 17.7906 21.7024 12.4106 22.6724C9.50056 23.2024 6.73057 22.8024 4.32056 21.7524C3.76056 21.5024 3.23056 22.1424 3.52056 22.6824C6.17057 27.5624 11.6306 30.6824 17.7406 29.8724C23.9706 29.0424 28.9606 23.9624 29.7106 17.7224C30.3106 12.5424 28.1106 7.86236 24.4306 4.97236C23.9606 4.61236 23.2706 5.05236 23.4106 5.63236Z" />
