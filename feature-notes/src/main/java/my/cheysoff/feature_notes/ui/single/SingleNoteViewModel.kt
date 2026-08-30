@@ -194,8 +194,9 @@ internal fun mergeChecklist(current: List<ChecklistItem>, incoming: String): Lis
  * screen opening — which the upsert's own backfill defeats: a legacy row stores createdAt = 0, and
  * `createdAt = CASE WHEN notes.createdAt = 0 THEN excluded.createdAt ELSE notes.createdAt END`
  * rewrites it to now on the first post-migration save, setting createdAt = updatedAt = now. All
- * three clauses then hold for an ordinary note, making it silently deletable. There is no other
- * delete path in the app and no undo.
+ * three clauses then hold for an ordinary note, making it silently deletable — and this discard is
+ * a PURGE, not a move to Trash (see BackClicked), so there would be no undo for it. The user-facing
+ * delete added alongside Trash is a separate path and is always soft.
  *
  * "Blank" alone is deliberately NOT sufficient either: a user who empties an existing note and
  * reopens it would otherwise lose it — along with its pin/favorite/folder — by backing out.
@@ -292,6 +293,13 @@ class SingleNoteViewModel @Inject constructor(
     // is also what hasUnsavedContent() compares against.
     private var baseline: EditorBaseline? = null
 
+    // One stack for every field this editor owns, in the order the edits reached this ViewModel.
+    // The body arrives already debounced by the screen (CONTENT_SERIALIZE_DEBOUNCE_MS), so a body
+    // edit is recorded up to that late: switching from the body to the title inside that window
+    // can land the two edits on the stack in the opposite order to the one they were typed in.
+    // Everything else is recorded on the keystroke that caused it.
+    private val history = EditorHistory()
+
     // True only for a note that was created-as-blank for this very screen (see
     // isDiscardableOnOpen). Such a note is discarded if it's still empty on back. Any other
     // note — including an existing one the user has emptied out, in this session or a previous
@@ -333,8 +341,15 @@ class SingleNoteViewModel @Inject constructor(
     fun onIntent(intent: SingleNoteIntent) {
         when (intent) {
             is SingleNoteIntent.TitleChanged -> {
-                _state.update { it.copy(title = intent.title) }
-                saveNote(debounce = true)
+                val current = _state.value
+                // Nothing to save and nothing to undo when the value did not actually move; the
+                // guard keeps a step that would appear to do nothing off the history stack.
+                if (intent.title != current.title) {
+                    edit(EditorRevision.Title(current.title), EditGroup.Title) {
+                        it.copy(title = intent.title)
+                    }
+                    saveNote(debounce = true)
+                }
             }
 
             is SingleNoteIntent.ContentChanged -> {
@@ -342,8 +357,21 @@ class SingleNoteViewModel @Inject constructor(
                 // this is the one place a note earns the HTML label. Marking the note HTML in any
                 // other write path (a title-only edit, say) would relabel an untouched legacy
                 // plain-text body and destroy it on the next open.
-                _state.update { it.copy(content = intent.content, contentFormat = NoteContentFormat.HTML) }
-                saveNote(debounce = true)
+                val current = _state.value
+                // A flush can carry bytes identical to what state already holds (the editor is
+                // serialized on an idle gap, not on a diff). Such an emission is only worth acting
+                // on while the note still carries the PLAIN marker, which this write clears.
+                val changed = intent.content != current.content ||
+                        current.contentFormat != NoteContentFormat.HTML
+                if (changed) {
+                    edit(
+                        EditorRevision.Body(current.content, current.contentFormat),
+                        EditGroup.Body,
+                    ) {
+                        it.copy(content = intent.content, contentFormat = NoteContentFormat.HTML)
+                    }
+                    saveNote(debounce = true)
+                }
             }
 
             is SingleNoteIntent.TogglePin -> {
@@ -371,24 +399,41 @@ class SingleNoteViewModel @Inject constructor(
                 }
             }
 
+            // The checklist branches below build the next list up front, because the list as it
+            // stands is also what the undo step has to remember. The three that can be handed an id
+            // that is no longer in the list (toggle/text/remove — an intent racing a removal) then
+            // compare the two and drop the intent when nothing moved, rather than recording an undo
+            // step that does nothing when taken; an add always changes the list.
+            //
+            // Reading _state.value here is safe for the same reason the load flow's
+            // read/merge/assign is: intents arrive on the main dispatcher and nothing suspends
+            // between the read and edit()'s update.
             is SingleNoteIntent.ChecklistItemAdded -> {
-                _state.update { s ->
-                    val item = ChecklistItem(id = intent.newId, text = "", isDone = false)
-                    val list = s.checklist
-                    val at = intent.afterId?.let { id -> list.indexOfFirst { it.id == id } } ?: -1
-                    val next = if (at < 0) list + item else list.toMutableList().apply { add(at + 1, item) }
-                    s.copy(checklist = next)
+                val current = _state.value.checklist
+                val item = ChecklistItem(id = intent.newId, text = "", isDone = false)
+                val at = intent.afterId?.let { id -> current.indexOfFirst { it.id == id } } ?: -1
+                val next = if (at < 0) {
+                    current + item
+                } else {
+                    current.toMutableList().apply { add(at + 1, item) }
+                }
+                edit(EditorRevision.Checklist(current), EditGroup.Structural) {
+                    it.copy(checklist = next)
                 }
                 saveNote(debounce = false)
             }
 
             is SingleNoteIntent.ChecklistItemToggled -> {
-                _state.update { s ->
-                    s.copy(checklist = s.checklist.map {
-                        if (it.id == intent.id) it.copy(isDone = !it.isDone) else it
-                    })
+                val current = _state.value.checklist
+                val next = current.map {
+                    if (it.id == intent.id) it.copy(isDone = !it.isDone) else it
                 }
-                saveNote(debounce = false)
+                if (next != current) {
+                    edit(EditorRevision.Checklist(current), EditGroup.Structural) {
+                        it.copy(checklist = next)
+                    }
+                    saveNote(debounce = false)
+                }
             }
 
             is SingleNoteIntent.ChecklistItemTextChanged -> {
@@ -398,20 +443,38 @@ class SingleNoteViewModel @Inject constructor(
                 // Without it, a multi-line paste round-trips to different text and mergeChecklist
                 // re-ids the row the user is typing into. See normalizeChecklistText.
                 val text = normalizeChecklistText(intent.text)
-                _state.update { s ->
-                    s.copy(checklist = s.checklist.map {
-                        if (it.id == intent.id) it.copy(text = text) else it
-                    })
+                val current = _state.value.checklist
+                val next = current.map { if (it.id == intent.id) it.copy(text = text) else it }
+                if (next != current) {
+                    // Grouped by item id, so typing runs together within one row but moving to
+                    // another row starts a new undo step.
+                    edit(
+                        EditorRevision.Checklist(current),
+                        EditGroup.ChecklistItemText(intent.id),
+                    ) {
+                        it.copy(checklist = next)
+                    }
+                    saveNote(debounce = true)
                 }
-                saveNote(debounce = true)
             }
 
             is SingleNoteIntent.ChecklistItemRemoved -> {
-                _state.update { s ->
-                    s.copy(checklist = s.checklist.filterNot { it.id == intent.id })
+                val current = _state.value.checklist
+                val next = current.filterNot { it.id == intent.id }
+                if (next != current) {
+                    edit(EditorRevision.Checklist(current), EditGroup.Structural) {
+                        it.copy(checklist = next)
+                    }
+                    saveNote(debounce = false)
                 }
-                saveNote(debounce = false)
             }
+
+            // Undo and redo are ordinary local edits: they move state and then go through
+            // saveNote() like any other, so the write and the baseline move together and the row
+            // Room echoes back is still recognised as our own. See applyRevision.
+            is SingleNoteIntent.Undo -> applyRevision(history.undo(::currentRevision))
+
+            is SingleNoteIntent.Redo -> applyRevision(history.redo(::currentRevision))
 
             is SingleNoteIntent.SetFolder -> {
                 // Update the editor immediately (accent + pill react), then persist just the
@@ -431,6 +494,22 @@ class SingleNoteViewModel @Inject constructor(
 
             is SingleNoteIntent.DuplicateNote -> duplicateNote()
 
+            is SingleNoteIntent.DeleteNote -> {
+                val id = noteId ?: return
+                viewModelScope.launch {
+                    // Cancel any pending autosave first. It would run against a note that is on its
+                    // way to Trash; the upsert leaves the tombstone alone (see NoteDao.upsertNote),
+                    // so it could not resurrect the note, but it would still bump updatedAt for an
+                    // edit the user has just discarded.
+                    saveJob?.cancel()
+                    metaWriteJob?.join()
+                    // SOFT delete: the row keeps its content, pin, favorite and folder so Restore is
+                    // lossless. Contrast the blank-note discard in BackClicked, which purges.
+                    saveMutex.withLock { notesRepository.deleteNote(id) }
+                    _events.send(SingleNoteEvent.NavigateBack)
+                }
+            }
+
             is SingleNoteIntent.BackClicked -> {
                 viewModelScope.launch {
                     // Flush any pending metadata write (favorite/folder/pin) before navigating, so
@@ -448,7 +527,13 @@ class SingleNoteViewModel @Inject constructor(
                         id != null && createdBlankNote && current.title.isBlank() &&
                                 current.content.isBlank() && current.checklist.isEmpty() -> {
                             saveJob?.cancel()
-                            saveMutex.withLock { notesRepository.deleteNote(id) }
+                            // purgeNote, NOT deleteNote: this is a discard, not a deletion the user
+                            // asked for. deleteNote became a soft delete when Trash landed, and
+                            // routing an abandoned "+" tap through it would fill Trash with empty
+                            // notes the user never knowingly created — each one then needing a
+                            // manual "delete forever". There is nothing here worth keeping: the
+                            // guard above has already established the row is blank in every field.
+                            saveMutex.withLock { notesRepository.purgeNote(id) }
                         }
 
                         current.hasUnsavedContent() -> saveNote(debounce = false)?.join()
@@ -492,6 +577,71 @@ class SingleNoteViewModel @Inject constructor(
             saveMutex.withLock { notesRepository.saveNote(copy) }
             _events.send(SingleNoteEvent.NoteDuplicated(copy.title))
         }
+    }
+
+    /**
+     * Applies one user edit to the editor state and records what the edited slice held [before] it,
+     * so undo can put that back.
+     *
+     * Call it only for an edit that actually changes something (each caller checks first): a
+     * recorded no-op becomes an undo step that appears to do nothing when taken. [group] decides
+     * whether this edit continues the previous undo step or begins a new one — see [EditGroup].
+     *
+     * Persisting is left to the caller, because the debounce differs per field (typing debounces,
+     * a structural checklist change does not).
+     */
+    private fun edit(
+        before: EditorRevision,
+        group: EditGroup,
+        apply: (SingleNoteScreenState) -> SingleNoteScreenState,
+    ) {
+        history.record(before, group)
+        // record() has already run, so the flags below are the post-edit ones: canUndo is now true
+        // and canRedo false (any recorded edit drops the redo stack).
+        _state.update { apply(it).copy(canUndo = history.canUndo, canRedo = history.canRedo) }
+    }
+
+    /** The value the same slice as [like] holds right now — what undo/redo pushes onto the far stack. */
+    private fun currentRevision(like: EditorRevision): EditorRevision {
+        val current = _state.value
+        return when (like) {
+            is EditorRevision.Title -> EditorRevision.Title(current.title)
+            is EditorRevision.Body -> EditorRevision.Body(current.content, current.contentFormat)
+            is EditorRevision.Checklist -> EditorRevision.Checklist(current.checklist)
+        }
+    }
+
+    /**
+     * Puts [revision] back into the editor state and persists it, or does nothing when the stack
+     * was empty.
+     *
+     * The write goes through saveNote() exactly like a keystroke would, so the baseline moves with
+     * it and mergeIncomingNote classifies the resulting Room emission as this screen's own echo.
+     * Anything else — writing the row directly, or assigning `baseline` by hand — would make the
+     * undo look to the merge like an external change, or the echo look like one.
+     */
+    private fun applyRevision(revision: EditorRevision?) {
+        if (revision == null) return
+        _state.update { s ->
+            val restored = when (revision) {
+                is EditorRevision.Title -> s.copy(title = revision.text)
+                // Bumping contentRevision is what tells the screen to re-seed RichTextState from
+                // this content; without it the editor would keep displaying the undone body while
+                // state (and the DB) held the restored one.
+                is EditorRevision.Body -> s.copy(
+                    content = revision.content,
+                    contentFormat = revision.format,
+                    contentRevision = s.contentRevision + 1,
+                )
+                // The restored list holds the ChecklistItem instances that were in state before the
+                // edit, so every row keeps the id it had — no focus jump, no stranded intent.
+                is EditorRevision.Checklist -> s.copy(checklist = revision.items)
+            }
+            restored.copy(canUndo = history.canUndo, canRedo = history.canRedo)
+        }
+        // Immediate rather than debounced: pressing undo is a discrete action, like toggling a
+        // checklist item, not a keystroke in a burst.
+        saveNote(debounce = false)
     }
 
     /**

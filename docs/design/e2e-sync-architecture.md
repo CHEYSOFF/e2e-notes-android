@@ -1,8 +1,15 @@
 # E2E-encrypted multi-device sync — feasibility & architecture
 
 > Status: **research / not scheduled.** Written 2026-08-30 against `master` @ `00df3e4`.
-> No implementation exists. The recommended first step (a user-facing Trash feature)
+> No sync implementation exists. The recommended first step (a user-facing Trash feature)
 > is deliberately independent of sync — see "Recommended first slice".
+>
+> **Update:** the Trash slice shipped on its own. It covers the tombstone and folder-timestamp
+> rows of the "Schema gaps" table (`isDeleted`/`deletedAt` on both tables, `createdAt`/`updatedAt`
+> on `folders`, `WHERE isDeleted = 0` on every read, and the `clearFolder` trace) as
+> `MIGRATION_5_6`, plus soft delete, a Trash screen and a 30-day auto-purge. The remaining rows —
+> `deviceId`, HLC, `dirty`/`lastSyncedSeq`, `sync_state` — are untouched and still hypothetical,
+> as is everything from Phase 1 on.
 
 ## Context
 

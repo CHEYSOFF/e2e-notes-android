@@ -20,6 +20,10 @@ data class NoteEntity(
     val folderId: String?,
     val createdAt: Long = 0L,
     val updatedAt: Long = 0L,
+    // Trash tombstone, added in v6. isDeleted defaults to false to match the column default the
+    // v5 -> v6 migration installs, so every pre-existing note stays visible.
+    val isDeleted: Boolean = false,
+    val deletedAt: Long? = null,
 )
 
 fun NoteEntity.toDomain() = Note(
@@ -33,6 +37,8 @@ fun NoteEntity.toDomain() = Note(
     folderId = folderId,
     createdAt = createdAt,
     updatedAt = updatedAt,
+    isDeleted = isDeleted,
+    deletedAt = deletedAt,
 )
 
 fun Note.toEntity() = NoteEntity(
@@ -46,4 +52,6 @@ fun Note.toEntity() = NoteEntity(
     folderId = folderId,
     createdAt = createdAt,
     updatedAt = updatedAt,
+    isDeleted = isDeleted,
+    deletedAt = deletedAt,
 )
