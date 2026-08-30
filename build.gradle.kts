@@ -158,9 +158,15 @@ val coverageExclusions = listOf(
 //   intermediates/built_in_kotlinc/debug/compileDebugKotlin/classes      (Kotlin)
 //   intermediates/javac/debug/compileDebugJavaWithJavac/classes          (Java, incl. Hilt output)
 // Note that neither is the `build/tmp/kotlin-classes/debug` path that most published JaCoCo
-// recipes hard-code — that layout predates AGP's built-in Kotlin compilation. `tmp/kotlin-classes`
-// is kept in the list anyway so the report still finds classes if a module ever compiles Kotlin
-// through the standalone Kotlin Android plugin instead.
+// recipes hard-code — that layout predates AGP's built-in Kotlin compilation.
+//
+// That legacy path is deliberately NOT listed as a fallback, which was tried and does not work.
+// It still exists in this project and still holds .class files, but they are STALE output from an
+// earlier compilation: for MainApplication$onCreate$1 the two copies are 2011 and 3138 bytes,
+// i.e. genuinely different bytecode for the same class name. Feeding JaCoCo both makes it fail
+// the whole report with `IOException: Error while analyzing MainApplication$onCreate$1.class`,
+// not merge them or prefer one. A module compiling through the standalone Kotlin Android plugin
+// would need this path added back — and the duplicate resolved — rather than simply listed.
 //
 // The `debug` segment is what keeps unit-test classes out: those land under `debugUnitTest`.
 //
@@ -171,7 +177,6 @@ val coverageExclusions = listOf(
 val debugClassPatterns = listOf(
     "intermediates/built_in_kotlinc/debug/*/classes/**",
     "intermediates/javac/debug/*/classes/**",
-    "tmp/kotlin-classes/debug/**",
 )
 
 tasks.register<JacocoReport>("jacocoMergedReport") {
