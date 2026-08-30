@@ -1,6 +1,7 @@
 package my.cheysoff.feature_notes.model.list
 
 import androidx.compose.runtime.Immutable
+import my.cheysoff.core_domain.model.NotesSortOrder
 
 @Immutable
 data class NotesListScreenState(
@@ -10,6 +11,7 @@ data class NotesListScreenState(
     val pinnedPreviews: List<NotePreviewUi> = emptyList(),
     val notePreviews: List<NotePreviewUi> = emptyList(),
     val selectedFolderId: String? = null,
+    val sortOrder: NotesSortOrder = NotesSortOrder.DEFAULT,
     val isLoading: Boolean = true,
     val error: String? = null,
     val selectedBottomBarItem: BottomBarItem = BottomBarItem.ALL_NOTES
