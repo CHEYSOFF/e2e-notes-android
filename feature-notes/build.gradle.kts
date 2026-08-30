@@ -61,4 +61,15 @@ dependencies {
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
+
+    // --- Test-only, added so ViewModel and Compose UI tests become possible ---------------------
+    // kotlinx-coroutines-test is the gate: it supplies the test dispatcher without which no
+    // ViewModel can be unit-tested (Dispatchers.Main throws "Module with the Main dispatcher had
+    // failed to initialize"), AND it is a transitive dependency of ui-test-junit4, so it blocks
+    // Compose UI tests too. It resolves from Maven Central only.
+    testImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
