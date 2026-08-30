@@ -15,4 +15,6 @@ sealed interface NotesListIntent {
     data class DeleteFolder(val id: String) : NotesListIntent
     data class MoveNoteToFolder(val noteId: String, val folderId: String?) : NotesListIntent
     data class SortOrderSelected(val order: NotesSortOrder) : NotesListIntent
+    /** The search field's text changed (or was cleared, with an empty string). */
+    data class SearchQueryChanged(val query: String) : NotesListIntent
 }
