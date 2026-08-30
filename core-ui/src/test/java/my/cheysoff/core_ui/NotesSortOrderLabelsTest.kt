@@ -1,13 +1,13 @@
-package my.cheysoff.feature_notes
+package my.cheysoff.core_ui
 
 import my.cheysoff.core_domain.model.NotesSortOrder
-import my.cheysoff.feature_notes.model.list.menuLabel
-import my.cheysoff.feature_notes.model.list.pillLabel
+import my.cheysoff.core_ui.model.menuLabel
+import my.cheysoff.core_ui.model.pillLabel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class NotesSortOrderUiTest {
+class NotesSortOrderLabelsTest {
     @Test fun `every order has a non-blank label of both kinds`() {
         NotesSortOrder.entries.forEach { order ->
             assertTrue(order.menuLabel.isNotBlank())

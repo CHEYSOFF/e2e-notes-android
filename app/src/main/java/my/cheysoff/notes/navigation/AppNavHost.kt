@@ -27,6 +27,8 @@ import my.cheysoff.feature_notes.ui.single.SingleNoteViewModel
 import my.cheysoff.feature_notes.ui.trash.TrashEvent
 import my.cheysoff.feature_notes.ui.trash.TrashScreen
 import my.cheysoff.feature_notes.ui.trash.TrashViewModel
+import my.cheysoff.feature_settings.ui.SettingsScreen
+import my.cheysoff.feature_settings.ui.SettingsViewModel
 
 @Composable
 fun AppNavHost(
@@ -101,6 +103,13 @@ fun AppNavHost(
                             navController.navigate("note/${event.noteId}?isNew=${event.isNew}")
                         }
 
+                        NotesListEvent.NavigateToProfile -> {
+                            // launchSingleTop because the events channel is BUFFERED: two quick
+                            // taps on the Profile icon queue two events, and without this they
+                            // would push two copies of the screen for the user to back out of.
+                            navController.navigate("profile") { launchSingleTop = true }
+                        }
+
                         NotesListEvent.NavigateToTrash -> {
                             navController.navigate("trash")
                         }
@@ -162,6 +171,24 @@ fun AppNavHost(
             SingleNoteScreen(
                 state = state,
                 onIntent = { intent -> viewModel.onIntent(intent) }
+            )
+        }
+
+        // Profile / settings feature
+        composable("profile") {
+            // Same lock guard as the notes destinations. This screen does not open the database,
+            // but it does read and write the secure-unlock store (the biometric toggle), and
+            // enabling biometric unlock needs the passphrase that only exists while unlocked —
+            // so there is nothing here to show or do while locked.
+            if (!unlocked) return@composable
+
+            val viewModel: SettingsViewModel = hiltViewModel()
+            val state by viewModel.state.collectAsState()
+
+            SettingsScreen(
+                state = state,
+                onIntent = { intent -> viewModel.onIntent(intent) },
+                onBack = { navController.popBackStack() },
             )
         }
 
