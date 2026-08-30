@@ -3,11 +3,13 @@ package my.cheysoff.core_data.data
 import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import my.cheysoff.core_domain.model.HeaderSettings
+import my.cheysoff.core_domain.model.NotesSortOrder
 import my.cheysoff.core_domain.repository.SettingsRepository
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -23,6 +25,7 @@ class DataStoreSettingsRepository @Inject constructor(
         val GREETINGS = booleanPreferencesKey("header_greetings")
         val DAILY_PHRASES = booleanPreferencesKey("header_daily_phrases")
         val STATS = booleanPreferencesKey("header_stats")
+        val NOTES_SORT_ORDER = stringPreferencesKey("notes_sort_order")
     }
 
     override val headerSettings: Flow<HeaderSettings> =
@@ -44,5 +47,16 @@ class DataStoreSettingsRepository @Inject constructor(
 
     override suspend fun setShowStats(enabled: Boolean) {
         context.settingsDataStore.edit { it[Keys.STATS] = enabled }
+    }
+
+    // Stored as the order's stable string key, so an unrecognised value (e.g. a preference left
+    // behind by a newer build) degrades to the default instead of crashing. See NotesSortOrder.
+    override val notesSortOrder: Flow<NotesSortOrder> =
+        context.settingsDataStore.data.map { prefs ->
+            NotesSortOrder.fromKey(prefs[Keys.NOTES_SORT_ORDER])
+        }
+
+    override suspend fun setNotesSortOrder(order: NotesSortOrder) {
+        context.settingsDataStore.edit { it[Keys.NOTES_SORT_ORDER] = order.key }
     }
 }

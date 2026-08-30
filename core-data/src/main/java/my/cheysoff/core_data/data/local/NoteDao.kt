@@ -8,10 +8,31 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface NoteDao {
-    // Newest first. Legacy rows carry updatedAt/createdAt = 0 until their first post-migration
-    // save, so untouched old notes sort after anything with a real timestamp.
-    @Query("SELECT * FROM notes ORDER BY updatedAt DESC, createdAt DESC")
-    fun getNotes(): Flow<List<NoteEntity>>
+    // One @Query per user-selectable order (rather than a single @RawQuery) so Room keeps
+    // verifying each statement against the schema at compile time.
+    //
+    // Every order ends in `id ASC`. Without it the ordering is not total: legacy rows carry
+    // updatedAt/createdAt = 0 until their first post-migration save and therefore tie on both
+    // timestamp keys, and two untitled notes tie on title. SQLite leaves the relative order of
+    // tied rows unspecified, so those notes could visibly reshuffle between emissions of
+    // otherwise-unchanged data. `id` is the primary key, hence unique, so appending it makes
+    // each order deterministic and stable.
+
+    /** Recently edited: newest save first. Untouched legacy rows (updatedAt = 0) sort last. */
+    @Query("SELECT * FROM notes ORDER BY updatedAt DESC, createdAt DESC, id ASC")
+    fun getNotesByUpdatedAt(): Flow<List<NoteEntity>>
+
+    /** Newest created first. Untouched legacy rows (createdAt = 0) sort last. */
+    @Query("SELECT * FROM notes ORDER BY createdAt DESC, updatedAt DESC, id ASC")
+    fun getNotesByCreatedAt(): Flow<List<NoteEntity>>
+
+    /**
+     * Title A–Z, case-insensitive (NOCASE folds ASCII only — good enough for the Latin titles
+     * this app is written for, and it is the collation SQLite can apply without a custom one).
+     * Untitled notes have an empty title and therefore group at the top.
+     */
+    @Query("SELECT * FROM notes ORDER BY title COLLATE NOCASE ASC, id ASC")
+    fun getNotesByTitle(): Flow<List<NoteEntity>>
 
     @Query("SELECT * FROM notes WHERE id = :id")
     fun getNoteById(id: String): Flow<NoteEntity?>
