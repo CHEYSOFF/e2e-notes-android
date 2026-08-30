@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -31,6 +32,9 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
@@ -68,12 +73,21 @@ import my.cheysoff.feature_settings.model.biometricRowSubtitle
 private val CardRadius = 20.dp
 
 /**
+ * Start padding Material3 puts around a [TopAppBar]'s navigation-icon slot before any padding of
+ * ours is applied — the library's own `TopAppBarHorizontalPadding`, which it keeps private and
+ * does not expose. It is subtracted in [SettingsTopBar] so the arrow lands at the same x as the
+ * back arrows in the editor's and Trash's hand-rolled bars, which have no such inset to undo.
+ */
+private val TopAppBarNavIconInset = 4.dp
+
+/**
  * The Profile tab: everything the app lets you change, plus an honest account of what it does with
  * your notes.
  *
  * A pushed destination rather than a tab you stay on — the floating nav bar's four icons are the
  * notes list's own, and only the list is a place to be. [onBack] returns there.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     state: SettingsScreenState,
@@ -87,33 +101,37 @@ fun SettingsScreen(
     // it for the unlock prompt.
     val activity = LocalContext.current as? FragmentActivity
 
+    // Pinned rather than collapsing or enter-always: the bar keeps one height and never moves, so
+    // the back arrow — the only way off this screen — is on screen at every scroll position.
+    // The connection handed to the Scaffold below is what keeps this behavior's
+    // TopAppBarState.contentOffset up to date as the content scrolls. That offset drives exactly
+    // one thing: the crossfade between the bar's containerColor and its scrolledContainerColor,
+    // which SettingsTopBar deliberately sets to the same black. So the bar looks identical
+    // scrolled and unscrolled, which is what a flat black app wants.
+    val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
+
     Scaffold(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .nestedScroll(scrollBehavior.nestedScrollConnection),
         containerColor = MaterialTheme.colorScheme.background,
+        topBar = { SettingsTopBar(onBack = onBack, scrollBehavior = scrollBehavior) },
     ) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
+                // Both paddings sit INSIDE the scroll, so the top one is a spacer that scrolls
+                // away with the content rather than a fixed gap: the display header below slides
+                // up underneath the bar instead of stopping at its lower edge. The Scaffold lays
+                // this Column out full-screen and draws the bar over it, so that only reads
+                // correctly because the bar is opaque — see SettingsTopBar's colors.
                 .padding(
                     top = innerPadding.calculateTopPadding(),
                     bottom = innerPadding.calculateBottomPadding(),
                 )
                 .padding(horizontal = spacing.screenHorizontal),
         ) {
-            // The back arrow is the only way out: this screen has no nav bar of its own, because
-            // the nav bar belongs to the notes list.
-            IconButton(
-                onClick = onBack,
-                modifier = Modifier.padding(top = spacing.s),
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back to notes",
-                    tint = BodyGrey,
-                )
-            }
-
             // Same two-tone construction as the notes list's header line: a Light first word in
             // TitleGrey over a Medium accent word in IndigoTint.
             val headerSize = (sw * 0.092f).sp
@@ -202,6 +220,70 @@ fun SettingsScreen(
 }
 
 // ── Building blocks ─────────────────────────────────────────────────────────
+
+/**
+ * The pinned bar: a back arrow and nothing else.
+ *
+ * The back arrow is the only way out — this screen has no nav bar of its own, because the nav bar
+ * belongs to the notes list — and it used to be the first item of the scrolling content, so it
+ * left the screen as soon as you read past the first card. It is a bar now.
+ *
+ * The two-tone "Your settings." display header stays where it was, as the first thing in the
+ * scrolling content, and slides up under this bar. That is deliberately NOT a LargeTopAppBar:
+ * that header is two lines of the app's own display type, a large bar collapses its title into a
+ * single-line Material one, and no screen in this app has a Material bar title at all — the notes
+ * list has no top bar, and Trash's is a bare back arrow with the same two-line header below it in
+ * the content. Keeping the header in the content is what makes this screen read as the same app.
+ *
+ * The colors are spelled out because Material's defaults are not this app's: it gives a bar one
+ * surface color unscrolled and a lighter, elevation-tinted one once content is underneath it, so
+ * an unstyled bar would go grey the moment you scrolled — a tint that appears nowhere else in a
+ * flat pure-black design. Both are pinned here to the same colorScheme.background the Scaffold
+ * uses (AppBlack: MainActivity passes `darkTheme = true`, so the dark scheme is the only one this
+ * app renders), which also makes the bar opaque enough to hide the content scrolling beneath it.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SettingsTopBar(onBack: () -> Unit, scrollBehavior: TopAppBarScrollBehavior) {
+    val spacing = LocalSpacing.current
+    TopAppBar(
+        title = {},
+        navigationIcon = {
+            // Why the arrow was off before, and where this number comes from. An IconButton is a
+            // 48.dp touch target with a 24.dp icon centred in it, so it draws its icon 12.dp
+            // inside its own box. The old header put that IconButton in the content Column, whose
+            // start padding is the plain screenHorizontal (16.dp) every card below it sits on —
+            // so the touch target was flush with the cards but the icon it shows was not: the
+            // 24.dp icon began at 16 + 12 = 28.dp, a whole 12.dp inboard of the cards.
+            //
+            // EditorTopBar and TrashTopBar already answer this: they pad by
+            // `screenHorizontal - 4.dp`, pulling the touch target 4.dp back out to trade against
+            // that inset. Material3 then adds [TopAppBarNavIconInset] of its own around this slot,
+            // which those hand-rolled Rows do not have, so it is subtracted too. The 48.dp target
+            // is untouched — this is padding around the IconButton, not inside it.
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier.padding(
+                    start = spacing.screenHorizontal - 4.dp - TopAppBarNavIconInset,
+                ),
+            ) {
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Back to notes",
+                    tint = BodyGrey,
+                )
+            }
+        },
+        colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = MaterialTheme.colorScheme.background,
+            scrolledContainerColor = MaterialTheme.colorScheme.background,
+            navigationIconContentColor = BodyGrey,
+            titleContentColor = TitleGrey,
+            actionIconContentColor = BodyGrey,
+        ),
+        scrollBehavior = scrollBehavior,
+    )
+}
 
 /** Uppercase section heading, matching the notes list's "PINNED" / "RECENT" labels. */
 @Composable

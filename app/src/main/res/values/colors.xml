@@ -7,4 +7,9 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+
+    <!-- The Recents-card colour (android:colorBackground). Black in EVERY system theme, with no
+         values-night override, because the app itself is dark-only: a white card on a light-theme
+         phone would have been the one white surface in Mañana, shown in front of a black app. -->
+    <color name="brand_window">#FF000000</color>
 </resources>

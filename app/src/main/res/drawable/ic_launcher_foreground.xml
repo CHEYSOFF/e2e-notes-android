@@ -1,30 +1,34 @@
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:aapt="http://schemas.android.com/aapt"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <path android:pathData="M31,63.928c0,0 6.4,-11 12.1,-13.1c7.2,-2.6 26,-1.4 26,-1.4l38.1,38.1L107,108.928l-32,-1L31,63.928z">
-        <aapt:attr name="android:fillColor">
-            <gradient
-                android:endX="85.84757"
-                android:endY="92.4963"
-                android:startX="42.9492"
-                android:startY="49.59793"
-                android:type="linear">
-                <item
-                    android:color="#44000000"
-                    android:offset="0.0" />
-                <item
-                    android:color="#00000000"
-                    android:offset="1.0" />
-            </gradient>
-        </aapt:attr>
-    </path>
-    <path
-        android:fillColor="#FFFFFF"
-        android:fillType="nonZero"
-        android:pathData="M65.3,45.828l3.8,-6.6c0.2,-0.4 0.1,-0.9 -0.3,-1.1c-0.4,-0.2 -0.9,-0.1 -1.1,0.3l-3.9,6.7c-6.3,-2.8 -13.4,-2.8 -19.7,0l-3.9,-6.7c-0.2,-0.4 -0.7,-0.5 -1.1,-0.3C38.8,38.328 38.7,38.828 38.9,39.228l3.8,6.6C36.2,49.428 31.7,56.028 31,63.928h46C76.3,56.028 71.8,49.428 65.3,45.828zM43.4,57.328c-0.8,0 -1.5,-0.5 -1.8,-1.2c-0.3,-0.7 -0.1,-1.5 0.4,-2.1c0.5,-0.5 1.4,-0.7 2.1,-0.4c0.7,0.3 1.2,1 1.2,1.8C45.3,56.528 44.5,57.328 43.4,57.328L43.4,57.328zM64.6,57.328c-0.8,0 -1.5,-0.5 -1.8,-1.2s-0.1,-1.5 0.4,-2.1c0.5,-0.5 1.4,-0.7 2.1,-0.4c0.7,0.3 1.2,1 1.2,1.8C66.5,56.528 65.6,57.328 64.6,57.328L64.6,57.328z"
-        android:strokeWidth="1"
-        android:strokeColor="#00000000" />
-</vector>
+<!-- Adaptive-icon foreground: the same shaded 3D crescent the unlock screen shows, not a flat
+     silhouette of it.
+
+     Where @drawable/ic_moon_3d comes from (a PNG cannot carry a comment, so it is recorded here
+     and referenced from splash_moon.xml, the only other thing that uses it): it is
+     feature-auth/res/drawable-nodpi/ic_crescent_moon_3d.png — the 256px Microsoft Fluent Emoji 3D
+     1F319, MIT-licensed, the exact file AuthScreen draws — cropped to (15,15)-(241,241) and
+     resampled to 384x384 with Lanczos. That crop is the square that bounds the artwork's minimal
+     enclosing circle (centre 127.71,127.66, radius 112.09), so in ic_moon_3d the crescent's
+     bounding circle IS the square canvas. Resampling was done on premultiplied pixels, because
+     the source stores RGB (0,0,0) under its transparent pixels and an unpremultiplied resize
+     would have bled black into the anti-aliased rim.
+
+     Because the bounding circle is the canvas, the inset below states the moon's diameter
+     directly: 25% off every side leaves 50% of the layer box, i.e. 54dp of the adaptive icon's
+     108dp canvas. That is inside the 66dp safe zone every launcher mask is guaranteed to keep, and
+     inside the 72dp circle the standard circular mask actually shows, with 25% clearance. 50% is
+     also exactly the fraction splash_moon rests at, so the moon is the same relative size on the
+     launcher and on the splash — the property the vector this replaced was hand-tuned to get.
+     Measured in the emulator's app drawer: a 157px mask disc with the moon reaching 58.2px from
+     its centre, i.e. 49.4% of the 108dp canvas and 25.9% clear of the mask edge.
+
+     The inset is a fraction rather than a dp value so it tracks whatever pixel size the launcher
+     rasterises the icon at. The bitmap inside an InsetDrawable is drawn with the BitmapDrawable
+     default gravity (fill), which stretches it to the inset bounds — uniform here only because
+     the adaptive-icon layer box is square.
+
+     Centring is the artwork's own: that enclosing circle is centred at (127.71, 127.66) of a
+     256px canvas, i.e. the crescent was drawn optically centred rather than bounding-box centred,
+     so a symmetric inset needs no extra nudge. (The vector this replaced had to hand-nudge itself
+     2dp left and 1.6dp up for exactly that reason.) -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/ic_moon_3d"
+    android:inset="25%" />
