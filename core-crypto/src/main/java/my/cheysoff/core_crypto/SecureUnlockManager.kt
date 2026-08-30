@@ -34,10 +34,11 @@ sealed interface UnlockResult {
  * primitives into a single secure-unlock manager.
  *
  * Stores the PIN-wrapped DB passphrase (and optional biometric-wrapped copy) in the SAME
- * [EncryptedSharedPreferences] file the legacy [EncryptionManager] uses, so it can migrate the
- * legacy raw `db_passphrase`. Holds the unlocked passphrase in memory until [lock].
+ * [EncryptedSharedPreferences] file (`secret_shared_prefs`) the pre-secure-unlock key manager used,
+ * so a pre-existing install's raw `db_passphrase` can be migrated in place ([needsMigration] /
+ * [setupPin]). Holds the unlocked passphrase in memory until [lock].
  *
- * ADDITIVE: this class has no consumers yet; the cutover from [EncryptionManager] happens later.
+ * This is the only key manager: it owns the DB passphrase for every install, migrated or fresh.
  *
  * The DB passphrase is created in exactly ONE place — [setupPin] — and never regenerated
  * implicitly anywhere (implicit regeneration would silently wipe the encrypted database).
@@ -69,11 +70,12 @@ class SecureUnlockManager @Inject constructor(
     var wasStateReset: Boolean = false
         private set
 
-    // Mirror EncryptionManager.createSharedPreferences() so we share the legacy prefs file.
+    // Same file name and encryption schemes the pre-secure-unlock key manager used, so we read the
+    // legacy prefs file in place and can migrate its `db_passphrase`.
     // Key loss must NOT propagate: isPinSet() is called from the auth screen on the main thread,
     // so an uncaught GeneralSecurityException here crash-loops the app on every launch with no
-    // way out but clearing app data. Recover the way EncryptionManager did: drop the unreadable
-    // prefs and start clean (the notes they protected are already unrecoverable at this point).
+    // way out but clearing app data. Instead drop the unreadable prefs and start clean (the notes
+    // they protected are already unrecoverable at this point).
     private val prefs: SharedPreferences by lazy {
         try {
             createPrefs()
@@ -93,7 +95,7 @@ class SecureUnlockManager @Inject constructor(
         EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
     )
 
-    /** Mirrors EncryptionManager.isKeyLoss: only a missing/invalid Keystore key is recoverable. */
+    /** Only a missing/invalid Keystore key is recoverable; anything else must propagate. */
     private fun isKeyLoss(error: Throwable): Boolean {
         var e: Throwable? = error
         while (e != null) {

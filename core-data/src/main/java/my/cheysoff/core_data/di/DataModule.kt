@@ -8,7 +8,6 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
-import my.cheysoff.core_crypto.EncryptionManager
 import my.cheysoff.core_crypto.SecureUnlockManager
 import my.cheysoff.core_data.data.DataStoreSettingsRepository
 import my.cheysoff.core_data.data.RoomNotesRepository
@@ -53,9 +52,9 @@ abstract class DataModule {
             // onto a new device brings back the prefs file but never the non-exportable master
             // key), every wrap of the old passphrase is gone with it, so any surviving notes.db is
             // permanently undecryptable. Drop it, or SQLCipher fails with "file is not a database"
-            // on every launch with no recovery path. Mirrors the old wasPassphraseReset handling.
+            // on every launch with no recovery path.
             if (secureUnlockManager.wasStateReset) {
-                context.deleteDatabase(EncryptionManager.DATABASE_NAME)
+                context.deleteDatabase(NoteDatabase.DATABASE_NAME)
             }
 
             val passphrase = secureUnlockManager.currentPassphrase()
@@ -72,7 +71,7 @@ abstract class DataModule {
             return Room.databaseBuilder(
                 context,
                 NoteDatabase::class.java,
-                EncryptionManager.DATABASE_NAME
+                NoteDatabase.DATABASE_NAME
             )
             .openHelperFactory(factory)
             .addMigrations(
