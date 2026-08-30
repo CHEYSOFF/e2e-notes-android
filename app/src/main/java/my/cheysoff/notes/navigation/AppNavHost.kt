@@ -1,5 +1,6 @@
 package my.cheysoff.notes.navigation
 
+import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -23,6 +24,9 @@ import my.cheysoff.feature_notes.ui.list.NotesListViewModel
 import my.cheysoff.feature_notes.ui.single.SingleNoteEvent
 import my.cheysoff.feature_notes.ui.single.SingleNoteScreen
 import my.cheysoff.feature_notes.ui.single.SingleNoteViewModel
+import my.cheysoff.feature_notes.ui.trash.TrashEvent
+import my.cheysoff.feature_notes.ui.trash.TrashScreen
+import my.cheysoff.feature_notes.ui.trash.TrashViewModel
 import my.cheysoff.feature_settings.ui.SettingsScreen
 import my.cheysoff.feature_settings.ui.SettingsViewModel
 
@@ -105,6 +109,10 @@ fun AppNavHost(
                             // would push two copies of the screen for the user to back out of.
                             navController.navigate("profile") { launchSingleTop = true }
                         }
+
+                        NotesListEvent.NavigateToTrash -> {
+                            navController.navigate("trash")
+                        }
                     }
                 }
             }
@@ -135,12 +143,26 @@ fun AppNavHost(
 
             val viewModel: SingleNoteViewModel = hiltViewModel()
             val state by viewModel.state.collectAsState()
+            val context = LocalContext.current
 
             LaunchedEffect(viewModel) {
                 viewModel.events.collect { event ->
                     when (event) {
                         SingleNoteEvent.NavigateBack -> {
                             navController.popBackStack()
+                        }
+
+                        // The editor stays on the original note, so nothing on screen changes when
+                        // a copy is written — this toast is the whole confirmation. The copy shows
+                        // up in the list behind this screen.
+                        is SingleNoteEvent.NoteDuplicated -> {
+                            Toast
+                                .makeText(
+                                    context,
+                                    "Duplicated as \"${event.title}\"",
+                                    Toast.LENGTH_SHORT,
+                                )
+                                .show()
                         }
                     }
                 }
@@ -167,6 +189,30 @@ fun AppNavHost(
                 state = state,
                 onIntent = { intent -> viewModel.onIntent(intent) },
                 onBack = { navController.popBackStack() },
+            )
+        }
+
+        composable("trash") {
+            // Same lock guard as the notes list and the editor — this destination reads the
+            // database too, and hiltViewModel() would build NoteDatabase while locked.
+            if (!unlocked) return@composable
+
+            val viewModel: TrashViewModel = hiltViewModel()
+            val state by viewModel.state.collectAsState()
+
+            LaunchedEffect(viewModel) {
+                viewModel.events.collect { event ->
+                    when (event) {
+                        TrashEvent.NavigateBack -> {
+                            navController.popBackStack()
+                        }
+                    }
+                }
+            }
+
+            TrashScreen(
+                state = state,
+                onIntent = { intent -> viewModel.onIntent(intent) }
             )
         }
     }

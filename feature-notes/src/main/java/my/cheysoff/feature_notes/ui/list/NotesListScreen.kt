@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.staggeredgrid.LazyStaggeredGridScope
 import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
 import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
@@ -31,15 +32,18 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -72,6 +76,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageShader
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.ShaderBrush
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.clipRect
@@ -81,6 +86,7 @@ import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -106,8 +112,10 @@ import my.cheysoff.feature_notes.model.list.BottomBarItem
 import my.cheysoff.feature_notes.model.list.FolderPreviewUi
 import my.cheysoff.feature_notes.model.list.HeaderLineUi
 import my.cheysoff.feature_notes.model.list.NotePreviewUi
+import my.cheysoff.feature_notes.model.list.NoteSearchMatchUi
 import my.cheysoff.feature_notes.model.list.NotesListIntent
 import my.cheysoff.feature_notes.model.list.NotesListScreenState
+import my.cheysoff.feature_notes.model.list.normalizeSearchText
 import my.cheysoff.feature_notes.ui.folder.FolderChooser
 import my.cheysoff.feature_notes.ui.folder.FolderEditDialog
 import my.cheysoff.feature_notes.ui.folder.FolderRef
@@ -245,12 +253,25 @@ fun NotesListScreen(
             verticalItemSpacing = spacing.interItemSpacingVertical,
             horizontalArrangement = Arrangement.spacedBy(spacing.interItemSpacingHorizontal)
         ) {
+            // The Search tab is a MODE of this screen rather than its own destination. The four
+            // bottom-bar tabs are already modeled as `selectedBottomBarItem` state and switch
+            // without navigating, so a route would have introduced a second mechanism for the same
+            // thing — and would have had to duplicate the nav bar, the FAB, the progressive blur
+            // band and the note card, all of which are private to this file. Searching therefore
+            // swaps the grid's content and leaves the chrome untouched.
+            if (state.selectedBottomBarItem == BottomBarItem.SEARCH) {
+                searchPane(state, onIntent, onLongClick = { moveNoteTarget = it })
+                return@LazyVerticalStaggeredGrid
+            }
+
             item(span = StaggeredGridItemSpan.FullLine, contentType = "header") {
                 HeaderLine(state.headerLine, state.statsLine)
             }
             item(span = StaggeredGridItemSpan.FullLine, contentType = "chips") {
-                // The sort pill rides at the end of the chip row but OUTSIDE the chips' own
-                // horizontal scroll, so it stays on screen however many folders exist.
+                // The trash and sort pills ride at the end of the chip row but OUTSIDE the chips'
+                // own horizontal scroll, so they stay on screen however many folders exist. Trash
+                // in particular has to be reachable without scrolling past every folder — it is
+                // the only route to an undo.
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(modifier = Modifier.weight(1f)) {
                         FolderChips(
@@ -263,6 +284,7 @@ fun NotesListScreen(
                             onDeleteFolder = { deleteFolderTarget = it },
                         )
                     }
+                    TrashPill(onClick = { onIntent(NotesListIntent.TrashClicked) })
                     SortPill(
                         order = state.sortOrder,
                         onSelect = { onIntent(NotesListIntent.SortOrderSelected(it)) },
@@ -313,7 +335,16 @@ fun NotesListScreen(
             containerColor = SurfaceDark,
             onDismissRequest = { deleteFolderTarget = null },
             title = { Text("Delete folder?", color = TitleGrey) },
-            text = { Text("\"${f.name}\" — its ${f.notesAmount} notes will move to All.", color = BodyGrey) },
+            // The copy names both halves of what happens, because only one of them is undoable:
+            // the folder goes to Trash and can be restored, but its notes are unfiled immediately
+            // and restoring the folder does NOT re-file them.
+            text = {
+                Text(
+                    "\"${f.name}\" — its ${f.notesAmount} notes will move to All, " +
+                        "and the folder goes to Trash.",
+                    color = BodyGrey,
+                )
+            },
             confirmButton = { TextButton(onClick = { onIntent(NotesListIntent.DeleteFolder(f.id)); deleteFolderTarget = null }) { Text("Delete", color = AccentIndigo) } },
             dismissButton = { TextButton(onClick = { deleteFolderTarget = null }) { Text("Cancel", color = BodyGrey) } },
         )
@@ -553,6 +584,34 @@ private fun Chip(
 }
 
 /**
+ * Opens Trash. Icon-only so it costs almost no width next to the sort pill, and styled as a sibling
+ * of [Chip]/[SortPill] (same pill radius, same SurfaceDark ground) — but, like the sort pill, it
+ * never takes the chips' selected/indigo fill, because it is a destination rather than a filter.
+ */
+@Composable
+private fun TrashPill(onClick: () -> Unit) {
+    val sw = LocalConfiguration.current.screenWidthDp
+    Box(modifier = Modifier.padding(start = 8.dp)) {
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(percent = 50))
+                .background(SurfaceDark)
+                // The Box is the tap target, so the accessible name and role live here; the Icon
+                // stays contentDescription = null so it is not announced a second time.
+                .clickable(onClickLabel = "Open trash", role = Role.Button, onClick = onClick)
+                .padding(horizontal = 11.dp, vertical = 10.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.DeleteOutline,
+                contentDescription = null,
+                tint = Color(0xFF8A8A8A),
+                modifier = Modifier.size((sw * 0.045f).dp),
+            )
+        }
+    }
+}
+
+/**
  * The notes-list sort picker: a chip-sized pill showing the active order's short name, which
  * opens a menu of all three orders. Styled as a sibling of [Chip] (same pill radius, same
  * SurfaceDark ground, same type ramp) so it reads as part of the chip row - but it never takes
@@ -762,9 +821,22 @@ private fun PinnedCard(note: NotePreviewUi, onClick: () -> Unit, onLongClick: ()
     }
 }
 
+/**
+ * The standard note card used by the Recent grid and, with [title]/[body] supplied, by the search
+ * results. Those two default to the preview's own strings, so an ordinary call renders exactly what
+ * it did before; search passes annotated copies with the matched term styled. They are whole
+ * strings rather than "text + ranges" because the offsets a highlight needs are only valid against
+ * the exact string being drawn (a search snippet is a window into the body, not the body).
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun NoteCard(note: NotePreviewUi, onClick: () -> Unit, onLongClick: () -> Unit) {
+private fun NoteCard(
+    note: NotePreviewUi,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    title: AnnotatedString = AnnotatedString(note.title.ifBlank { "Untitled" }),
+    body: AnnotatedString = AnnotatedString(note.content),
+) {
     val sw = LocalConfiguration.current.screenWidthDp
     val titleSize = (sw * 0.043f).sp
     val bodySize = (sw * 0.034f).sp
@@ -783,13 +855,13 @@ private fun NoteCard(note: NotePreviewUi, onClick: () -> Unit, onLongClick: () -
         ) {
             Column(modifier = Modifier.padding(14.dp)) {
                 Text(
-                    text = note.title.ifBlank { "Untitled" },
+                    text = title,
                     color = Color.White.copy(alpha = 0.9f),
                     style = MaterialTheme.typography.titleSmall.copy(fontSize = titleSize, fontWeight = FontWeight.Medium),
                 )
                 Spacer(Modifier.height(5.dp))
                 Text(
-                    text = note.content,
+                    text = body,
                     color = Color.White.copy(alpha = 0.55f),
                     style = MaterialTheme.typography.bodySmall.copy(fontSize = bodySize, lineHeight = bodyLine),
                     overflow = TextOverflow.Ellipsis,
@@ -822,13 +894,13 @@ private fun NoteCard(note: NotePreviewUi, onClick: () -> Unit, onLongClick: () -
             ) {
                 Column(modifier = Modifier.padding(start = 13.dp, top = 14.dp, end = 14.dp, bottom = 14.dp)) {
                     Text(
-                        text = note.title.ifBlank { "Untitled" },
+                        text = title,
                         color = TitleGrey,
                         style = MaterialTheme.typography.titleSmall.copy(fontSize = titleSize, fontWeight = FontWeight.Medium),
                     )
                     Spacer(Modifier.height(5.dp))
                     Text(
-                        text = note.content,
+                        text = body,
                         color = BodyGrey,
                         style = MaterialTheme.typography.bodySmall.copy(fontSize = bodySize, lineHeight = bodyLine),
                         overflow = TextOverflow.Ellipsis,
@@ -913,6 +985,188 @@ private fun NavIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, activ
             imageVector = icon,
             contentDescription = null,
             tint = if (active) IndigoTint else Color(0xFF5E5E5E),
+        )
+    }
+}
+
+
+// ── Search tab ───────────────────────────────────────────────────────────────
+//
+// Rendered into the notes list's own staggered grid, so results sit in the same two-column
+// layout, with the same padding and the same [NoteCard], as the Recent section.
+
+/** Style applied to the matched term inside a result's title and snippet. */
+private val SearchHighlightStyle = SpanStyle(
+    // A white wash plus a brighter, bolder face. Both are ground-agnostic: a result card is
+    // SurfaceDark when the note is neither pinned nor favorited, and a saturated category color
+    // otherwise, and this reads on either without the card having to pick the style.
+    color = Color(0xFFF2F0FF),
+    background = Color.White.copy(alpha = 0.14f),
+    fontWeight = FontWeight.Bold,
+)
+
+/**
+ * [text] with [ranges] styled. The ranges are offsets into [text] itself — see [NoteSearchMatchUi],
+ * whose title/snippet fields are exactly the strings drawn here. They are additionally clamped to
+ * the string, because addStyle throws on an out-of-range span and a mis-placed highlight is not
+ * worth a crash.
+ */
+private fun highlighted(text: String, ranges: List<IntRange>): AnnotatedString {
+    if (ranges.isEmpty()) return AnnotatedString(text)
+    return buildAnnotatedString {
+        append(text)
+        ranges.forEach { range ->
+            val start = range.first.coerceIn(0, text.length)
+            val end = (range.last + 1).coerceIn(start, text.length)
+            if (end > start) addStyle(SearchHighlightStyle, start, end)
+        }
+    }
+}
+
+private fun LazyStaggeredGridScope.searchPane(
+    state: NotesListScreenState,
+    onIntent: (NotesListIntent) -> Unit,
+    onLongClick: (NotePreviewUi) -> Unit,
+) {
+    item(span = StaggeredGridItemSpan.FullLine, contentType = "search_field") {
+        SearchField(
+            query = state.searchQuery,
+            onQueryChange = { onIntent(NotesListIntent.SearchQueryChanged(it)) },
+        )
+    }
+
+    // state.searchResults was computed for state.searchResultsQuery, which lags the field by the
+    // debounce window. So an empty result list means "no matches" ONLY once the two agree; before
+    // that it just means the current query has not been run yet.
+    val normalized = normalizeSearchText(state.searchQuery)
+    val settled = state.searchResultsQuery == normalized
+
+    when {
+        normalized.isEmpty() -> item(
+            span = StaggeredGridItemSpan.FullLine,
+            contentType = "search_message",
+        ) {
+            SearchMessage(
+                headline = "Search your notes",
+                detail = "Type to match titles and note text, in every folder.",
+            )
+        }
+
+        state.searchResults.isEmpty() && settled -> item(
+            span = StaggeredGridItemSpan.FullLine,
+            contentType = "search_message",
+        ) {
+            SearchMessage(
+                headline = "No matches",
+                detail = "Nothing in your notes contains \u201C$normalized\u201D.",
+            )
+        }
+
+        // Query typed, first results not back yet: draw the field alone rather than flashing an
+        // empty state that the very next emission would replace.
+        state.searchResults.isEmpty() -> Unit
+
+        else -> {
+            item(span = StaggeredGridItemSpan.FullLine, contentType = "search_count") {
+                val n = state.searchResults.size
+                SectionLabel(if (n == 1) "1 result" else "$n results")
+            }
+            items(
+                items = state.searchResults,
+                key = { it.preview.id },
+                contentType = { "search_result" },
+            ) { match ->
+                NoteCard(
+                    note = match.preview,
+                    onClick = { onIntent(NotesListIntent.NoteClicked(match.preview.id)) },
+                    onLongClick = { onLongClick(match.preview) },
+                    // Blank titles keep the card's "Untitled" filler; a blank title cannot have
+                    // matched a non-blank query, so no highlight is lost by replacing it.
+                    title = if (match.title.isBlank()) AnnotatedString("Untitled")
+                    else highlighted(match.title, match.titleHighlights),
+                    body = highlighted(match.snippet, match.snippetHighlights),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchField(query: String, onQueryChange: (String) -> Unit) {
+    val sw = LocalConfiguration.current.screenWidthDp
+    val textStyle = MaterialTheme.typography.bodySmall.copy(fontSize = (sw * 0.042f).sp)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp, bottom = 14.dp)
+            .clip(RoundedCornerShape(percent = 50))
+            .background(SurfaceDark)
+            .padding(start = 16.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
+    ) {
+        Icon(
+            imageVector = Icons.Default.Search,
+            contentDescription = null,
+            tint = IndigoTint,
+            modifier = Modifier.size((sw * 0.05f).dp),
+        )
+        Spacer(Modifier.width(10.dp))
+        BasicTextField(
+            value = query,
+            onValueChange = onQueryChange,
+            singleLine = true,
+            textStyle = textStyle.copy(color = TitleGrey),
+            cursorBrush = SolidColor(AccentIndigo),
+            modifier = Modifier.weight(1f),
+            decorationBox = { inner ->
+                if (query.isEmpty()) {
+                    Text("Search notes", color = Color(0xFF6A6A70), style = textStyle)
+                }
+                inner()
+            },
+        )
+        // The clear button only exists while there is text, so the slot is reserved either way to
+        // stop the text area resizing on the first and last keystroke.
+        if (query.isEmpty()) {
+            Spacer(Modifier.width(36.dp))
+        } else {
+            IconButton(onClick = { onQueryChange("") }, modifier = Modifier.size(36.dp)) {
+                Icon(
+                    imageVector = Icons.Default.Close,
+                    contentDescription = "Clear search",
+                    tint = Color(0xFF8A8A8A),
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+        }
+    }
+}
+
+/** The Search tab's two non-result states: nothing typed yet, and nothing found. */
+@Composable
+private fun SearchMessage(headline: String, detail: String) {
+    val sw = LocalConfiguration.current.screenWidthDp
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 4.dp, end = 4.dp, top = 40.dp),
+    ) {
+        Text(
+            text = headline,
+            color = TitleGrey,
+            style = MaterialTheme.typography.titleSmall.copy(
+                fontSize = (sw * 0.052f).sp,
+                fontWeight = FontWeight.Medium,
+            ),
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            text = detail,
+            color = Color(0xFF6A6A70),
+            style = MaterialTheme.typography.bodySmall.copy(
+                fontSize = (sw * 0.036f).sp,
+                lineHeight = (sw * 0.05f).sp,
+            ),
         )
     }
 }
