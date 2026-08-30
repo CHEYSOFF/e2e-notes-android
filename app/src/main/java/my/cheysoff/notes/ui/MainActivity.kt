@@ -41,7 +41,7 @@ class MainActivity : FragmentActivity() {
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
         )
         setContent {
-            NotesTheme(darkTheme = true) {
+            NotesTheme {
                 AppNavHost()
             }
         }
