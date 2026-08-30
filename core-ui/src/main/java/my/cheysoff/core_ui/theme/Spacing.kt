@@ -62,4 +62,20 @@ data class Spacing(
 
     /** Gap in the bottom bar to accommodate the centered FAB. */
     val bottomBarFabGap: Dp = xxxl,
+
+    /**
+     * Breathing room between the last item of a scrolling screen and the floating nav bar.
+     *
+     * Scaffold's own bottom inset stops content exactly at the bar's top edge, which reads as
+     * the list being cut off rather than ending. This is the gap on top of that inset; it is
+     * NOT the whole clearance, because the FAB protrudes further up than the bar does.
+     */
+    val contentToNavBarGap: Dp = m,
+
+    /**
+     * Material3 lays the FAB out this far above the bottom bar before [fabOverlapOffset] pulls
+     * it back down. Mirrors the library's private FabSpacing constant, which is not exported;
+     * it is only used to work out how far the FAB sticks up past the bar.
+     */
+    val fabSpacingAboveBar: Dp = m,
 )

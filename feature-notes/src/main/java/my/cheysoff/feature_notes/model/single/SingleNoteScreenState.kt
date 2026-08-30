@@ -16,6 +16,15 @@ data class SingleNoteScreenState(
     val isFavorite: Boolean = false,
     val folderId: String? = null,
     val folders: List<Folder> = emptyList(),
+    // Whether the editor-wide undo/redo stack (title + body + checklist) has anything to take back
+    // or replay. Drives the enabled state of the two top-bar buttons.
+    val canUndo: Boolean = false,
+    val canRedo: Boolean = false,
+    // Bumped every time the ViewModel replaces [content] itself — i.e. on an undo or redo of a body
+    // edit — and never when the body changes because the editor reported it. The screen re-seeds
+    // RichTextState whenever this changes, so typing (which moves `content` on every flush) can
+    // never trigger a re-seed and move the cursor out from under the user.
+    val contentRevision: Int = 0,
     val updatedAt: Long = 0L,
     val isLoaded: Boolean = false,
     val isLoading: Boolean = false,
