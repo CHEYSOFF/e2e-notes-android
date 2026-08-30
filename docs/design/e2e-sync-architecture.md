@@ -10,6 +10,26 @@
 > `MIGRATION_5_6`, plus soft delete, a Trash screen and a 30-day auto-purge. The remaining rows —
 > `deviceId`, HLC, `dirty`/`lastSyncedSeq`, `sync_state` — are untouched and still hypothetical,
 > as is everything from Phase 1 on.
+>
+> ### ⚠️ Corrections, 2026-08-31 (`master` @ `3a2d157`)
+>
+> This document was written against `00df3e4`. Sixty-three commits later, several of its factual
+> claims about the codebase no longer hold. Every one is corrected **in place** below, marked
+> **`[CORRECTED 2026-08-31]`**. Its open questions are answered in
+> **[`e2e-sync-open-questions.md`](e2e-sync-open-questions.md)**, which also carries the full
+> stale-claim audit with file/line citations. Headlines:
+>
+> - **The `richeditor` round-trip risk is real and confirmed.** `toHtml()` output *is* a fixed
+>   point under the pinned `1.0.0-rc14`, so sync is safe today — but `1.1.0` (already released)
+>   serialises the same content to different bytes, which would mark the entire library dirty on
+>   the first launch after that upgrade. Guarded now by
+>   `feature-notes/src/androidTest/…/RichEditorHtmlRoundTripTest.kt`.
+> - **The P-256 choice is confirmed correct**, from `api-versions.xml` and the platform jars: the
+>   whole XEC/EdEC family is API 33. So is Keystore Ed25519, for the same reason.
+> - **The `allowBackup` finding (§3) is obsolete** — PR #36 excluded the prefs and the database
+>   from both backup paths.
+> - **The "no integration-test infrastructure" premise is obsolete** — three real `androidTest`
+>   files and ~2000 lines of ViewModel tests with hand-written fakes now exist.
 
 ## Context
 
@@ -29,6 +49,14 @@ This document is the research deliverable: is it feasible, what does it cost, an
 2. **A guaranteed data-corruption bug on day one** (verified below) that must be fixed before a single byte syncs.
 3. **A pre-existing vulnerability that sync would amplify** from one device to the whole account.
 
+> **[CORRECTED 2026-08-31]**
+> 1. Tombstones and folder timestamps **shipped** (`MIGRATION_5_6`). What remains is `deviceId`,
+>    HLC, `dirty`/`lastSyncedSeq` and `sync_state` — see the exact column list in
+>    `e2e-sync-open-questions.md` §4. And it is **three** traceless metadata writes, not four:
+>    `clearFolder` now bumps `updatedAt` (`NoteDao.kt:161`).
+> 2. Weakened but alive — see the correction under Finding 1.
+> 3. **Obsolete** — see the correction under Finding 3.
+
 ---
 
 ## Three findings that drive the design
@@ -47,6 +75,23 @@ If the user backs out without typing, `SingleNoteViewModel:213` **hard-deletes**
 
 With sync and no tombstone, the sequence is: blank row committed → pushed to server → user backs out → local `DELETE` → next pull **resurrects the blank note**, on every device, forever. This is certain, not hypothetical, and it is why tombstones are non-negotiable.
 
+> **[CORRECTED 2026-08-31]** Three of the four sentences above are now wrong, though the bug is not.
+>
+> - The snippet is inexact: the event is now `NavigateToNote(newNote.id, isNew = true)`
+>   (`NotesListViewModel.kt:369-380`). A blank row is still committed before navigation.
+> - **`SingleNoteViewModel:213` no longer exists as described** — that line is now a KDoc block. The
+>   discard lives at `SingleNoteViewModel.kt:536` and calls **`purgeNote`, not `deleteNote`**,
+>   behind an explicit `openedForNewNote` nav flag rather than a timestamp inference.
+> - **"There is no user-facing note delete" is wrong.** The editor overflow menu has "Move to Trash"
+>   (`SingleNoteScreen.kt:634-661`), and `deleteNote` is now a *soft* delete
+>   (`RoomNotesRepository.kt:55-59`). `SingleNoteViewModel.kt:508` is still its only call site.
+>
+> **The finding survives in narrowed form.** `purgeNote` (`NoteDao.kt:115-116`) is still a real
+> `DELETE` with no tombstone, so a blank note that was already pushed still resurrects. The fix is
+> to permit the purge only while the row has never been pushed (`dirty = 1 AND lastSyncedSeq = 0`).
+> Three other hard deletes have the same shape: `purgeNotesDeletedBefore`, `purgeFolder`,
+> `purgeFoldersDeletedBefore`.
+
 ### 2. The locked-database constraint — with an important correction
 
 `DataModule.provideNoteDatabase` throws when `currentPassphrase()` is null, and `MainApplication` locks on `onStop`. But the precise behaviour is subtler than "no DB while locked":
@@ -63,6 +108,18 @@ So background sync is *accidentally* possible today — but only by depending on
 Today that costs one device's notes. **After sync, the same `pin_ct` unwraps the account root key and therefore every device's notes, retrievable from the server indefinitely.** Sync converts a per-device weakness into a whole-account one.
 
 *(Mitigating factor: the Keystore `MasterKey` is non-exportable, so a restored prefs file is already undecryptable on a new device — that is exactly what `SecureUnlockManager.wasStateReset` handles. Excluding the files makes this explicit rather than incidental and removes the exfiltration path.)*
+
+> **[CORRECTED 2026-08-31] This finding is obsolete — it was fixed by PR #36, before this document
+> was read.** Both rules files are now hardened.
+> `app/src/main/res/xml/data_extraction_rules.xml:15-29` excludes `secret_shared_prefs.xml` and all
+> four `notes.db*` files from **both** `<cloud-backup>` and `<device-transfer>`, and
+> `backup_rules.xml:28-34` mirrors it for the API ≤ 30 path. The parenthetical above was adopted
+> almost verbatim as the rationale comment in `backup_rules.xml:21-26`.
+>
+> `android:allowBackup` is still `"true"` (`AndroidManifest.xml:6`), so the rest of the app's data
+> dir is still in scope — but the key material and the database are not, and there is nothing else
+> there worth exfiltrating. The Phase 6 line item and the "High" risk row below are correspondingly
+> reduced to *"allow a longer PIN"*.
 
 ---
 
@@ -127,6 +184,25 @@ MITM is structurally impossible here — the only key B must authenticate is `EB
 
 ⚠️ **Deliberately not X25519**: JCA `"XDH"` support arrived around API 33, *above* minSdk 31. Verify before choosing 25519 over P-256. Also add an explicit on-curve check when decoding the peer's public key rather than trusting `KeyFactory` to reject invalid points.
 
+> **[CORRECTED 2026-08-31] Verified — the claim is right, and "around API 33" is exactly 33.**
+> `platforms/android-37.0/data/api-versions.xml` gives `since="33"` for `NamedParameterSpec` (and
+> its `X25519`/`ED25519` fields), `XECKey`/`XECPublicKey`/`XECPrivateKey`,
+> `XECPublicKeySpec`/`XECPrivateKeySpec`, `EdECKey`/`EdECPublicKey`/`EdECPrivateKey` and
+> `EdECPoint`/`EdECPublicKeySpec`/`EdECPrivateKeySpec`. The platform jars agree: `android-32/android.jar`
+> contains **none** of those classes, `android-34/android.jar` contains **all eleven**. The same
+> evidence confirms the Keystore Ed25519 row in the table above — `KeyGenParameterSpec` would need
+> `NamedParameterSpec.ED25519`, which is API 33.
+>
+> **Recommendation: P-256, unconditionally, one code path, no runtime version check.** Choosing
+> X25519 would mean shipping both curves for API 31–32, for no security gain. Full evidence in
+> `e2e-sync-open-questions.md` §1 — including the one unresolved sub-question (whether a provider
+> happens to register `"XDH"` at runtime on API 31; it cannot change the answer, since you could
+> only reach it by reflection).
+>
+> **The on-curve check is therefore mandatory, not optional.** It is the single thing X25519 would
+> have given for free. Validate the peer's point out of the QR payload: not the identity,
+> coordinates in `[0, p)`, and `y² ≡ x³ − 3x + b (mod p)`.
+
 **New permissions: `INTERNET` and `CAMERA`** — taking the app from zero to two. If "zero permissions" is a trust property worth keeping, a product flavour split is possible but carries real CI cost.
 
 ---
@@ -151,6 +227,21 @@ Binding `hlc` into the AAD is what lets a client reject a **server rollback** �
 
 ## Schema gaps — and the insight that dissolves the PR #32 tension
 
+> **[CORRECTED 2026-08-31]** Five of the seven blocking rows below **shipped** with Trash, and the
+> `exportSchema` nice-to-have shipped too. The table is kept as written for the record; the current
+> status of each row, the exact remaining columns, and the exact write paths that must bump them are
+> in `e2e-sync-open-questions.md` §4. Summary: **done** — note tombstones, folder tombstones,
+> `clearFolder` traceability, folder timestamps (except `hlc`), `exportSchema = true`;
+> **outstanding** — `deviceId`, HLC, `dirty`/`lastSyncedSeq`, `sync_state`, which do not exist
+> anywhere in the codebase.
+>
+> Two warnings for whoever writes `MIGRATION_6_7`, neither of which is below:
+> **`dirty` must default to `1`, not `0`** — every pre-existing row has never been pushed, and a
+> `DEFAULT 0` declares the user's whole library already uploaded; and **`upsertNote`'s conflict
+> branch deliberately refuses to write `isFavorite`/`isDeleted`/`deletedAt`** (`NoteDao.kt:61-74`),
+> so a merged remote record must go through its own `applyRemote` query or those fields are silently
+> dropped.
+
 **Blocking (sync is incorrect or destructive without these):**
 
 | Gap | Fix |
@@ -172,7 +263,29 @@ PR #32 deliberately made `setNotePinned`/`setNoteFavorite`/`setNoteFolder` *not*
 
 So `setNotePinned` becomes `UPDATE notes SET isPinned=?, hlcMs=?, hlcC=?, dirty=1 WHERE id=?`. List order untouched, sync gets its marker. This dissolves the tension completely.
 
+> **[CORRECTED 2026-08-31] The insight holds and the three queries are unchanged**
+> (`NoteDao.kt:140-147`) — but it is **three** metadata writes, not four. `clearFolder`
+> (`NoteDao.kt:149-162`) now bumps `updatedAt`, and its KDoc reaches this document's own conclusion
+> independently: *"Those three are user gestures on a single note that must not reorder a
+> newest-first list (PR #32); this is a mass edit the user did not aim at any note."*
+>
+> One addition this section needs: **when a remote record's `content` wins the merge, `updatedAt`
+> must be taken from the remote record too**, as an ordinary LWW field tied to the content clock.
+> Otherwise two devices show the same notes in different orders forever.
+>
+> Also: `clearFolder` is a *mass* update, so its HLC must be allocated **once for the whole
+> statement**, not per row — it is one user action. `RoomNotesRepository.deleteFolder:104-116`
+> already shares a single `now` between `clearFolder` and `softDeleteFolder` inside one
+> `withTransaction`; the HLC must follow the same rule.
+
 **Nice-to-have:** stable checklist item IDs (today `parseChecklist` mints a fresh UUID per line on *every read* and throws it away — items have no identity even across reloads); `exportSchema = true` before adding migrations to a DB you cannot recreate.
+
+> **[CORRECTED 2026-08-31]** `exportSchema = true` **shipped** (`NoteDatabase.kt:12`), with v5 and
+> v6 committed under `core-data/schemas/`. Checklist item IDs are still unstable *in storage*
+> (`ChecklistItem.kt:36-45`), but "no identity even across reloads" is too strong: `mergeChecklist`
+> (`SingleNoteViewModel.kt:158-186`) preserves ids by positional match within a live editor session.
+> It gives sync nothing durable — its own KDoc concedes *"a genuinely reordered list does get fresh
+> ids"* — so the whole-blob LWW conclusion is unaffected.
 
 All changes are additive `ALTER TABLE … ADD COLUMN` with defaults — the safe kind, matching the existing migration pattern.
 
@@ -192,6 +305,17 @@ The data shape is close to worst-case for automatic merging: `content` is an **H
 **Rejected: a text CRDT over `content`.** No dependency-light JVM implementation (Automerge ships per-ABI JNI natives on top of the SQLCipher `.so`s), and more fundamentally the field is **HTML** — character-level merge of concurrent markup edits reliably produces malformed markup. A proper tree CRDT plus a mapping to `richeditor-compose`'s serialization is a multi-month project.
 
 **What this costs, plainly:** editing the same note body on two offline devices produces a conflict copy, not a merge. Checklists merge as a whole blob until item IDs are stable.
+
+> **[ADDED 2026-08-31]** Two current data-shape facts this section predates, both of which a merge
+> design has to reckon with rather than discover:
+>
+> - **Restoring a folder brings it back empty.** `deleteFolder` unfiles its notes and nothing
+>   records which they were (`FolderDao.kt:48-53`, `NotesRepository.kt:46-52`). Device A restoring a
+>   folder and device B re-filing a note into it do not compose. Either accept this explicitly, or
+>   have `clearFolder` remember the prior `folderId` — a Phase 0 decision, not a Phase 3 one.
+> - **`contentFormat` must travel with `content` in the payload.** `NoteDao.kt:69-70` and
+>   `SingleNoteViewModel.kt:724-726` both state that the two must never drift; a body read back with
+>   the wrong parser is silent corruption.
 
 ---
 
@@ -238,7 +362,7 @@ The cursor must be the server's **monotonic `seq`, not a timestamp** (timestamps
 
 | Phase | Content | Est. |
 |---|---|---|
-| 0 | Schema & change tracking (tombstones, HLC, dirty, deviceId, migrations) | 3–5 d |
+| 0 | Schema & change tracking (tombstones, HLC, dirty, deviceId, migrations) — **[2026-08-31: tombstones and folder timestamps shipped with Trash; the HLC/`dirty`/`deviceId`/`sync_state` half remains, call it 2–3 d]** | 3–5 d |
 | 1 | Crypto core (HKDF, ARK, envelope, blinded IDs) — all pure-JVM | 3–4 d |
 | 2 | Pairing (CameraX, QR, ECDH, SAS, device key) | 5–8 d |
 | 3 | **Sync engine** (coordinator, push/pull, CAS, merge, conflict copies) | 8–12 d |
@@ -253,6 +377,15 @@ The cursor must be the server's **monotonic `seq`, not a timestamp** (timestamps
 ## Recommended first slice: ship "Trash", not sync
 
 **Phase 0 alone, as a user-facing Trash feature.** Soft delete replaces hard delete; a Trash screen lists deleted notes and folders with Restore and Delete Forever; auto-purge after 30 days.
+
+> **[SHIPPED 2026-08-31 — this recommendation was taken, as PR #49.]** One claim below is now false:
+> "deleting a folder currently destroys it … irreversibly behind one confirm dialog, with no undo"
+> — folder delete is soft (`RoomNotesRepository.kt:104-116`) and restorable from Trash
+> (`TrashViewModel.kt:91`). The confirm dialog remains.
+>
+> One caveat the slice did **not** deliver, and which Phase 0's sync half must: auto-purge runs
+> only when the user opens the Trash screen (`TrashViewModel.kt:43-59`), so an expired tombstone
+> can sit in the database indefinitely on one device and be swept daily on another.
 
 Why this is the right first move:
 
@@ -270,7 +403,7 @@ Second slice would be Phase 1 (crypto core), for the same reason: entirely pure-
 | Risk | Severity | Mitigation |
 |---|---|---|
 | **A merge bug propagates everywhere in seconds.** Today a bug damages one device; with sync it wipes the account on all devices with no undo. | Highest | server-side version history; conflict copies (never discard); a local snapshot before first pull; a dry-run mode |
-| `allowBackup` + 6-digit PIN (§3 above) — sync widens it from one device to the whole account | High | fix **before** sync: exclude the prefs/DB from backup, allow a longer PIN |
+| ~~`allowBackup` + 6-digit PIN (§3 above) — sync widens it from one device to the whole account~~ **[MOSTLY MITIGATED 2026-08-31, PR #36]** — the prefs and DB are excluded from both backup paths; only "allow a longer PIN" remains | ~~High~~ Low | ~~exclude the prefs/DB from backup~~ **done**; allow a longer PIN |
 | Tombstone purge resurrection — a device offline longer than the purge window restores everything it deleted | High | refuse to sync past a staleness threshold; force a re-baseline |
 | Silent field loss when an older app version re-serialises a newer payload (`ignoreUnknownKeys` drops fields) | High | refuse to sync on payload-version mismatch; never silently downgrade |
 | ARK regenerated by accident — forks the account into two undecryptable halves | High | same "created in exactly ONE place" discipline as `setupPin`, plus a test that generation is unreachable when `ark_ct` exists |
@@ -278,15 +411,69 @@ Second slice would be Phase 1 (crypto core), for the same reason: entirely pure-
 
 **Genuinely hard:** the sync engine's state machine (partial pushes, mid-sync process death, a remote update landing while the 300 ms autosave debounce is mid-flight on an open note); multi-device convergence testing (no integration-test infrastructure exists — the `androidTest` dirs hold only `ExampleInstrumentedTest`).
 
+> **[CORRECTED 2026-08-31] The parenthetical is wrong.** `core-data/src/androidTest/` holds
+> `Migration4to5Test.kt`, `Migration5to6Test.kt` and `NoteDaoTest.kt` (336 lines);
+> `feature-notes/src/test/` holds `FakeNotesRepository.kt`, `FakeSettingsRepository.kt`,
+> `MainDispatcherRule.kt` and ~2000 lines of ViewModel tests. `androidx.room:room-testing:2.8.4`
+> resolves (`Migration5to6Test.kt:22-30`). `FakeNotesRepository`'s gate/release design is already
+> deterministic-interleaving testing.
+>
+> A concrete, days-not-weeks convergence approach is in `e2e-sync-open-questions.md` §3: make
+> `merge()` a pure function in `core-domain`, then drive N in-process replicas over a fake
+> transport from a seeded random schedule and assert they converge. Two emulators off the single
+> installed system image are the second tier, as a smoke test only.
+>
+> Add to "genuinely hard": **Room's invalidation emission is not ordered against the write
+> coroutine** (`SingleNoteViewModel.kt:657-675` — *"writer-first is near-certain in practice, not
+> enforced here"*). A sync engine writing behind the user's back makes that a live race.
+
 **Verify before relying on:** the exact API level for JCA `"XDH"`; whether `richeditor-compose` rc14's HTML output round-trips byte-stably across app versions — if it re-serialises differently after an update, **every note on every device looks dirty at once** and stampedes the server. Cheap to test, expensive to discover late.
+
+> **[RESOLVED 2026-08-31] Both verified. It was cheap, and one of them was a real problem.**
+>
+> - `"XDH"` is API **33** exactly — P-256 stands. See the correction under "Primitives".
+> - The round trip **is** a fixed point under the pinned `1.0.0-rc14` (28/28 cases idempotent after
+>   one pass, verified on an API 33 emulator), so sync is safe on the current version. But
+>   **`1.1.0` serialises the same content to different bytes**: rc14 escapes `.` as `&period;`,
+>   `,` as `&comma;` and every Cyrillic letter as a named entity (`&Pcy;` …), and 1.1.0 emits none
+>   of that. It still *decodes* rc14's output losslessly — but every note containing a full stop, a
+>   comma or a Cyrillic character would go byte-dirty at once on the first launch after that
+>   upgrade. **The risk as written was correct and the failure mode is live, not speculative.**
+>
+> Guarded by `feature-notes/src/androidTest/…/RichEditorHtmlRoundTripTest.kt`; re-run it on every
+> `richeditor` version change. Mitigations (a `contentSerializerVersion` in the payload, and
+> treating a serializer bump as an offline re-baseline that marks rows dirty *without* bumping
+> their HLC) are in `e2e-sync-open-questions.md` §2. Note also that rc14's escaping inflates
+> Cyrillic bodies roughly **sixfold** — upgrading is attractive on its own merits, and if it is
+> going to happen it should happen **before** sync ships.
 
 ---
 
 ## Open questions before any of this is scheduled
 
+> **[ALL THREE ANSWERED 2026-08-31 — see [`e2e-sync-open-questions.md`](e2e-sync-open-questions.md).]**
+> Q1: the round trip is a fixed point on rc14 but **not** across the rc14 → 1.1.0 upgrade, which is
+> exactly the stampede case; guarded by a committed instrumented test. Q2: **moot** — Trash shipped
+> as PR #49 and stands on its own. Q3: unchanged as a product decision, but note that the "zero
+> permissions" property is *still* intact today (verified: no `<uses-permission>` in any of the
+> eight manifests, and no network code anywhere in the repo).
+
 1. **Is the `richeditor-compose` HTML round-trip byte-stable?** If `setHtml(x)` → `toHtml()` does not reproduce `x`, the first edit to each note rewrites its stored HTML. Worse, if a *library upgrade* changes the serialization, every note on every device goes dirty at once and stampedes the server.
 
    Attempted to probe this from the UI (open a note, type a character, delete it, observe whether the note re-sorts). **It does not isolate the variable** — the 300 ms autosave fires on each keystroke, so a save happens regardless of whether the round-trip is stable, and the SQLCipher database cannot be read from outside the app to compare bytes. Answering this properly needs a small instrumented test asserting `toHtml(setHtml(x)) == x` over representative note bodies, plus a repeat after any `richeditor-compose` version bump. Worth writing before Phase 3.
+
+   > **[CORRECTED 2026-08-31]** The conclusion was right; the stated reason was not. There are
+   > **two chained 300 ms *trailing* debounces** (`SingleNoteScreen.kt:135` serialise,
+   > `SingleNoteViewModel.kt:677-683` save), `.drop(1)` at `SingleNoteScreen.kt:267` means merely
+   > opening a note emits nothing at all, and `hasUnsavedContent()`
+   > (`SingleNoteViewModel.kt:720-728`) skips the upsert entirely when live state matches the
+   > baseline — so a fast type-then-delete can produce **no** write. The probe fails because it is
+   > timing-dependent, not because a save is unconditional.
+   >
+   > Also note: asserting `toHtml(setHtml(x)) == x` for arbitrary `x` is the **wrong assertion**.
+   > The library normalises, and that is harmless because the app only ever stores `toHtml()`
+   > output. The property that matters is the fixed point, `f(f(x)) == f(x)`, which is what the
+   > committed test asserts.
 2. **Does the Trash feature stand on its own?** It is recommended here as the first slice precisely because it does — but it should be justified as a product decision, not smuggled in as sync groundwork.
 3. **Is "zero declared permissions" a property worth preserving?** Sync needs `INTERNET` and `CAMERA`. A product-flavour split can keep an offline variant, at real CI cost.
 
@@ -298,3 +485,23 @@ Second slice would be Phase 1 (crypto core), for the same reason: entirely pure-
 - `core-data/…/di/DataModule.kt` — the locked-DB constraint lives here
 - `app/…/MainApplication.kt` — where an app-scoped sync scope would go
 - `app/src/main/AndroidManifest.xml` — `allowBackup` fix first; `INTERNET` + `CAMERA` later
+
+> **[CORRECTED 2026-08-31]** All six paths still exist, but three of the descriptions are stale:
+>
+> - **`NoteDao.kt`** — "all six write paths" is wrong. `NoteDao` has **ten** write methods and
+>   `FolderDao` five; the full inventory with per-method column lists is in
+>   `e2e-sync-open-questions.md` §4. Soft delete and `WHERE isDeleted = 0` are **already done**.
+>   Also: **delete the dead `insertNote` (`NoteDao.kt:59-60`)** — it is `@Insert(REPLACE)`, has no
+>   callers, and REPLACE is DELETE+INSERT, which would wipe every sync column.
+> - **`NoteDatabase.kt`** — `MIGRATION_4_5`, `exportSchema = true` and `FolderEntity`'s timestamp
+>   set have **all landed**. The next migration is `MIGRATION_6_7`.
+> - **`AndroidManifest.xml`** — the `allowBackup` fix landed in PR #36. Only `INTERNET` + `CAMERA`
+>   remain.
+>
+> Files this list omits that sync must now touch: `core-data/…/local/FolderDao.kt`,
+> `core-data/…/data/RoomNotesRepository.kt` (the `System.currentTimeMillis()` calls at `:51` and
+> `:100` are the HLC injection seam), `core-domain/…/repository/NotesRepository.kt`,
+> `core-domain/…/model/{Note,Folder,TrashPolicy}.kt`, `core-data/schemas/…/6.json`, and
+> `feature-notes/…/ui/trash/TrashViewModel.kt` (whose auto-purge fires **only** when the Trash
+> screen is opened — `TrashViewModel.kt:43-59` — which makes the tombstone-purge risk above much
+> less predictable than the "30-day auto-purge" summary suggests).
