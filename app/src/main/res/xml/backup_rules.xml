@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Auto Backup rules (API 31 and below use this file; API 31+ uses
-   data_extraction_rules.xml — both are kept in sync).
+   Auto Backup rules, referenced by android:fullBackupContent. The platform reads
+   that attribute only on API 30 and below; on API 31+ it reads
+   android:dataExtractionRules (data_extraction_rules.xml) instead. This module
+   sets minSdk = 31, so this file is never consulted on any supported device — it
+   exists solely to give the manifest attribute a target. It is kept, and kept in
+   sync with data_extraction_rules.xml, so that it is still correct if minSdk ever
+   drops below 31.
 
    Everything that protects or holds note data is excluded:
 
@@ -8,7 +13,10 @@
      pin_iv, pin_ct, pin_iters). The PIN is 6 digits, so anyone who obtains
      that file can exhaust the keyspace offline — LockoutPolicy is app-side
      code an offline attacker never runs. It must not leave the device.
-   - notes.db is the SQLCipher database itself.
+   - notes.db is the SQLCipher database itself. Its sidecars are listed one by
+     one because exclusion paths match exactly, not by prefix: -wal/-shm for the
+     WAL journal Room uses by default, and -journal for the TRUNCATE journal that
+     JournalMode.AUTOMATIC falls back to on low-RAM devices.
 
    These are useless on a restore anyway: the EncryptedSharedPreferences
    MasterKey lives in the AndroidKeyStore and is non-exportable, so a restored
@@ -22,4 +30,5 @@
     <exclude domain="database" path="notes.db" />
     <exclude domain="database" path="notes.db-wal" />
     <exclude domain="database" path="notes.db-shm" />
+    <exclude domain="database" path="notes.db-journal" />
 </full-backup-content>
