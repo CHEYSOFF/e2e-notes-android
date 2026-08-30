@@ -1,5 +1,22 @@
+// Google's read-through mirror of Maven Central, listed BEFORE mavenCentral() in both blocks.
+//
+// repo.maven.apache.org / repo1.maven.org answer 403 Forbidden from this network for every
+// artifact. It is the NETWORK that is blocked, not any one tool -- Gradle, curl and Android Studio
+// all get the same 403. Sonatype geo-blocks Central from some regions. Google's Maven is a
+// different host and is unaffected, which is why androidx and AGP always resolved while anything
+// published only to Central never did.
+//
+// This mirror is Google-hosted and serves the same artifacts under the same coordinates. It
+// unblocks kotlinx-coroutines-test (and therefore all ViewModel and Compose UI testing), the
+// JaCoCo agent behind coverage reporting, Espresso's transitive dependencies, and the Unified Test
+// Platform artifacts that made connectedAndroidTest unusable.
+//
+// mavenCentral() is KEPT as the next entry rather than replaced: Gradle tries repositories in
+// order and falls through on a miss, so the mirror is simply asked first, and nothing here needs
+// changing if the block lifts or the mirror goes away.
 pluginManagement {
     repositories {
+        maven("https://maven-central.storage-download.googleapis.com/maven2")
         google {
             content {
                 includeGroupByRegex("com\\.android.*")
@@ -15,6 +32,7 @@ dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
         google()
+        maven("https://maven-central.storage-download.googleapis.com/maven2")
         mavenCentral()
     }
 }
