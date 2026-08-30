@@ -51,6 +51,9 @@ sealed class NotesListEvent {
      */
     data class NavigateToNote(val noteId: String, val isNew: Boolean = false) : NotesListEvent()
 
+    /** The Profile tab was tapped — open the settings screen on top of the list. */
+    data object NavigateToProfile : NotesListEvent()
+
     data object NavigateToTrash : NotesListEvent()
 }
 
@@ -102,9 +105,10 @@ class NotesListViewModel @Inject constructor(
             notesRepository.getNotes(order).map { notes -> order to notes }
         }
 
-    // Declared before init: the init coroutine can resume synchronously (Main.immediate + a
-    // DataStore flow that emits its first value without suspending), so pickMotivationalLine()
-    // may run during construction — this list must already be initialized by then.
+    // Declared before init: the header-settings collector in init can run synchronously
+    // (Main.immediate + a DataStore flow that emits its first value without suspending), so
+    // pickMotivationalLine() may run during construction — this list must already be
+    // initialized by then.
     private val dailyPhrases = listOf(
         HeaderLineUi("One thing", "at a time."),
         HeaderLineUi("Tomorrow", "starts here."),
@@ -114,11 +118,20 @@ class NotesListViewModel @Inject constructor(
     )
 
     init {
-        // Pick the motivational line once per screen open (random greeting/phrase among the enabled).
-        viewModelScope.launch {
-            val settings = settingsRepository.headerSettings.first()
-            _state.update { it.copy(headerLine = pickMotivationalLine(settings)) }
-        }
+        // Pick the motivational line once per screen open (random greeting/phrase among the
+        // enabled) — and re-pick whenever the header settings themselves change.
+        //
+        // Re-picking on a settings change is the point: the settings screen is a separate
+        // destination pushed ON TOP of this one, so this ViewModel survives the round trip and a
+        // one-shot pick would leave a greeting on screen after the user had just switched
+        // greetings off. It does not make the line reshuffle at random: headerSettings is
+        // distinctUntilChanged, so unrelated DataStore writes (the sort order, say) do not
+        // re-emit here.
+        settingsRepository.headerSettings
+            .onEach { settings ->
+                _state.update { it.copy(headerLine = pickMotivationalLine(settings)) }
+            }
+            .launchIn(viewModelScope)
 
         // Stats is a separate, always-visible sub-line (not part of the random rotation) and tracks
         // the live note counts.
@@ -264,8 +277,14 @@ class NotesListViewModel @Inject constructor(
 
             NotesListIntent.AllNotesClicked -> selectBottomBarItem(BottomBarItem.ALL_NOTES)
             NotesListIntent.CalendarClicked -> selectBottomBarItem(BottomBarItem.CALENDAR)
-            NotesListIntent.ProfileClicked -> selectBottomBarItem(BottomBarItem.PROFILE)
             NotesListIntent.SearchClicked -> selectBottomBarItem(BottomBarItem.SEARCH)
+
+            NotesListIntent.ProfileClicked -> {
+                // Deliberately NOT selectBottomBarItem: Profile is a destination pushed on top of
+                // this screen, not a tab this screen switches into. Marking PROFILE selected would
+                // leave the person icon lit once the user backs out and is looking at the list.
+                viewModelScope.launch { _events.send(NotesListEvent.NavigateToProfile) }
+            }
 
             is NotesListIntent.SearchQueryChanged -> {
                 // Two writes on purpose. The field itself is state, so it has to echo the
