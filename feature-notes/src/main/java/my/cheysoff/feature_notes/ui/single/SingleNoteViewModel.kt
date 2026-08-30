@@ -26,10 +26,18 @@ import my.cheysoff.feature_notes.model.single.SingleNoteScreenState
 import my.cheysoff.feature_notes.model.single.normalizeChecklistText
 import my.cheysoff.feature_notes.model.single.parseChecklist
 import my.cheysoff.feature_notes.model.single.serializeChecklist
+import java.util.UUID
 import javax.inject.Inject
 
 sealed class SingleNoteEvent {
     data object NavigateBack : SingleNoteEvent()
+
+    /**
+     * A copy of this note has been written as a new row. [title] is the copy's title, so the host
+     * can name it in its confirmation. The editor stays on the original, so nothing on this screen
+     * changes when a duplicate is made — this event is the only signal that the write happened.
+     */
+    data class NoteDuplicated(val title: String) : SingleNoteEvent()
 }
 
 /**
@@ -200,6 +208,52 @@ internal fun isDiscardableOnOpen(openedForNewNote: Boolean, note: Note): Boolean
     openedForNewNote &&
             note.title.isBlank() && note.content.isBlank() && note.checklist.isBlank()
 
+/**
+ * Suffix a duplicate's title carries. Plain and un-numbered on purpose: choosing "(copy 2)" would
+ * mean knowing every other title in the database, which this screen never loads — so duplicating a
+ * duplicate yields a doubled suffix rather than a number that could be wrong.
+ */
+private const val DUPLICATE_TITLE_SUFFIX = " (copy)"
+
+/**
+ * Title for a duplicate of a note currently titled [title].
+ *
+ * A blank title becomes "Untitled (copy)" rather than the bare suffix: the copy has to be findable
+ * in the list, and a card reading "(copy)" says less than one reading "Untitled (copy)".
+ */
+internal fun duplicateTitle(title: String): String {
+    val trimmed = title.trim()
+    return if (trimmed.isEmpty()) {
+        "Untitled$DUPLICATE_TITLE_SUFFIX"
+    } else {
+        trimmed + DUPLICATE_TITLE_SUFFIX
+    }
+}
+
+/**
+ * The row a "Duplicate" writes: a fresh [newId] carrying the editor's current title, body (with its
+ * format marker, which must always travel with the same bytes it describes), checklist and folder.
+ *
+ * Timestamps are left at their defaults because nothing set here would survive: `saveNote` upserts,
+ * and for an id the table has never held, that INSERT stamps createdAt and updatedAt with its own
+ * `System.currentTimeMillis()`.
+ *
+ * isPinned is dropped rather than copied: a pin is curation of one specific note, and a second
+ * pinned card with a near-identical title reads as a glitch in the list's pinned pager. isFavorite
+ * is not really a choice made here — that same INSERT writes isFavorite = 0 for a new row, so a
+ * copy is never favorited whatever this function passes.
+ */
+internal fun buildDuplicate(state: SingleNoteScreenState, newId: String): Note = Note(
+    id = newId,
+    title = duplicateTitle(state.title),
+    content = state.content,
+    contentFormat = state.contentFormat,
+    checklist = state.checklist.serializeChecklist(),
+    isPinned = false,
+    isFavorite = false,
+    folderId = state.folderId,
+)
+
 @HiltViewModel
 class SingleNoteViewModel @Inject constructor(
     private val notesRepository: NotesRepository,
@@ -223,6 +277,11 @@ class SingleNoteViewModel @Inject constructor(
     // this one in BackClicked also flushes any earlier-queued meta write before navigation cancels
     // viewModelScope and could drop an in-flight UPDATE.
     private var metaWriteJob: Job? = null
+
+    // The in-flight "Duplicate", if any. Held for two reasons: a second tap is ignored while the
+    // first insert is still running, and BackClicked joins it so navigating away can't cancel that
+    // insert mid-flight.
+    private var duplicateJob: Job? = null
 
     // Serializes DB writes so an older/delayed save can't run concurrently with a newer one.
     private val saveMutex = Mutex()
@@ -433,11 +492,7 @@ class SingleNoteViewModel @Inject constructor(
                 }
             }
 
-            is SingleNoteIntent.MoreClicked -> {
-                // The overflow menu is opened by the screen itself (it is local UI state), so there
-                // is nothing for the ViewModel to do. The intent is kept so the top bar's icon set
-                // stays uniform and a future menu action has somewhere to land.
-            }
+            is SingleNoteIntent.DuplicateNote -> duplicateNote()
 
             is SingleNoteIntent.DeleteNote -> {
                 val id = noteId ?: return
@@ -458,8 +513,10 @@ class SingleNoteViewModel @Inject constructor(
             is SingleNoteIntent.BackClicked -> {
                 viewModelScope.launch {
                     // Flush any pending metadata write (favorite/folder/pin) before navigating, so
-                    // popping the screen can't cancel an in-flight UPDATE.
+                    // popping the screen can't cancel an in-flight UPDATE. Same reason for the
+                    // duplicate: its INSERT runs on viewModelScope, which the pop cancels.
                     metaWriteJob?.join()
+                    duplicateJob?.join()
                     val current = _state.value
                     val id = noteId
                     when {
@@ -487,6 +544,38 @@ class SingleNoteViewModel @Inject constructor(
                     _events.send(SingleNoteEvent.NavigateBack)
                 }
             }
+        }
+    }
+
+    /**
+     * Writes a copy of this note as a new row and reports it back through [SingleNoteEvent].
+     * The editor stays on the original — nothing about this screen's note changes.
+     *
+     * Three things this shares with every other write path here:
+     * - the copy is built from the LATEST `_state`, read inside the coroutine rather than captured
+     *   at intent time, so it carries what the editor holds now;
+     * - the INSERT runs under [saveMutex], so it cannot interleave with an autosave upsert;
+     * - the baseline is deliberately left alone. It describes the row for [noteId], and this write
+     *   touches a different id, so folding anything into it would make the next emission for THIS
+     *   note look like an external change and roll the user's typing back.
+     *
+     * The original is flushed first when it has unsaved content: the copy is taken from live editor
+     * state, so without that flush a process death right here would leave the copy ahead of the note
+     * it was copied from. When there is nothing pending, `hasUnsavedContent()` is false and no write
+     * happens — so duplicating a note the user only read does not bump its updatedAt or reorder the
+     * list.
+     */
+    private fun duplicateNote() {
+        // No noteId means this screen was opened without a note to copy.
+        if (noteId == null) return
+        // A second tap while the first insert is still in flight would mint a second copy. The menu
+        // closes on tap, so this is a guard against a double tap, not an expected path.
+        if (duplicateJob?.isActive == true) return
+        duplicateJob = viewModelScope.launch {
+            if (_state.value.hasUnsavedContent()) saveNote(debounce = false)?.join()
+            val copy = buildDuplicate(_state.value, newId = UUID.randomUUID().toString())
+            saveMutex.withLock { notesRepository.saveNote(copy) }
+            _events.send(SingleNoteEvent.NoteDuplicated(copy.title))
         }
     }
 
