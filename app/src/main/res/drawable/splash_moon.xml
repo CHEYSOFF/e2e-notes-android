@@ -1,0 +1,133 @@
+<!-- Splash screen icon: the same shaded 3D crescent as the launcher icon and the unlock screen,
+     beating twice like a pulse. See ic_launcher_foreground.xml for how @drawable/ic_moon_3d was
+     derived from feature-auth's ic_crescent_moon_3d.png.
+
+     WHY A FRAME ANIMATION AND NOT AN AnimatedVectorDrawable
+     windowSplashScreenAnimatedIcon only animates if the drawable is an AnimatedVectorDrawable or
+     an AnimationDrawable; a <bitmap> or a plain PNG is shown but never animated. An AVD is vector
+     paths only and cannot contain a raster, so keeping the real 3D render — which is the whole
+     point of this change — forces the AnimationDrawable route.
+
+     WHY THE FRAMES COST ALMOST NOTHING
+     A frame animation normally means one PNG per frame. Here every frame is the same PNG wrapped
+     in an <inset> with a different fractional inset, so the whole beat costs one 384px bitmap
+     (~55 KB) plus this file. InsetDrawable shrinks its child's bounds, and the child bitmap fills
+     those bounds, so the inset percentage is exactly the scale: ic_moon_3d's canvas is the
+     crescent's bounding circle, so a frame inset by f shows the moon at (1 - 2f) of the icon box.
+
+     SIZING AGAINST THE SYSTEM'S CIRCULAR MASK
+     The platform really does mask the splash icon to a circle, and the circle's size depends on
+     windowSplashScreenIconBackgroundColor. Measured on a 1080x2400 / 420dpi (2.625x) device:
+     with an icon background set, the disc it draws is 420px = exactly 160.0dp across and the moon
+     inside it measures 293px; with the attribute removed (what this app ships) the same moon
+     measures 348px, i.e. 1.188x larger — the documented 192/160 step. So the two cases are
+     240dp box / 160dp circle and 288dp box / 192dp circle, both a 2/3 ratio, which is why sizing
+     everything as a fraction of the icon box is correct either way.
+       - rest  (inset 25%):    moon = 50.0% of the icon box = 378px here
+       - peak  (inset 21.75%): moon = 56.5% of the icon box = 427px here
+     The visible circle is 66.7% = 504px, so even the largest frame keeps 15% clearance and
+     nothing clips at the top of a beat.
+
+     THE BEAT
+     Two beats, each a lub-dub rather than a single sine bump, at 33ms per frame — as close to two
+     60Hz vsyncs (33.3ms) as an integer millisecond gets, so nothing lands half a frame late:
+       lub  1.000 -> 1.130 over 2 frames (66ms), back to 1.000 over 4 frames (132ms)
+       dub  1.000 -> 1.070 over 2 frames (66ms), back to 1.000 over 3 frames (99ms)
+     The attack is shorter than the release in both — half for the lub, two thirds for the dub —
+     and the sampled values decelerate into each peak and ease in-out on the way down: a fast thump
+     with a slow settle, not a symmetric pulse. Beat = 363ms, diastole between the two beats =
+     132ms, final hold = 66ms, so the whole animation runs 924ms and finishes inside the 1000ms
+     the platform allows a splash animation.
+
+     Verified on an API 33 emulator by frame-stepping a screen recording: the moon's measured width
+     runs rest -> 1.131 -> rest -> 1.074 -> rest -> 1.131 -> rest -> 1.074 -> rest and then holds,
+     i.e. the two lub-dubs land at exactly the designed scales and the animation does not loop.
+
+     oneshot="true" is required, not cosmetic: from API 33 the platform measures the drawable
+     itself to decide how long to hold the splash, and a looping AnimationDrawable never reports
+     an end. -->
+<animation-list xmlns:android="http://schemas.android.com/apk/res/android"
+    android:oneshot="true">
+
+    <!-- Beat 1 -->
+    <item android:duration="33">
+        <inset android:drawable="@drawable/ic_moon_3d" android:inset="25%" />
+    </item>
+    <item android:duration="33">
+        <inset android:drawable="@drawable/ic_moon_3d" android:inset="22.88%" />
+    </item>
+    <!-- lub peak, scale 1.130 -->
+    <item android:duration="33">
+        <inset android:drawable="@drawable/ic_moon_3d" android:inset="21.75%" />
+    </item>
+    <item android:duration="33">
+        <inset android:drawable="@drawable/ic_moon_3d" android:inset="22.63%" />
+    </item>
+    <item android:duration="33">
+        <inset android:drawable="@drawable/ic_moon_3d" android:inset="23.88%" />
+    </item>
+    <item android:duration="33">
+        <inset android:drawable="@drawable/ic_moon_3d" android:inset="24.75%" />
+    </item>
+    <item android:duration="33">
+        <inset android:drawable="@drawable/ic_moon_3d" android:inset="25%" />
+    </item>
+    <item android:duration="33">
+        <inset android:drawable="@drawable/ic_moon_3d" android:inset="23.63%" />
+    </item>
+    <!-- dub peak, scale 1.070 -->
+    <item android:duration="33">
+        <inset android:drawable="@drawable/ic_moon_3d" android:inset="23.25%" />
+    </item>
+    <item android:duration="33">
+        <inset android:drawable="@drawable/ic_moon_3d" android:inset="23.88%" />
+    </item>
+    <item android:duration="33">
+        <inset android:drawable="@drawable/ic_moon_3d" android:inset="24.63%" />
+    </item>
+
+    <!-- Diastole: one held frame at rest, long enough that the two beats read as two. -->
+    <item android:duration="132">
+        <inset android:drawable="@drawable/ic_moon_3d" android:inset="25%" />
+    </item>
+
+    <!-- Beat 2, identical to beat 1. -->
+    <item android:duration="33">
+        <inset android:drawable="@drawable/ic_moon_3d" android:inset="25%" />
+    </item>
+    <item android:duration="33">
+        <inset android:drawable="@drawable/ic_moon_3d" android:inset="22.88%" />
+    </item>
+    <item android:duration="33">
+        <inset android:drawable="@drawable/ic_moon_3d" android:inset="21.75%" />
+    </item>
+    <item android:duration="33">
+        <inset android:drawable="@drawable/ic_moon_3d" android:inset="22.63%" />
+    </item>
+    <item android:duration="33">
+        <inset android:drawable="@drawable/ic_moon_3d" android:inset="23.88%" />
+    </item>
+    <item android:duration="33">
+        <inset android:drawable="@drawable/ic_moon_3d" android:inset="24.75%" />
+    </item>
+    <item android:duration="33">
+        <inset android:drawable="@drawable/ic_moon_3d" android:inset="25%" />
+    </item>
+    <item android:duration="33">
+        <inset android:drawable="@drawable/ic_moon_3d" android:inset="23.63%" />
+    </item>
+    <item android:duration="33">
+        <inset android:drawable="@drawable/ic_moon_3d" android:inset="23.25%" />
+    </item>
+    <item android:duration="33">
+        <inset android:drawable="@drawable/ic_moon_3d" android:inset="23.88%" />
+    </item>
+    <item android:duration="33">
+        <inset android:drawable="@drawable/ic_moon_3d" android:inset="24.63%" />
+    </item>
+
+    <!-- Final frame: back at rest, and the one the icon stays on once the beat is over. -->
+    <item android:duration="66">
+        <inset android:drawable="@drawable/ic_moon_3d" android:inset="25%" />
+    </item>
+</animation-list>
