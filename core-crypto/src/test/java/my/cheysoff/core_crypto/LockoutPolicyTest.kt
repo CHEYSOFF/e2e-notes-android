@@ -177,9 +177,10 @@ class LockoutPolicyTest {
      * they are indistinguishable from a live deadline — but they are bounded, so no bricking.)
      */
     @Test
-    fun `a stale monotonic deadline can never exceed MAX_LOCK_MS`() {
+    fun `a stale monotonic deadline contributes nothing at all`() {
+        // Every entry is strictly greater than every sinceBoot below, so `deadline - nowElapsed`
+        // always exceeds MAX_LOCK_MS and the value is unambiguously pre-reboot.
         val pastUptimes = longArrayOf(
-            0L,
             LockoutPolicy.MAX_LOCK_MS,
             60L * 60 * 1000,                    // 1 hour
             3L * 24 * 60 * 60 * 1000,           // 3 days
@@ -194,9 +195,14 @@ class LockoutPolicyTest {
                     nowWall = now,
                     nowElapsed = sinceBoot,
                 )
-                assertTrue(
-                    "pastUptime=$pastUptime sinceBoot=$sinceBoot gave remaining=$remaining",
-                    remaining <= LockoutPolicy.MAX_LOCK_MS,
+                // `<= MAX_LOCK_MS` would also have held under the old coerceAtMost logic, which
+                // is exactly the bug: it capped the reported value and kept re-reporting the cap
+                // until uptime caught up. The deadline has to be DISCARDED, so the only correct
+                // answer is zero.
+                assertEquals(
+                    "pastUptime=$pastUptime sinceBoot=$sinceBoot",
+                    0L,
+                    remaining,
                 )
             }
         }
@@ -230,6 +236,24 @@ class LockoutPolicyTest {
     }
 
     /**
+     * A cleared WALL slot (0) is "no deadline" too. Without that guard, a device whose clock is
+     * set before the epoch turns `0 - nowWall` into a positive remainder of decades, so a fresh
+     * install that has never failed a PIN reports itself locked out — with no deadline stored and
+     * nothing the user can do about it.
+     */
+    @Test
+    fun `zero wall deadline is not treated as a lockout even with a pre-epoch clock`() {
+        val preEpoch = -3_000_000_000_000L    // ~1875
+        assertEquals(0L, LockoutPolicy.remainingMillis(0L, 0L, preEpoch, elapsed))
+        assertEquals(0L, LockoutPolicy.remainingMillis(0L, 0L, preEpoch, 0L))
+        // A real deadline is still honoured on such a clock.
+        assertEquals(
+            10_000L,
+            LockoutPolicy.remainingMillis(preEpoch + 10_000L, 0L, preEpoch, elapsed),
+        )
+    }
+
+    /**
      * End-to-end over the real backoff curve: whatever [lockoutUntil] writes into the two slots,
      * remainingMillis agrees with it while the clocks are consistent, and never exceeds
      * MAX_LOCK_MS once the monotonic clock has been reset by a reboot.
@@ -246,10 +270,15 @@ class LockoutPolicyTest {
                 duration,
                 LockoutPolicy.remainingMillis(until, elapsedUntil, now, elapsed),
             )
+            // After the reboot the monotonic slot is stale and must drop out entirely, leaving
+            // the wall deadline to answer on its own — i.e. exactly `duration`, not merely
+            // something under the cap. The old logic returned MAX_LOCK_MS here for every
+            // short lockout, which `<= MAX_LOCK_MS` happily accepted.
             val afterReboot = LockoutPolicy.remainingMillis(until, elapsedUntil, now, 5_000L)
-            assertTrue(
-                "failCount=$failCount after reboot gave $afterReboot",
-                afterReboot <= LockoutPolicy.MAX_LOCK_MS,
+            assertEquals(
+                "failCount=$failCount after reboot",
+                duration,
+                afterReboot,
             )
         }
     }
