@@ -39,6 +39,13 @@ The mismatch is easy to miss in isolation and obvious side by side: Urbanist is 
 light geometric sans with circular bowls, Roboto is a narrower neo-grotesque with
 a taller x-height. Mixed in one line they read as two voices.
 
+Here it is in the running app, on the emulator — a single note card whose lines
+alternate between the two typefaces. "Untitled", "Email John",
+"&lt;john@example.com&gt;" and "about Q3" are Urbanist; every Russian line between and
+below them is Roboto:
+
+![The fallback in the running app](device-cyrillic-fallback.png)
+
 **This only affects user-typed content.** The app has no `values-ru` and no
 localised strings — every UI label is English. Cyrillic reaches the screen only
 through note titles, note bodies, checklist items and folder names. That is why
