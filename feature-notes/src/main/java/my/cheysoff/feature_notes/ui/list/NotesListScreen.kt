@@ -80,6 +80,7 @@ import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -556,12 +557,17 @@ private fun SortPill(order: NotesSortOrder, onSelect: (NotesSortOrder) -> Unit) 
             modifier = Modifier
                 .clip(RoundedCornerShape(percent = 50))
                 .background(SurfaceDark)
-                .clickable { menuOpen = true }
+                // The whole Row is the tap target, so the accessible name and the button role
+                // belong here - not on the Icon, which would otherwise be announced as a node of
+                // its own, next to the label, with neither carrying a role.
+                .clickable(onClickLabel = "Change sort order", role = Role.Button) {
+                    menuOpen = true
+                }
                 .padding(start = 11.dp, end = 14.dp, top = 10.dp, bottom = 10.dp),
         ) {
             Icon(
                 imageVector = Icons.Default.SwapVert,
-                contentDescription = "Change sort order",
+                contentDescription = null,
                 tint = IndigoTint,
                 modifier = Modifier.size((sw * 0.045f).dp),
             )

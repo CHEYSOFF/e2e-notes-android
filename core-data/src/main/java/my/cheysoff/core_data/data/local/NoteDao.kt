@@ -27,11 +27,17 @@ interface NoteDao {
     fun getNotesByCreatedAt(): Flow<List<NoteEntity>>
 
     /**
-     * Title A–Z, case-insensitive (NOCASE folds ASCII only — good enough for the Latin titles
-     * this app is written for, and it is the collation SQLite can apply without a custom one).
-     * Untitled notes have an empty title and therefore group at the top.
+     * Title A–Z. NOCASE is the only case-insensitive collation SQLite offers without registering
+     * a custom one, and it folds ASCII A–Z only: titles in Cyrillic, Greek, accented Latin or any
+     * other script therefore sort by raw code point, which puts their uppercase and lowercase
+     * letters in separate runs. That is a real limitation of this order, not a stylistic choice —
+     * fixing it needs a custom collation (or an ICU-normalised sort column), which is out of scope.
+     *
+     * Untitled notes have an empty title, which would otherwise collate first and open the list
+     * with a wall of blank cards; `(title = '') ASC` sinks that whole group to the bottom (0 before
+     * 1) while leaving the titled notes’ relative order untouched.
      */
-    @Query("SELECT * FROM notes ORDER BY title COLLATE NOCASE ASC, id ASC")
+    @Query("SELECT * FROM notes ORDER BY (title = '') ASC, title COLLATE NOCASE ASC, id ASC")
     fun getNotesByTitle(): Flow<List<NoteEntity>>
 
     @Query("SELECT * FROM notes WHERE id = :id")
