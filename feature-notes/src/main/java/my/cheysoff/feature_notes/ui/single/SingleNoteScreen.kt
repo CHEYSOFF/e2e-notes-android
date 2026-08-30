@@ -48,10 +48,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -84,7 +86,11 @@ import com.mohamedrejeb.richeditor.model.RichTextState
 import com.mohamedrejeb.richeditor.model.rememberRichTextState
 import com.mohamedrejeb.richeditor.ui.BasicRichTextEditor
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.onEach
 import my.cheysoff.core_ui.theme.AccentIndigo
 import my.cheysoff.core_ui.theme.AppBlack
 import my.cheysoff.core_ui.theme.BodyGrey
@@ -93,7 +99,7 @@ import my.cheysoff.core_ui.theme.TitleGrey
 import my.cheysoff.core_ui.theme.ToolbarDark
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_ui.theme.folderAccentColor
-import my.cheysoff.feature_notes.model.looksLikeHtml
+import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.feature_notes.model.single.ChecklistItem
 import my.cheysoff.feature_notes.model.single.SingleNoteIntent
 import my.cheysoff.feature_notes.model.single.SingleNoteScreenState
@@ -101,7 +107,14 @@ import androidx.activity.compose.BackHandler
 import my.cheysoff.feature_notes.ui.folder.FolderChooser
 import my.cheysoff.feature_notes.ui.folder.FolderRef
 
-@OptIn(ExperimentalLayoutApi::class)
+/**
+ * Quiet period after the last keystroke before the editor is serialized to HTML and forwarded to
+ * the ViewModel. Only the serialization is delayed — the ViewModel keeps its own autosave debounce
+ * on top, and every exit path flushes synchronously, so no edit can be left behind.
+ */
+private const val CONTENT_SERIALIZE_DEBOUNCE_MS = 300L
+
+@OptIn(ExperimentalLayoutApi::class, FlowPreview::class)
 @Composable
 fun SingleNoteScreen(
     state: SingleNoteScreenState,
@@ -110,11 +123,65 @@ fun SingleNoteScreen(
     val focusManager = LocalFocusManager.current
     val isImeVisible = WindowInsets.isImeVisible
 
-    // System back must run the same flush/discard logic as the top-bar arrow — a plain nav pop
-    // would skip the final save and leave an abandoned empty note behind.
-    BackHandler { onIntent(SingleNoteIntent.BackClicked) }
     val accent = remember(state.folderId, state.folders) { editorAccent(state.folderId, state.folders) }
     val richTextState = rememberRichTextState()
+
+    // Set on every editor change and cleared whenever the HTML reaches the ViewModel. A flush is a
+    // no-op while it is false, so leaving an untouched note never re-serializes it into a save (and
+    // never bumps updatedAt, which orders the list). Deliberately NOT a Compose state — writing one
+    // per keystroke would recompose this whole screen, which is the cost this debounce removes.
+    val contentDirty = remember { AtomicBoolean(false) }
+    // The two lambdas below are remembered so they keep one identity for the life of the
+    // composition. The compiler will not memoize them on its own — they capture RichTextState and
+    // AtomicBoolean, both unstable — so unmemoized every recomposition handed EditorTopBar a
+    // brand-new onBack, which is one unstable argument fewer now. (It is not yet skippable:
+    // onUndo/onRedo and the onIntent it receives are still rebuilt each pass.)
+    //
+    // onIntent is a plain parameter that the caller rebuilds inline on each of ITS recompositions,
+    // so capturing it directly inside a remember would pin the very first instance forever.
+    // rememberUpdatedState keeps a holder that always points at the current one, read at call time,
+    // so no intent can be stranded on a stale lambda.
+    val currentOnIntent by rememberUpdatedState(onIntent)
+    // Serializes the editor to HTML and hands it to the ViewModel *right now*, on the caller's
+    // thread. onIntent → _state.update is synchronous, so anything invoked after this call already
+    // sees the latest content.
+    val flushContent = remember {
+        {
+            if (contentDirty.getAndSet(false)) {
+                currentOnIntent(SingleNoteIntent.ContentChanged(richTextState.toHtml()))
+            }
+        }
+    }
+    // Back must flush BEFORE BackClicked: the ViewModel decides there whether to delete, save, or
+    // skip, and that decision compares _state.value against the persisted row. A debounced
+    // forwarding alone would let it read stale content and silently skip a real save.
+    val onBack = remember {
+        {
+            flushContent()
+            currentOnIntent(SingleNoteIntent.BackClicked)
+        }
+    }
+
+    // System back must run the same flush/discard logic as the top-bar arrow — a plain nav pop
+    // would skip the final save and leave an abandoned empty note behind.
+    BackHandler { onBack() }
+
+    // Nav-away is already covered by onBack; this catches the editor vanishing because the activity
+    // is *recreated* (rotation, night-mode/locale change, "don't keep activities" off) with a
+    // debounce still pending. There the ViewModel is retained across the recreation, so its own
+    // autosave still runs on a live viewModelScope and the HTML handed over here is persisted.
+    //
+    // It deliberately does NOT rescue the backgrounding case, and cannot: on ON_STOP
+    // MainApplication locks the session, AppNavHost's unlocked-observer navigates to "auth" with
+    // popUpTo(0) { inclusive = true }, and that clears this destination's ViewModelStore —
+    // cancelling viewModelScope (and therefore the debounced write) before it can fire. The
+    // passphrase is dropped by then, so the database could not be written anyway. Those edits are
+    // lost, exactly as they are without this debounce; closing that hole needs a save driven from
+    // ON_STOP itself, not a flush here.
+    DisposableEffect(Unit) {
+        onDispose { flushContent() }
+    }
+
     // Id of a checklist item that should grab focus once it appears (set when an item is added,
     // or when one above is removed). Hoisted here so the toolbar FAB and the section can both set it.
     var focusItemId by remember { mutableStateOf<String?>(null) }
@@ -130,18 +197,29 @@ fun SingleNoteScreen(
     //
     // Stored content is HTML for rich-editor notes, but legacy notes are raw plain text; feeding
     // such text to setHtml would parse stray "<"/">" as tags and drop characters, so plain text
-    // goes through setText instead.
+    // goes through setText instead. The row's recorded contentFormat decides — never a guess at
+    // the string, which used to mistake "<john@example.com>" for markup and eat it.
     LaunchedEffect(state.isLoaded) {
         if (state.isLoaded) {
             richTextState.config.listIndent = 18
-            if (state.content.looksLikeHtml()) {
+            if (state.contentFormat == NoteContentFormat.HTML) {
                 richTextState.setHtml(state.content)
             } else {
                 richTextState.setText(state.content)
             }
+            // toHtml() walks the whole document, so doing it per keystroke is main-thread work
+            // that grows with the note. Debounce the *serialization* (the DB write is debounced
+            // separately in the ViewModel), so a burst of typing costs one pass instead of one per
+            // character — debounce already discards every emission inside the quiet window, so
+            // there is nothing left for a conflate() to drop. Nothing is lost by waiting: every
+            // exit path flushes synchronously above, and toHtml() is read at collection time, so
+            // the value forwarded is always the editor's current content rather than the emission
+            // that triggered it.
             snapshotFlow { richTextState.annotatedString }
                 .drop(1)
-                .collect { onIntent(SingleNoteIntent.ContentChanged(richTextState.toHtml())) }
+                .onEach { contentDirty.set(true) }
+                .debounce(CONTENT_SERIALIZE_DEBOUNCE_MS)
+                .collect { flushContent() }
         }
     }
 
@@ -158,6 +236,7 @@ fun SingleNoteScreen(
                 canRedo = richTextState.history.canRedo,
                 onUndo = { richTextState.history.undo() },
                 onRedo = { richTextState.history.redo() },
+                onBack = onBack,
                 onIntent = onIntent,
             )
         },
@@ -402,6 +481,7 @@ private fun EditorTopBar(
     canRedo: Boolean,
     onUndo: () -> Unit,
     onRedo: () -> Unit,
+    onBack: () -> Unit,
     onIntent: (SingleNoteIntent) -> Unit,
 ) {
     val spacing = LocalSpacing.current
@@ -413,9 +493,7 @@ private fun EditorTopBar(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TopIcon(Icons.AutoMirrored.Outlined.ArrowBackIos, "Back", TitleGrey) {
-            onIntent(SingleNoteIntent.BackClicked)
-        }
+        TopIcon(Icons.AutoMirrored.Outlined.ArrowBackIos, "Back", TitleGrey) { onBack() }
         Row(verticalAlignment = Alignment.CenterVertically) {
             TopIcon(Icons.AutoMirrored.Filled.Undo, "Undo", if (canUndo) accent else BodyGrey, enabled = canUndo) { onUndo() }
             TopIcon(Icons.AutoMirrored.Filled.Redo, "Redo", if (canRedo) accent else BodyGrey, enabled = canRedo) { onRedo() }
