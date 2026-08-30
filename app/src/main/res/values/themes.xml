@@ -2,8 +2,23 @@
 <resources>
 
     <style name="Theme.Notes" parent="android:Theme.Material.Light.NoActionBar">
-        <!-- Black window background so cold start and screen transitions don't flash white
+        <!-- Opaque window background so cold start and screen transitions don't flash through
              (Compose draws the dark UI on top of this window). -->
-        <item name="android:windowBackground">@color/black</item>
+        <item name="android:windowBackground">@color/brand_window</item>
+
+        <!-- The Recents placeholder. MainActivity disables Recents screenshots to keep note
+             plaintext out of the app switcher, and the card the system draws instead is a flat
+             fill of *this* attribute — not of windowBackground. Left at the platform default it
+             was Material Light's #FAFAFA, i.e. an off-white card in front of a black app. -->
+        <item name="android:colorBackground">@color/brand_window</item>
+
+        <!-- Platform splash screen (API 31+, no androidx.core:core-splashscreen needed). Kept black
+             in both system themes: the app's first frame is the black unlock screen either way. -->
+        <item name="android:windowSplashScreenBackground">@color/black</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_moon</item>
+        <!-- Matches the 700ms of splash_moon; the platform cuts a splash animation off at 1000ms.
+             This attribute is only read on API 31/32 — from API 33 the platform measures the
+             AnimatedVectorDrawable itself. -->
+        <item name="android:windowSplashScreenAnimationDuration">700</item>
     </style>
 </resources>
