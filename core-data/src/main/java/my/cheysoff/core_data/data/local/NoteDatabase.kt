@@ -9,7 +9,19 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 // arg) so future migrations can be exercised by MigrationTestHelper instead of only on a device.
 // Only v5 onward is exported — v1..v4 predate the flag, so a 4 -> 5 migration test isn't possible
 // retroactively; from here on every version has a committed schema to migrate from.
-@Database(entities = [NoteEntity::class, FolderEntity::class], version = 6, exportSchema = true)
+/**
+ * The schema version. Named rather than written as a literal in the annotation so a migration test
+ * can assert "the chain ends at the current version" instead of hard-coding a number that goes
+ * stale the moment the next migration lands — which is how Migration4to5Test came to be broken
+ * without anyone noticing.
+ */
+internal const val NOTE_DATABASE_VERSION = 6
+
+@Database(
+    entities = [NoteEntity::class, FolderEntity::class],
+    version = NOTE_DATABASE_VERSION,
+    exportSchema = true,
+)
 abstract class NoteDatabase : RoomDatabase() {
     abstract val noteDao: NoteDao
     abstract val folderDao: FolderDao

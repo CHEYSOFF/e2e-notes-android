@@ -5,6 +5,7 @@ import android.database.sqlite.SQLiteDatabase
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import my.cheysoff.core_data.data.local.NOTE_DATABASE_VERSION
 import my.cheysoff.core_data.data.local.NoteDatabase
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -106,6 +107,12 @@ class Migration4to5Test {
                 NoteDatabase.MIGRATION_2_3,
                 NoteDatabase.MIGRATION_3_4,
                 NoteDatabase.MIGRATION_4_5,
+                // Every migration from here on must be appended too. Room opens the database at
+                // the CURRENT @Database version, so a v4 file has to walk the whole chain: leaving
+                // one out throws "A migration from 4 to N was required but not found" and every
+                // test in this class fails. That is exactly what happened when v6 landed — the
+                // class still compiled, so nothing surfaced it until the suite was next executed.
+                NoteDatabase.MIGRATION_5_6,
             )
             .build()
 
@@ -115,7 +122,7 @@ class Migration4to5Test {
         val db = openMigrated()
         try {
             // Room opens lazily, so touching the helper is what actually runs the migration.
-            assertEquals(5, db.openHelper.readableDatabase.version)
+            assertEquals(NOTE_DATABASE_VERSION, db.openHelper.readableDatabase.version)
 
             fixtures.forEach { (id, content, expectedFormat) ->
                 db.openHelper.readableDatabase.query(
