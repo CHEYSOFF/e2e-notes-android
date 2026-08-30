@@ -1,13 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
+   Auto Backup rules (API 31 and below use this file; API 31+ uses
+   data_extraction_rules.xml — both are kept in sync).
+
+   Everything that protects or holds note data is excluded:
+
+   - secret_shared_prefs holds the PIN wrap of the database key (pin_salt,
+     pin_iv, pin_ct, pin_iters). The PIN is 6 digits, so anyone who obtains
+     that file can exhaust the keyspace offline — LockoutPolicy is app-side
+     code an offline attacker never runs. It must not leave the device.
+   - notes.db is the SQLCipher database itself.
+
+   These are useless on a restore anyway: the EncryptedSharedPreferences
+   MasterKey lives in the AndroidKeyStore and is non-exportable, so a restored
+   prefs file cannot be decrypted on the new device. SecureUnlockManager
+   .wasStateReset exists precisely to detect that and drop the database.
+   Excluding them makes that explicit rather than incidental, and removes the
+   exfiltration path entirely.
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <exclude domain="sharedpref" path="secret_shared_prefs.xml" />
+    <exclude domain="database" path="notes.db" />
+    <exclude domain="database" path="notes.db-wal" />
+    <exclude domain="database" path="notes.db-shm" />
 </full-backup-content>
