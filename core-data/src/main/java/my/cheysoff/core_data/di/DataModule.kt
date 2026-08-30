@@ -9,6 +9,7 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import my.cheysoff.core_crypto.EncryptionManager
+import my.cheysoff.core_crypto.SecureUnlockManager
 import my.cheysoff.core_data.data.DataStoreSettingsRepository
 import my.cheysoff.core_data.data.RoomNotesRepository
 import my.cheysoff.core_data.data.local.FolderDao
@@ -40,13 +41,25 @@ abstract class DataModule {
         @Singleton
         fun provideNoteDatabase(
             @ApplicationContext context: Context,
-            encryptionManager: EncryptionManager
+            secureUnlockManager: SecureUnlockManager
         ): NoteDatabase {
-            val passphrase = encryptionManager.getDatabasePassphrase()
-            
-            if (encryptionManager.wasPassphraseReset) {
+            // The DB can only be opened AFTER the user authenticates: the passphrase is recovered
+            // (PIN- or biometric-unwrapped) into SecureUnlockManager and held in memory only while
+            // unlocked. Hilt builds this @Singleton lazily and the notes graph is reached only
+            // post-unlock (nav gates on the auth screen), so currentPassphrase() is non-null here.
+            // Migration preserves data: a migrated install reuses the legacy passphrase, so the DB
+            // opens with the same key it was encrypted with.
+            // If the secure-unlock state had to be discarded (Keystore key gone — e.g. a restore
+            // onto a new device brings back the prefs file but never the non-exportable master
+            // key), every wrap of the old passphrase is gone with it, so any surviving notes.db is
+            // permanently undecryptable. Drop it, or SQLCipher fails with "file is not a database"
+            // on every launch with no recovery path. Mirrors the old wasPassphraseReset handling.
+            if (secureUnlockManager.wasStateReset) {
                 context.deleteDatabase(EncryptionManager.DATABASE_NAME)
             }
+
+            val passphrase = secureUnlockManager.currentPassphrase()
+                ?: throw IllegalStateException("Database requested while locked; unlock must precede DB access")
 
             // KNOWN LIMITATION (review #4): SQLCipher's SupportOpenHelperFactory retains this
             // passphrase in SQLiteOpenHelper.mPassword for the helper's lifetime (verified in
