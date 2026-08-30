@@ -8,10 +8,37 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface NoteDao {
-    // Newest first. Legacy rows carry updatedAt/createdAt = 0 until their first post-migration
-    // save, so untouched old notes sort after anything with a real timestamp.
-    @Query("SELECT * FROM notes ORDER BY updatedAt DESC, createdAt DESC")
-    fun getNotes(): Flow<List<NoteEntity>>
+    // One @Query per user-selectable order (rather than a single @RawQuery) so Room keeps
+    // verifying each statement against the schema at compile time.
+    //
+    // Every order ends in `id ASC`. Without it the ordering is not total: legacy rows carry
+    // updatedAt/createdAt = 0 until their first post-migration save and therefore tie on both
+    // timestamp keys, and two untitled notes tie on title. SQLite leaves the relative order of
+    // tied rows unspecified, so those notes could visibly reshuffle between emissions of
+    // otherwise-unchanged data. `id` is the primary key, hence unique, so appending it makes
+    // each order deterministic and stable.
+
+    /** Recently edited: newest save first. Untouched legacy rows (updatedAt = 0) sort last. */
+    @Query("SELECT * FROM notes ORDER BY updatedAt DESC, createdAt DESC, id ASC")
+    fun getNotesByUpdatedAt(): Flow<List<NoteEntity>>
+
+    /** Newest created first. Untouched legacy rows (createdAt = 0) sort last. */
+    @Query("SELECT * FROM notes ORDER BY createdAt DESC, updatedAt DESC, id ASC")
+    fun getNotesByCreatedAt(): Flow<List<NoteEntity>>
+
+    /**
+     * Title A–Z. NOCASE is the only case-insensitive collation SQLite offers without registering
+     * a custom one, and it folds ASCII A–Z only: titles in Cyrillic, Greek, accented Latin or any
+     * other script therefore sort by raw code point, which puts their uppercase and lowercase
+     * letters in separate runs. That is a real limitation of this order, not a stylistic choice —
+     * fixing it needs a custom collation (or an ICU-normalised sort column), which is out of scope.
+     *
+     * Untitled notes have an empty title, which would otherwise collate first and open the list
+     * with a wall of blank cards; `(title = '') ASC` sinks that whole group to the bottom (0 before
+     * 1) while leaving the titled notes’ relative order untouched.
+     */
+    @Query("SELECT * FROM notes ORDER BY (title = '') ASC, title COLLATE NOCASE ASC, id ASC")
+    fun getNotesByTitle(): Flow<List<NoteEntity>>
 
     @Query("SELECT * FROM notes WHERE id = :id")
     fun getNoteById(id: String): Flow<NoteEntity?>
