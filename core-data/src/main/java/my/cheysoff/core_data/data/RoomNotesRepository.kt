@@ -43,6 +43,7 @@ class RoomNotesRepository @Inject constructor(
             id = note.id,
             title = note.title,
             content = note.content,
+            contentFormat = note.contentFormat.storageValue,
             checklist = note.checklist,
             isPinned = note.isPinned,
             folderId = note.folderId,
