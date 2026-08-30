@@ -15,4 +15,7 @@ sealed interface NotesListIntent {
     data class DeleteFolder(val id: String) : NotesListIntent
     data class MoveNoteToFolder(val noteId: String, val folderId: String?) : NotesListIntent
     data class SortOrderSelected(val order: NotesSortOrder) : NotesListIntent
+
+    /** Open Trash. Deliberately not a bottom-bar item — those four slots are already spoken for. */
+    data object TrashClicked : NotesListIntent
 }
