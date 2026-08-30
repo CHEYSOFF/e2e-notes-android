@@ -7,6 +7,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import my.cheysoff.core_data.data.local.NOTE_DATABASE_VERSION
 import my.cheysoff.core_data.data.local.NoteDatabase
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -20,12 +21,13 @@ import org.junit.runner.RunWith
  * Exercises MIGRATION_5_6 (Trash tombstones + folder timestamps) against a v5 database built by
  * hand, using the DDL committed at core-data/schemas/…/5.json verbatim.
  *
- * v5 IS exported, so Room's MigrationTestHelper would in principle be the better tool here. It is
- * not used because `androidx.room:room-testing` is not resolvable in this build environment (no
- * network access to Maven, and the artifact is not in the local Gradle cache). Adding it would make
- * the module unbuildable offline, so this file follows the hand-built pattern Migration4to5Test
- * already establishes. If room-testing ever becomes available, this test should be rewritten on
- * top of MigrationTestHelper and the DDL below deleted.
+ * v5 IS exported, so Room's MigrationTestHelper would be the better tool here, and it is now
+ * reachable: `androidx.room:room-testing:2.8.4` resolves from google() and `:core-data:
+ * assembleDebugAndroidTest` succeeds with it on the classpath. (An earlier version of this comment
+ * claimed the artifact was unresolvable. That was wrong — only Maven Central is blocked in this
+ * environment; Google's Maven, which serves every androidx artifact, is not.) Rewriting this file
+ * on MigrationTestHelper and deleting the hand-written DDL below is tracked separately; until then
+ * it follows the pattern Migration4to5Test established.
  *
  * Like Migration4to5Test this runs on a PLAIN (unencrypted) SQLite file: SQLCipher is an open-helper
  * swap and changes nothing about what the migration SQL does.
@@ -121,7 +123,7 @@ class Migration5to6Test {
         val db = openMigrated()
         try {
             // Room opens lazily, so touching the helper is what actually runs the migration.
-            assertEquals(6, db.openHelper.readableDatabase.version)
+            assertEquals(NOTE_DATABASE_VERSION, db.openHelper.readableDatabase.version)
 
             db.openHelper.readableDatabase.query("SELECT count(*) FROM notes").use { c ->
                 c.moveToFirst()
