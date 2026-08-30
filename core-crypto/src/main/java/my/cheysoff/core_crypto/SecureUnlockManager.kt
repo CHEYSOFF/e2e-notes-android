@@ -70,19 +70,47 @@ class SecureUnlockManager @Inject constructor(
         private set
 
     // Mirror EncryptionManager.createSharedPreferences() so we share the legacy prefs file.
-    // Key loss must NOT propagate: isPinSet() is called from the auth screen on the main thread,
-    // so an uncaught GeneralSecurityException here crash-loops the app on every launch with no
-    // way out but clearing app data. Recover the way EncryptionManager did: drop the unreadable
-    // prefs and start clean (the notes they protected are already unrecoverable at this point).
-    private val prefs: SharedPreferences by lazy {
-        try {
-            createPrefs()
-        } catch (e: Exception) {
-            if (!isKeyLoss(e)) throw e
-            context.deleteSharedPreferences(PREFS_NAME)
-            wasStateReset = true
-            createPrefs()
+    private val prefs: SharedPreferences by lazy { openPrefs() }
+
+    /**
+     * Open the encrypted prefs, retrying transient failures, and fall back to discarding the file
+     * ONLY when the Keystore key is provably gone.
+     *
+     * Two failure modes have to be told apart, and the cost of confusing them is severe in both
+     * directions. Letting a failure propagate crash-loops the app (isPinSet() runs on the main
+     * thread from the auth screen) with no way out but clearing app data; treating a failure as
+     * key loss deletes every wrap of the DB passphrase and, via [wasStateReset], the whole notes
+     * database. So: retry first — Keystore being momentarily unavailable at cold start is the
+     * common case and it resolves within milliseconds — and only classify once retries are spent.
+     *
+     * The sleeps run on whichever thread first touches [prefs], possibly the main thread, but only
+     * on the already-broken path and for at most [OPEN_RETRY_BASE_MS] * (2^(n-1) - 1) total.
+     */
+    private fun openPrefs(): SharedPreferences {
+        var lastError: Exception? = null
+        for (attempt in 0 until OPEN_ATTEMPTS) {
+            if (attempt > 0) {
+                try {
+                    Thread.sleep(OPEN_RETRY_BASE_MS shl (attempt - 1))
+                } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
+            }
+            try {
+                return createPrefs()
+            } catch (e: Exception) {
+                lastError = e
+            }
         }
+
+        val error = lastError!!
+        // Not provable key loss: rethrow. That crash-loops until the underlying problem clears,
+        // which is bad — but it is recoverable (the ciphertext is all still on disk), whereas the
+        // reset below is not.
+        if (!isKeyLoss(error)) throw error
+        context.deleteSharedPreferences(PREFS_NAME)
+        wasStateReset = true
+        return createPrefs()
     }
 
     private fun createPrefs(): SharedPreferences = EncryptedSharedPreferences.create(
@@ -93,13 +121,32 @@ class SecureUnlockManager @Inject constructor(
         EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
     )
 
-    /** Mirrors EncryptionManager.isKeyLoss: only a missing/invalid Keystore key is recoverable. */
+    /**
+     * True only for failures that PROVE the Keystore key protecting the prefs is unrecoverable,
+     * i.e. that retrying forever would never succeed. Deliberately narrower than
+     * EncryptionManager.isKeyLoss, which accepts any [java.security.GeneralSecurityException]:
+     * Tink and EncryptedSharedPreferences wrap transient trouble in that class too (Keystore
+     * daemon momentarily unavailable, keyset read failing under low storage, the window right
+     * after a lockscreen credential change), and each such throw at cold start used to destroy
+     * every note. Bare GeneralSecurityException and [java.security.KeyStoreException] are
+     * therefore treated as transient — retried by [openPrefs], then rethrown, never reset.
+     *
+     * Retained, with the reason each one is terminal:
+     *  - [javax.crypto.AEADBadTagException]: the GCM tag on the stored Tink keyset does not
+     *    authenticate under the key the Keystore now holds. Same bytes, same key, every retry —
+     *    the outcome is deterministic. This is the signature of the case the reset path exists
+     *    for: a restore brings back `secret_shared_prefs` but not the non-exportable master key,
+     *    so MasterKey.Builder mints a fresh one that cannot unwrap the restored keyset.
+     *  - [android.security.keystore.KeyPermanentlyInvalidatedException]: by contract the key has
+     *    been invalidated for good (lockscreen removed, or biometrics re-enrolled for an
+     *    auth-bound key). It is never coming back, however long we wait.
+     *
+     * Walks the cause chain because both arrive wrapped in a GeneralSecurityException from Tink.
+     */
     private fun isKeyLoss(error: Throwable): Boolean {
         var e: Throwable? = error
         while (e != null) {
-            if (e is java.security.GeneralSecurityException ||
-                e is java.security.KeyStoreException ||
-                e is javax.crypto.AEADBadTagException ||
+            if (e is javax.crypto.AEADBadTagException ||
                 e is android.security.keystore.KeyPermanentlyInvalidatedException
             ) return true
             e = e.cause
@@ -198,19 +245,16 @@ class SecureUnlockManager @Inject constructor(
      * Milliseconds remaining on an active lockout window, or 0 if not locked out.
      *
      * Takes the STRICTER of the wall-clock and monotonic deadlines, so winding the device clock
-     * forward doesn't retire the lockout early. A reboot resets elapsedRealtime, which can leave
-     * the monotonic deadline looking far away — that fails closed (at most one MAX_LOCK_MS wait),
-     * which is the right direction for a lockout.
+     * forward doesn't retire the lockout early. A monotonic deadline left over from before a
+     * reboot is discarded outright — see [LockoutPolicy.remainingMillis], which owns the whole
+     * (unit-tested) decision; this method only reads the clocks and the store.
      */
-    fun lockoutRemainingMillis(): Long {
-        val byWall = prefs.getLong(KEY_LOCKOUT_UNTIL, 0L) - System.currentTimeMillis()
-        val elapsedUntil = prefs.getLong(KEY_LOCKOUT_UNTIL_ELAPSED, 0L)
-        val byElapsed = if (elapsedUntil == 0L) 0L else {
-            (elapsedUntil - android.os.SystemClock.elapsedRealtime())
-                .coerceAtMost(LockoutPolicy.MAX_LOCK_MS)
-        }
-        return max(0L, max(byWall, byElapsed))
-    }
+    fun lockoutRemainingMillis(): Long = LockoutPolicy.remainingMillis(
+        lockoutUntilWall = prefs.getLong(KEY_LOCKOUT_UNTIL, 0L),
+        lockoutUntilElapsed = prefs.getLong(KEY_LOCKOUT_UNTIL_ELAPSED, 0L),
+        nowWall = System.currentTimeMillis(),
+        nowElapsed = android.os.SystemClock.elapsedRealtime(),
+    )
 
     /** True once a biometric-wrapped passphrase exists. */
     fun isBiometricEnabled(): Boolean = prefs.contains(KEY_BIO_CT)
@@ -300,6 +344,12 @@ class SecureUnlockManager @Inject constructor(
     private companion object {
         const val PREFS_NAME = "secret_shared_prefs"
         const val PASSPHRASE_BYTES = 32
+
+        /** Total tries at opening the encrypted prefs before classifying the failure. */
+        const val OPEN_ATTEMPTS = 3
+
+        /** Backoff before retry n (doubling): 50ms, then 100ms — 150ms worst case. */
+        const val OPEN_RETRY_BASE_MS = 50L
 
         const val KEY_PIN_SALT = "pin_salt"
         const val KEY_PIN_IV = "pin_iv"
