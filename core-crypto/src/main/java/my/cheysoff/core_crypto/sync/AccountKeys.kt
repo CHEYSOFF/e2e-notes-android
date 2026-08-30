@@ -43,8 +43,8 @@ class AccountKeys(
  *
  * Everything here takes the ARK as a parameter and returns new arrays. Nothing in this file reads
  * storage, touches Android, or holds state, which is what makes it unit-testable — and it is also
- * what keeps the eventual wiring small: when `SecureUnlockManager` grows a `currentArk()`, the
- * only change needed is a caller that passes its result to [derive].
+ * what kept the wiring small: `SecureUnlockManager.currentArk()` and `ensureArk()` own the
+ * storage, and every caller simply passes what they return to [derive].
  *
  * See `docs/design/e2e-sync-architecture.md` §"Key hierarchy".
  */
@@ -70,9 +70,10 @@ object AccountRootKey {
      * belongs with the storage, so it is not in this file — this file only promises that the bytes
      * are 32 uniformly random ones.
      *
-     * As of this commit there are **no production call sites at all**; the storage wiring is a
-     * follow-up (see the class doc). The caller owns the returned array and should zero it once it
-     * has been wrapped.
+     * That one call site is `SecureUnlockManager.ensureArk()`, which returns null rather than
+     * calling this whenever `ark_ct` is already stored — including when the stored wrap will not
+     * open. `SecureUnlockManagerArkTest` is where that is held to. The caller owns the returned
+     * array and should zero it once it has been wrapped.
      */
     fun generateArk(): ByteArray = ByteArray(SyncProtocol.ARK_BYTES).also(secureRandom::nextBytes)
 

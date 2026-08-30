@@ -110,8 +110,9 @@ enum class ScanHint {
 /**
  * Everything [PairingScreen] draws.
  *
- * [available] is the Phase-1 gate — see `PairingKeyMaterial.isBound`. It is false in this build,
- * and the screen says so plainly rather than offering a flow that cannot finish.
+ * [available] is the sync-key-hierarchy gate — see `PairingKeyMaterial.isBound`. It is true in
+ * every shipped build now that the hierarchy is bound; it is kept as the backstop that would show
+ * an honest message rather than a flow that cannot finish.
  */
 @Immutable
 data class PairingScreenState(

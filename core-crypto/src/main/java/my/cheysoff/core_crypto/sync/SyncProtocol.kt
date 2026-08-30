@@ -33,6 +33,16 @@ object SyncProtocol {
     const val INFO_ACCOUNT = "manana/sync/v1/account"
 
     /**
+     * `info` for `K_arkwrap`, the key the ARK is stored under on this device.
+     *
+     * The odd one out: every other string here is applied to the ARK, this one is applied to the
+     * **database passphrase** instead. It is still a protocol constant rather than a local detail
+     * because changing it makes an already-stored `ark_ct` unopenable -- which is the account key
+     * gone, on a device that may be the only one holding it. See [ArkCipher].
+     */
+    const val INFO_ARK_WRAP = "manana/sync/v1/arkwrap"
+
+    /**
      * Prefix of the per-record `info`; the blinded record ID is appended to it.
      *
      * Per-record keys are what make random GCM nonces safe here: each key encrypts on the order of

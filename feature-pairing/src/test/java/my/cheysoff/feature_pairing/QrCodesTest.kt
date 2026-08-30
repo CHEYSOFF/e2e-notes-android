@@ -2,6 +2,7 @@ package my.cheysoff.feature_pairing
 
 import my.cheysoff.feature_pairing.protocol.AccountBundle
 import my.cheysoff.feature_pairing.protocol.AccountDeviceSession
+import my.cheysoff.feature_pairing.protocol.HkdfKeyDerivation
 import my.cheysoff.feature_pairing.protocol.NewDeviceSession
 import my.cheysoff.feature_pairing.protocol.OfferOutcome
 import my.cheysoff.feature_pairing.protocol.SealOutcome
@@ -36,7 +37,7 @@ class QrCodesTest {
     /** A real QR1, through a real frame. */
     @Test
     fun readsBackARealOfferCode() {
-        val code = NewDeviceSession(TestHkdf, FakeClock()).offerCode
+        val code = NewDeviceSession(HkdfKeyDerivation, FakeClock()).offerCode
         assertEquals(code, decodeThrough(QrCodes.encode(code)))
     }
 
@@ -44,9 +45,9 @@ class QrCodesTest {
     @Test
     fun readsBackARealSealCode() {
         val clock = FakeClock()
-        val newDevice = NewDeviceSession(TestHkdf, clock)
+        val newDevice = NewDeviceSession(HkdfKeyDerivation, clock)
         val accountDevice = AccountDeviceSession(
-            TestHkdf, clock,
+            HkdfKeyDerivation, clock,
             AccountBundle(ByteArray(32) { it.toByte() }, "acct-abcdefgh", """{"url":"https://a.example/"}"""),
         )
         val accepted = accountDevice.onScanned(newDevice.offerCode) as OfferOutcome.Accepted
@@ -63,7 +64,7 @@ class QrCodesTest {
      */
     @Test
     fun readsBackAnInvertedCode() {
-        val code = NewDeviceSession(TestHkdf, FakeClock()).offerCode
+        val code = NewDeviceSession(HkdfKeyDerivation, FakeClock()).offerCode
         assertEquals(code, decodeThrough(QrCodes.encode(code), inverted = true))
     }
 
@@ -75,7 +76,7 @@ class QrCodesTest {
      */
     @Test
     fun readsBackFromAPaddedLuminancePlane() {
-        val code = NewDeviceSession(TestHkdf, FakeClock()).offerCode
+        val code = NewDeviceSession(HkdfKeyDerivation, FakeClock()).offerCode
         val matrix = QrCodes.encode(code)
         val frame = luminanceFrame(matrix, scale = 4, extraStride = 37)
         assertEquals(
@@ -87,7 +88,7 @@ class QrCodesTest {
     /** A crop that contains the symbol works; the search is limited to the rectangle given. */
     @Test
     fun readsBackFromACrop() {
-        val code = NewDeviceSession(TestHkdf, FakeClock()).offerCode
+        val code = NewDeviceSession(HkdfKeyDerivation, FakeClock()).offerCode
         val matrix = QrCodes.encode(code)
         val frame = luminanceFrame(matrix, scale = 4)
         assertEquals(
@@ -126,7 +127,7 @@ class QrCodesTest {
     @Test
     fun matrixIsSquareAndIncludesTheQuietZone() {
         val small = QrCodes.encode("MNP1:short")
-        val large = QrCodes.encode(NewDeviceSession(TestHkdf, FakeClock()).offerCode)
+        val large = QrCodes.encode(NewDeviceSession(HkdfKeyDerivation, FakeClock()).offerCode)
 
         assertTrue(large.size > small.size)
         // A 4-module quiet zone on each side means the outermost ring is always light.
