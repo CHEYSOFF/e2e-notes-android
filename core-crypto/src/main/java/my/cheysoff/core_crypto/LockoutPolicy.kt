@@ -52,7 +52,13 @@ object LockoutPolicy {
         nowWall: Long,
         nowElapsed: Long,
     ): Long {
-        val byWall = lockoutUntilWall - nowWall
+        // 0 is the "no deadline" sentinel in BOTH slots and must be treated as such, not as an
+        // instant in 1970: with the wall clock set before the epoch, `0 - nowWall` is a positive
+        // remainder of decades, so a fresh install that has never failed a PIN would report itself
+        // locked out forever. The elapsed slot below has always had this guard; the wall slot did
+        // not, which left one unbounded lockout in a function whose whole thesis is that there
+        // are none.
+        val byWall = if (lockoutUntilWall == 0L) 0L else lockoutUntilWall - nowWall
         val byElapsed = when {
             lockoutUntilElapsed == 0L -> 0L
             isElapsedDeadlineStale(lockoutUntilElapsed, nowElapsed) -> 0L
