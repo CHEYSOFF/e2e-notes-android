@@ -203,6 +203,37 @@ class SessionTest {
     }
 
     /**
+     * Token resolution refuses a revoked device even when a session row for it exists.
+     *
+     * Revocation already deletes that device's sessions, so this second barrier is unreachable
+     * through the HTTP surface -- which is exactly why it needs a test that reaches past it. The row
+     * is inserted through the store directly, standing in for a future code path that creates a
+     * session without re-checking revocation. Without the `revoked_at IS NULL` join condition in
+     * `sessionByTokenHash`, this token would work; a mutation confirmed that no other test noticed
+     * its removal.
+     */
+    @Test
+    fun aSessionRowForARevokedDeviceDoesNotResolve() = serverTest { harness ->
+        val first = enrol(harness)
+        val second = TestDevice("second")
+        val secondId = authorizeDevice(harness, first.accountId, first.deviceId, first.device, second)
+            .decode<AuthorizeResponse>().deviceId
+        client.deleteAuth("/v1/devices/$secondId", first.token)
+
+        val smuggled = "smuggled-token"
+        val smuggledHash = sha256Hex(smuggled.toByteArray(Charsets.UTF_8))
+        harness.store.createSession(
+            accountId = first.accountId,
+            deviceId = secondId,
+            tokenHash = smuggledHash,
+            expiresAt = harness.clock.now + 60_000,
+        )
+
+        assertNull(harness.store.sessionByTokenHash(smuggledHash))
+        assertEquals(401, client.getAuth("/v1/devices", smuggled).status.value)
+    }
+
+    /**
      * The token is a bearer credential, so the database must not hold anything that can be replayed
      * against the server. It stores a SHA-256 digest; the token itself exists only in the client's
      * memory and in the `Authorization` header of a live request.
