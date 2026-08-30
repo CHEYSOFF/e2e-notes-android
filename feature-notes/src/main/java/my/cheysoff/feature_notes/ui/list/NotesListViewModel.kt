@@ -38,7 +38,12 @@ import my.cheysoff.feature_notes.model.list.normalizeSearchText
 import my.cheysoff.feature_notes.model.list.searchPreviews
 import my.cheysoff.feature_notes.model.list.toUi
 import my.cheysoff.feature_notes.ui.list.NotesListEvent.NavigateToNote
+import my.cheysoff.feature_notes.model.calendar.groupByDay
+import my.cheysoff.feature_notes.model.calendar.undatedCount
+import java.time.LocalDate
 import java.time.LocalTime
+import java.time.YearMonth
+import java.time.ZoneId
 import java.util.UUID
 import javax.inject.Inject
 
@@ -93,6 +98,18 @@ class NotesListViewModel @Inject constructor(
     // The raw search field text. Kept separate from _state so the debounce below sees every
     // keystroke as its own emission.
     private val searchQuery = MutableStateFlow("")
+
+    /**
+     * What the Calendar tab is looking at. Both fields are null until the user moves the grid.
+     *
+     * Null means "whatever today is", resolved against the clock at the moment the value is read
+     * rather than at construction. A ViewModel survives a settings round trip and can outlive
+     * midnight, so a month captured in the constructor could be the wrong one by the time the tab
+     * is first opened.
+     */
+    private data class CalendarView(val month: YearMonth? = null, val day: LocalDate? = null)
+
+    private val calendarView = MutableStateFlow(CalendarView())
 
     // The notes query itself carries the ordering (one verified @Query per order), so a change to
     // the persisted preference has to re-subscribe rather than re-sort what we already have —
@@ -178,6 +195,7 @@ class NotesListViewModel @Inject constructor(
             .launchIn(viewModelScope)
 
         observeSearchQuery()
+        observeCalendar()
     }
 
     /**
@@ -223,6 +241,92 @@ class NotesListViewModel @Inject constructor(
                 }
             }
             .launchIn(viewModelScope)
+    }
+
+    /**
+     * Calendar (the CALENDAR bottom-bar tab).
+     *
+     * Built the same way as search, and for the same reasons: it reads [allPreviewsFlow], the
+     * previews the list itself is built from, rather than issuing a second query. That keeps the
+     * calendar and the list showing the same set of notes, and it means an edit or a delete
+     * anywhere re-buckets the grid immediately — the counts cannot go stale while the tab is open.
+     *
+     * Like search, it spans every folder rather than honouring the folder chips. The chips are not
+     * drawn in this tab, so a filter the user cannot see could not be undone; a day whose count
+     * said 3 while the grid showed 1 would just look broken.
+     *
+     * Bucketing is by `updatedAt` — see the file comment on `CalendarGrouping.kt` for why.
+     *
+     * Cost model: one pass over every preview, converting a Long to a LocalDate, per change. No
+     * text parsing and no I/O, so it is markedly cheaper than the search pass; it runs on
+     * Dispatchers.Default anyway to keep the timestamp conversion off the main thread.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun observeCalendar() {
+        combine(allPreviewsFlow, calendarView) { previews, view -> previews to view }
+            // mapLatest so a burst of month taps drops the intermediate months' work.
+            .mapLatest { (previews, view) ->
+                // Read the zone and the date here, not at construction: the ViewModel can outlive
+                // both midnight and a time-zone change.
+                val zone = ZoneId.systemDefault()
+                val today = LocalDate.now(zone)
+                val day = view.day ?: today
+                val byDay = groupByDay(previews, zone) { it.updatedAt }
+                CalendarData(
+                    month = view.month ?: YearMonth.from(day),
+                    day = day,
+                    // Counts span every day that has notes, not just the visible month: the grid
+                    // draws leading and trailing cells from the neighbouring months and they get
+                    // their real counts this way, with no extra pass when the month changes.
+                    counts = byDay.mapValues { (_, notes) -> notes.size },
+                    dayNotes = byDay[day].orEmpty(),
+                    undated = undatedCount(previews) { it.updatedAt },
+                )
+            }
+            .flowOn(Dispatchers.Default)
+            .onEach { data ->
+                _state.update {
+                    it.copy(
+                        calendarMonth = data.month,
+                        calendarSelectedDay = data.day,
+                        calendarCounts = data.counts,
+                        calendarDayNotes = data.dayNotes,
+                        calendarUndatedCount = data.undated,
+                    )
+                }
+            }
+            .launchIn(viewModelScope)
+    }
+
+    private data class CalendarData(
+        val month: YearMonth,
+        val day: LocalDate,
+        val counts: Map<LocalDate, Int>,
+        val dayNotes: List<NotePreviewUi>,
+        val undated: Int,
+    )
+
+    /**
+     * Steps the grid by [months], carrying the selected day-of-month with it.
+     *
+     * The selection moves rather than staying put because the screen is half grid and half
+     * "the selected day's notes". Leaving the selection behind would leave that lower half
+     * describing a day no longer on the grid — a July grid over a list headed "12 August" reads
+     * as a bug, and the same principle that picked `updatedAt` over `createdAt` applies: the two
+     * halves of the screen must never contradict each other.
+     *
+     * "No month chosen yet" resolves against the current selection, and ultimately against today,
+     * rather than against a value captured at construction.
+     */
+    private fun shiftCalendarMonth(months: Long) {
+        calendarView.update { view ->
+            val current = view.day ?: LocalDate.now(ZoneId.systemDefault())
+            val target = (view.month ?: YearMonth.from(current)).plusMonths(months)
+            // Clamp the day: stepping off 31 January has to land on the 28th or 29th of
+            // February, and atDay would throw on a day the target month does not have.
+            val day = target.atDay(minOf(current.dayOfMonth, target.lengthOfMonth()))
+            CalendarView(month = target, day = day)
+        }
     }
 
     private fun visiblePreviews(selectedFolderId: String?): List<NotePreviewUi> =
@@ -292,6 +396,19 @@ class NotesListViewModel @Inject constructor(
                 // searchQuery, where the debounce lives.
                 _state.update { it.copy(searchQuery = intent.query) }
                 searchQuery.value = intent.query
+            }
+
+            NotesListIntent.CalendarPreviousMonth -> shiftCalendarMonth(-1)
+            NotesListIntent.CalendarNextMonth -> shiftCalendarMonth(1)
+
+            is NotesListIntent.CalendarDaySelected -> {
+                // Move the grid to the day's own month as well. The grid draws leading and
+                // trailing cells from the neighbouring months, so a tap can land outside the month
+                // on screen; leaving the month put would select a day the user can no longer see.
+                calendarView.value = CalendarView(
+                    month = YearMonth.from(intent.day),
+                    day = intent.day,
+                )
             }
 
             is NotesListIntent.CreateFolder -> {
