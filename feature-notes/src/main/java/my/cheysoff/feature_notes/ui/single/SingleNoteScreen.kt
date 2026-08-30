@@ -97,6 +97,7 @@ import my.cheysoff.feature_notes.model.looksLikeHtml
 import my.cheysoff.feature_notes.model.single.ChecklistItem
 import my.cheysoff.feature_notes.model.single.SingleNoteIntent
 import my.cheysoff.feature_notes.model.single.SingleNoteScreenState
+import androidx.activity.compose.BackHandler
 import my.cheysoff.feature_notes.ui.folder.FolderChooser
 import my.cheysoff.feature_notes.ui.folder.FolderRef
 
@@ -108,6 +109,10 @@ fun SingleNoteScreen(
 ) {
     val focusManager = LocalFocusManager.current
     val isImeVisible = WindowInsets.isImeVisible
+
+    // System back must run the same flush/discard logic as the top-bar arrow — a plain nav pop
+    // would skip the final save and leave an abandoned empty note behind.
+    BackHandler { onIntent(SingleNoteIntent.BackClicked) }
     val accent = remember(state.folderId, state.folders) { editorAccent(state.folderId, state.folders) }
     val richTextState = rememberRichTextState()
     // Id of a checklist item that should grab focus once it appears (set when an item is added,
