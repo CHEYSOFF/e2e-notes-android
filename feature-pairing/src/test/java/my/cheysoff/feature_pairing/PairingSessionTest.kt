@@ -2,6 +2,7 @@ package my.cheysoff.feature_pairing
 
 import my.cheysoff.feature_pairing.protocol.AccountBundle
 import my.cheysoff.feature_pairing.protocol.AccountDeviceSession
+import my.cheysoff.feature_pairing.protocol.HkdfKeyDerivation
 import my.cheysoff.feature_pairing.protocol.NewDeviceSession
 import my.cheysoff.feature_pairing.protocol.OfferOutcome
 import my.cheysoff.feature_pairing.protocol.P256
@@ -25,8 +26,10 @@ import java.util.Base64
 /**
  * The two role state machines, driven end to end and then attacked.
  *
- * Everything here is pure JVM: no camera, no Android, no coroutines. The only injected fakes are
- * [TestHkdf] (an RFC-5869-checked HKDF standing in for Phase 1) and [FakeClock].
+ * Everything here is pure JVM: no camera, no Android, no coroutines. The KDF is the production
+ * one -- [HkdfKeyDerivation] over `core-crypto`'s RFC-5869 HKDF, the same object the app binds --
+ * so a disagreement across the seam fails here rather than on two real phones. The only fake left
+ * is [FakeClock].
  */
 class PairingSessionTest {
 
@@ -38,8 +41,8 @@ class PairingSessionTest {
     @Test
     fun twoDevicesPairAndAgreeOnTheAccountKeyAndTheSas() {
         val clock = FakeClock()
-        val newDevice = NewDeviceSession(TestHkdf, clock)
-        val accountDevice = AccountDeviceSession(TestHkdf, clock, bundle)
+        val newDevice = NewDeviceSession(HkdfKeyDerivation, clock)
+        val accountDevice = AccountDeviceSession(HkdfKeyDerivation, clock, bundle)
 
         val accepted = accountDevice.onScanned(newDevice.offerCode) as OfferOutcome.Accepted
         val paired = newDevice.onScanned(accepted.sealCode) as SealOutcome.Paired
@@ -59,8 +62,8 @@ class PairingSessionTest {
     fun theServerHintReachesTheAccountDevice() {
         val clock = FakeClock()
         val hint = ServerHint("https://notes.example/", ByteArray(32) { 9 })
-        val newDevice = NewDeviceSession(TestHkdf, clock, serverHint = hint)
-        val accountDevice = AccountDeviceSession(TestHkdf, clock, bundle)
+        val newDevice = NewDeviceSession(HkdfKeyDerivation, clock, serverHint = hint)
+        val accountDevice = AccountDeviceSession(HkdfKeyDerivation, clock, bundle)
 
         assertTrue(accountDevice.onScanned(newDevice.offerCode) is OfferOutcome.Accepted)
         assertEquals(hint, accountDevice.receivedServerHint)
@@ -69,9 +72,9 @@ class PairingSessionTest {
     /** A fresh `sid` per session, or the replay binding would bind nothing. */
     @Test
     fun everySessionMintsANewSessionId() {
-        val seen = (1..25).map { NewDeviceSession(TestHkdf, FakeClock()).sid.toHex() }.toSet()
+        val seen = (1..25).map { NewDeviceSession(HkdfKeyDerivation, FakeClock()).sid.toHex() }.toSet()
         assertEquals(25, seen.size)
-        assertEquals(PairingProtocol.SID_SIZE_BYTES, NewDeviceSession(TestHkdf, FakeClock()).sid.size)
+        assertEquals(PairingProtocol.SID_SIZE_BYTES, NewDeviceSession(HkdfKeyDerivation, FakeClock()).sid.size)
     }
 
     // -- the eavesdropper ---------------------------------------------------------------------
@@ -87,8 +90,8 @@ class PairingSessionTest {
     @Test
     fun observerWithBothPublicKeysCannotDerive() {
         val clock = FakeClock()
-        val newDevice = NewDeviceSession(TestHkdf, clock)
-        val accountDevice = AccountDeviceSession(TestHkdf, clock, bundle)
+        val newDevice = NewDeviceSession(HkdfKeyDerivation, clock)
+        val accountDevice = AccountDeviceSession(HkdfKeyDerivation, clock, bundle)
         val accepted = accountDevice.onScanned(newDevice.offerCode) as OfferOutcome.Accepted
 
         // Everything visible on the two screens.
@@ -106,12 +109,12 @@ class PairingSessionTest {
         val attacker = P256.generateEphemeralKeyPair()
         for (peer in listOf(encodedEa, encodedEb)) {
             val z = P256.sharedSecret(attacker.private as ECPrivateKey, P256.decodePublicKey(peer))
-            attempts += TestHkdf.derive(z, sid, info, 32)
+            attempts += HkdfKeyDerivation.derive(z, sid, info, 32)
         }
         // 2. Deriving straight from the public material, which is the naive mistake the key
         //    schedule would allow if `ikm` were ever anything but the ECDH secret.
-        attempts += TestHkdf.derive(encodedEa + encodedEb, sid, info, 32)
-        attempts += TestHkdf.derive(sid, sid, info, 32)
+        attempts += HkdfKeyDerivation.derive(encodedEa + encodedEb, sid, info, 32)
+        attempts += HkdfKeyDerivation.derive(sid, sid, info, 32)
 
         for (guess in attempts) {
             assertNull(PairingSeal.open(guess, seal.nonce, sid, seal.seal))
@@ -128,11 +131,11 @@ class PairingSessionTest {
     @Test
     fun rejectsAQr2FromADifferentSession() {
         val clock = FakeClock()
-        val victim = NewDeviceSession(TestHkdf, clock)
+        val victim = NewDeviceSession(HkdfKeyDerivation, clock)
 
         // A complete, genuine pairing between two *other* sessions...
-        val otherNewDevice = NewDeviceSession(TestHkdf, clock)
-        val accountDevice = AccountDeviceSession(TestHkdf, clock, bundle)
+        val otherNewDevice = NewDeviceSession(HkdfKeyDerivation, clock)
+        val accountDevice = AccountDeviceSession(HkdfKeyDerivation, clock, bundle)
         val stolen = accountDevice.onScanned(otherNewDevice.offerCode) as OfferOutcome.Accepted
 
         // ...replayed at the victim.
@@ -156,9 +159,9 @@ class PairingSessionTest {
     @Test
     fun qr2FromAnotherSessionIsNotAcceptedEvenIfSidCheckWereRemoved() {
         val clock = FakeClock()
-        val victim = NewDeviceSession(TestHkdf, clock)
-        val otherNewDevice = NewDeviceSession(TestHkdf, clock)
-        val accountDevice = AccountDeviceSession(TestHkdf, clock, bundle)
+        val victim = NewDeviceSession(HkdfKeyDerivation, clock)
+        val otherNewDevice = NewDeviceSession(HkdfKeyDerivation, clock)
+        val accountDevice = AccountDeviceSession(HkdfKeyDerivation, clock, bundle)
         val stolen = accountDevice.onScanned(otherNewDevice.offerCode) as OfferOutcome.Accepted
 
         val forged = rewriteSid(stolen.sealCode, victim.sid)
@@ -171,8 +174,8 @@ class PairingSessionTest {
     @Test
     fun aTamperedSealAbortsLoudlyAndPermanently() {
         val clock = FakeClock()
-        val newDevice = NewDeviceSession(TestHkdf, clock)
-        val accountDevice = AccountDeviceSession(TestHkdf, clock, bundle)
+        val newDevice = NewDeviceSession(HkdfKeyDerivation, clock)
+        val accountDevice = AccountDeviceSession(HkdfKeyDerivation, clock, bundle)
         val accepted = accountDevice.onScanned(newDevice.offerCode) as OfferOutcome.Accepted
 
         val tampered = tamperWithSealBytes(accepted.sealCode)
@@ -189,8 +192,8 @@ class PairingSessionTest {
     @Test
     fun aSuccessfulPairingClosesTheSession() {
         val clock = FakeClock()
-        val newDevice = NewDeviceSession(TestHkdf, clock)
-        val accountDevice = AccountDeviceSession(TestHkdf, clock, bundle)
+        val newDevice = NewDeviceSession(HkdfKeyDerivation, clock)
+        val accountDevice = AccountDeviceSession(HkdfKeyDerivation, clock, bundle)
         val accepted = accountDevice.onScanned(newDevice.offerCode) as OfferOutcome.Accepted
 
         assertTrue(newDevice.onScanned(accepted.sealCode) is SealOutcome.Paired)
@@ -202,10 +205,10 @@ class PairingSessionTest {
     @Test
     fun theAccountDeviceAcceptsOnlyOneOffer() {
         val clock = FakeClock()
-        val accountDevice = AccountDeviceSession(TestHkdf, clock, bundle)
+        val accountDevice = AccountDeviceSession(HkdfKeyDerivation, clock, bundle)
 
-        assertTrue(accountDevice.onScanned(NewDeviceSession(TestHkdf, clock).offerCode) is OfferOutcome.Accepted)
-        val second = accountDevice.onScanned(NewDeviceSession(TestHkdf, clock).offerCode) as OfferOutcome.Rejected
+        assertTrue(accountDevice.onScanned(NewDeviceSession(HkdfKeyDerivation, clock).offerCode) is OfferOutcome.Accepted)
+        val second = accountDevice.onScanned(NewDeviceSession(HkdfKeyDerivation, clock).offerCode) as OfferOutcome.Rejected
         assertEquals(PairingFailure.SESSION_CLOSED, second.failure)
     }
 
@@ -220,7 +223,7 @@ class PairingSessionTest {
      */
     @Test
     fun theAccountDeviceRejectsAnOffCurveOfferKey() {
-        val accountDevice = AccountDeviceSession(TestHkdf, FakeClock(), bundle)
+        val accountDevice = AccountDeviceSession(HkdfKeyDerivation, FakeClock(), bundle)
         val code = PairingCodec.encodeOffer(ByteArray(16), offCurvePoint(), ServerHint.NONE)
 
         val outcome = accountDevice.onScanned(code) as OfferOutcome.Rejected
@@ -230,7 +233,7 @@ class PairingSessionTest {
         // Terminal means terminal: a genuine offer afterwards is refused rather than given a
         // second chance to leak another residue.
         val afterwards = accountDevice.onScanned(
-            NewDeviceSession(TestHkdf, FakeClock()).offerCode
+            NewDeviceSession(HkdfKeyDerivation, FakeClock()).offerCode
         ) as OfferOutcome.Rejected
         assertEquals(PairingFailure.SESSION_CLOSED, afterwards.failure)
     }
@@ -238,7 +241,7 @@ class PairingSessionTest {
     /** The same check on the new device's side, where `EA` arrives inside QR2. */
     @Test
     fun theNewDeviceRejectsAnOffCurveSealKey() {
-        val newDevice = NewDeviceSession(TestHkdf, FakeClock())
+        val newDevice = NewDeviceSession(HkdfKeyDerivation, FakeClock())
         val code = PairingCodec.encodeSeal(newDevice.sid, offCurvePoint(), ByteArray(12), ByteArray(48))
 
         val outcome = newDevice.onScanned(code) as SealOutcome.Rejected
@@ -255,8 +258,8 @@ class PairingSessionTest {
     @Test
     fun theNewDeviceRefusesAQr2AfterItsSessionExpires() {
         val clock = FakeClock()
-        val newDevice = NewDeviceSession(TestHkdf, clock)
-        val accountDevice = AccountDeviceSession(TestHkdf, clock, bundle)
+        val newDevice = NewDeviceSession(HkdfKeyDerivation, clock)
+        val accountDevice = AccountDeviceSession(HkdfKeyDerivation, clock, bundle)
         val accepted = accountDevice.onScanned(newDevice.offerCode) as OfferOutcome.Accepted
 
         clock.advance(PairingProtocol.CODE_TTL_MILLIS)
@@ -270,8 +273,8 @@ class PairingSessionTest {
     @Test
     fun aCodeStillWorksJustBeforeItExpires() {
         val clock = FakeClock()
-        val newDevice = NewDeviceSession(TestHkdf, clock)
-        val accountDevice = AccountDeviceSession(TestHkdf, clock, bundle)
+        val newDevice = NewDeviceSession(HkdfKeyDerivation, clock)
+        val accountDevice = AccountDeviceSession(HkdfKeyDerivation, clock, bundle)
         val accepted = accountDevice.onScanned(newDevice.offerCode) as OfferOutcome.Accepted
 
         clock.advance(PairingProtocol.CODE_TTL_MILLIS - 1)
@@ -284,8 +287,8 @@ class PairingSessionTest {
     @Test
     fun expiryIsTerminal() {
         val clock = FakeClock()
-        val newDevice = NewDeviceSession(TestHkdf, clock)
-        val accountDevice = AccountDeviceSession(TestHkdf, clock, bundle)
+        val newDevice = NewDeviceSession(HkdfKeyDerivation, clock)
+        val accountDevice = AccountDeviceSession(HkdfKeyDerivation, clock, bundle)
         val accepted = accountDevice.onScanned(newDevice.offerCode) as OfferOutcome.Accepted
 
         clock.advance(PairingProtocol.CODE_TTL_MILLIS + 5_000)
@@ -300,12 +303,12 @@ class PairingSessionTest {
     @Test
     fun theAccountDeviceCountdownStartsAtAcceptance() {
         val clock = FakeClock()
-        val accountDevice = AccountDeviceSession(TestHkdf, clock, bundle)
+        val accountDevice = AccountDeviceSession(HkdfKeyDerivation, clock, bundle)
         clock.advance(500_000)
         assertEquals(PairingProtocol.CODE_TTL_MILLIS, accountDevice.remainingMillis())
         assertFalse(accountDevice.isExpired())
 
-        accountDevice.onScanned(NewDeviceSession(TestHkdf, clock).offerCode)
+        accountDevice.onScanned(NewDeviceSession(HkdfKeyDerivation, clock).offerCode)
         assertEquals(PairingProtocol.CODE_TTL_MILLIS, accountDevice.remainingMillis())
         clock.advance(PairingProtocol.CODE_TTL_MILLIS)
         assertTrue(accountDevice.isExpired())
@@ -319,8 +322,8 @@ class PairingSessionTest {
     @Test
     fun unrelatedCodesAreIgnoredWithoutClosingTheSession() {
         val clock = FakeClock()
-        val newDevice = NewDeviceSession(TestHkdf, clock)
-        val accountDevice = AccountDeviceSession(TestHkdf, clock, bundle)
+        val newDevice = NewDeviceSession(HkdfKeyDerivation, clock)
+        val accountDevice = AccountDeviceSession(HkdfKeyDerivation, clock, bundle)
 
         for (noise in listOf(
             "",
@@ -340,11 +343,11 @@ class PairingSessionTest {
     @Test
     fun theWrongStepsCodeIsANonTerminalHint() {
         val clock = FakeClock()
-        val newDevice = NewDeviceSession(TestHkdf, clock)
-        val accountDevice = AccountDeviceSession(TestHkdf, clock, bundle)
+        val newDevice = NewDeviceSession(HkdfKeyDerivation, clock)
+        val accountDevice = AccountDeviceSession(HkdfKeyDerivation, clock, bundle)
         val accepted = accountDevice.onScanned(newDevice.offerCode) as OfferOutcome.Accepted
 
-        val other = NewDeviceSession(TestHkdf, clock)
+        val other = NewDeviceSession(HkdfKeyDerivation, clock)
         val outcome = other.onScanned(other.offerCode) as SealOutcome.Rejected
         assertEquals(PairingFailure.WRONG_CODE_KIND, outcome.failure)
         // ...and the real reply still lands.
@@ -356,7 +359,7 @@ class PairingSessionTest {
     @Test
     fun sasIsSixDigitsAndZeroPadded() {
         repeat(200) {
-            val sas = Sas.derive(TestHkdf, ByteArray(32).also { b -> java.util.Random().nextBytes(b) }, ByteArray(16))
+            val sas = Sas.derive(HkdfKeyDerivation, ByteArray(32).also { b -> java.util.Random().nextBytes(b) }, ByteArray(16))
             assertEquals(6, sas.length)
             assertTrue(sas.all { c -> c.isDigit() })
         }
@@ -368,23 +371,23 @@ class PairingSessionTest {
         val otherSid = ByteArray(16) { 2 }
         val otherArk = ByteArray(32) { 5 }
 
-        assertEquals(Sas.derive(TestHkdf, ark, sid), Sas.derive(TestHkdf, ark, sid))
-        assertNotEquals(Sas.derive(TestHkdf, ark, sid), Sas.derive(TestHkdf, ark, otherSid))
-        assertNotEquals(Sas.derive(TestHkdf, ark, sid), Sas.derive(TestHkdf, otherArk, sid))
+        assertEquals(Sas.derive(HkdfKeyDerivation, ark, sid), Sas.derive(HkdfKeyDerivation, ark, sid))
+        assertNotEquals(Sas.derive(HkdfKeyDerivation, ark, sid), Sas.derive(HkdfKeyDerivation, ark, otherSid))
+        assertNotEquals(Sas.derive(HkdfKeyDerivation, ark, sid), Sas.derive(HkdfKeyDerivation, otherArk, sid))
     }
 
     /** Two devices that ended up with *different* ARKs must show different digits. */
     @Test
     fun aWrongPairingProducesADifferentSas() {
         val clock = FakeClock()
-        val newDevice = NewDeviceSession(TestHkdf, clock)
-        val rightAccount = AccountDeviceSession(TestHkdf, clock, bundle)
+        val newDevice = NewDeviceSession(HkdfKeyDerivation, clock)
+        val rightAccount = AccountDeviceSession(HkdfKeyDerivation, clock, bundle)
         val wrongAccount = AccountDeviceSession(
-            TestHkdf, clock, AccountBundle(ByteArray(32) { 0x5A }, "other")
+            HkdfKeyDerivation, clock, AccountBundle(ByteArray(32) { 0x5A }, "other")
         )
 
         val right = rightAccount.onScanned(newDevice.offerCode) as OfferOutcome.Accepted
-        val wrong = wrongAccount.onScanned(NewDeviceSession(TestHkdf, clock).offerCode) as OfferOutcome.Accepted
+        val wrong = wrongAccount.onScanned(NewDeviceSession(HkdfKeyDerivation, clock).offerCode) as OfferOutcome.Accepted
         assertNotEquals(right.sas, wrong.sas)
     }
 

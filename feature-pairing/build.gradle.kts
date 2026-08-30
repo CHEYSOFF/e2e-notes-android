@@ -46,6 +46,9 @@ android {
 
 dependencies {
     implementation(project(":core-ui"))
+    // The sync key hierarchy. This module needs exactly one thing from it -- HKDF-SHA256 -- and
+    // takes it rather than carrying a second copy; see PairingSeamModule.
+    implementation(project(":core-crypto"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)

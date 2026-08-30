@@ -4,19 +4,21 @@ package my.cheysoff.feature_pairing.protocol
  * The one-way key-derivation function the pairing protocol needs, and the ONLY place this module
  * touches the sync key hierarchy.
  *
- * ## Why this is an interface here rather than an implementation
+ * ## Why this is an interface rather than a call to `Hkdf`
  *
- * The sync work is being landed in phases. Phase 1 (`sync-phase1-crypto`) owns the real
- * HKDF-SHA256 (RFC 5869) together with the ARK hierarchy, blinded record IDs and the record
- * envelope. Phase 2 — this module — owns pairing. A second copy of HKDF living in this module is
- * exactly how two halves of one protocol drift apart: a mismatch in how `info` is assembled, or in
- * whether a zero-length salt means "no salt" or "a 32-byte block of zeros", produces two
- * implementations that each pass their own tests and cannot talk to each other.
+ * Not because there is a choice of implementation — there is exactly one, [HkdfKeyDerivation] over
+ * `core-crypto`'s `Hkdf`, and adding a second would be the bug. It is an interface because it is
+ * the seam: it names, in one place, everything this module needs from the key hierarchy, so a test
+ * can substitute a *deliberately wrong* KDF to prove the protocol above it notices (see
+ * `PairingEndToEndTest.oneSideDerivingWithADifferentInfoCannotPair`), and so nothing in
+ * `protocol/` has to import another module.
  *
- * So there is deliberately **no production implementation of this interface on this branch**. The
- * unit tests bind a test fake (a straightforward RFC 5869 HKDF-SHA256, checked against the RFC's
- * published vectors) so the protocol above it can be tested end to end, and the production binding
- * is a one-line `@Binds` in [my.cheysoff.feature_pairing.di.PairingSeamModule] once Phase 1 lands.
+ * The history is worth keeping: this module was landed before the key hierarchy existed and its
+ * tests bound their own RFC-5869 HKDF. Two implementations of one protocol primitive is how the
+ * halves of a protocol drift — a mismatch in how `info` is assembled, or in whether a zero-length
+ * salt means "no salt" or "a 32-byte block of zeros", produces two versions that each pass their
+ * own tests and cannot talk to each other. The two were checked byte for byte against each other
+ * and the second was then deleted; `HkdfSeamTest` pins what is left to literal bytes.
  *
  * ## Contract
  *

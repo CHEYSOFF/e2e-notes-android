@@ -8,6 +8,7 @@ import my.cheysoff.feature_pairing.di.PairingKeyMaterial
 import my.cheysoff.feature_pairing.identity.DeviceIdentity
 import my.cheysoff.feature_pairing.protocol.AccountBundle
 import my.cheysoff.feature_pairing.protocol.AccountDeviceSession
+import my.cheysoff.feature_pairing.protocol.HkdfKeyDerivation
 import my.cheysoff.feature_pairing.protocol.NewDeviceSession
 import my.cheysoff.feature_pairing.protocol.OfferOutcome
 import my.cheysoff.feature_pairing.protocol.PairingFailure
@@ -46,9 +47,9 @@ class PairingViewModelTest {
     // -- availability -------------------------------------------------------------------------
 
     /**
-     * The Phase-1 gate. On this branch `PairingKeyMaterial.isBound` is false, the screen says so,
-     * and no session is ever started — which is what keeps the unbound `KeyDerivation` placeholder
-     * unreachable rather than a runtime landmine.
+     * The `PairingKeyMaterial.isBound` gate. When it is false the screen says so and no session is
+     * ever started. No shipped build has it false any more, but the branch is the backstop for one
+     * that does, so it stays covered.
      */
     @Test
     fun reportsUnavailableWhenThePhaseOneSeamIsUnbound() = runTest {
@@ -60,6 +61,33 @@ class PairingViewModelTest {
         advanceUntilIdle()
         // Still on the chooser: no session, no derivation, nothing thrown.
         assertEquals(PairingStage.ChoosingRole, vm.state.value.stage)
+    }
+
+    /**
+     * Drawing the chooser must not create an account key.
+     *
+     * `accountBundle()` mints the ARK on a device that has none — that is how the very first
+     * device gets one — so where it is called from is a real decision and not a detail. Calling it
+     * to populate the role chooser would mean opening the pairing screen created an account, on a
+     * phone whose user may be about to choose "this is my new phone" and adopt someone else's.
+     * The chooser therefore reads `canShareAccount()`, which is a pure query.
+     */
+    @Test
+    fun openingTheChooserDoesNotAskForAnAccountBundle() = runTest {
+        val keyMaterial = FakeKeyMaterial(bound = true, bundle = bundle)
+        val vm = viewModel(keyMaterial = keyMaterial)
+
+        assertTrue(vm.state.value.canShareAccount)
+        assertEquals(0, keyMaterial.bundleRequests)
+
+        vm.onIntent(PairingIntent.StartOver)
+        advanceUntilIdle()
+        assertEquals(0, keyMaterial.bundleRequests)
+
+        // ...and it IS asked for once the user commits to the role that shares one.
+        vm.onIntent(PairingIntent.RoleChosen(PairingRole.HasMyNotes))
+        advanceUntilIdle()
+        assertEquals(1, keyMaterial.bundleRequests)
     }
 
     /** A device with no ARK cannot play the account-holder role, and the chooser must know. */
@@ -96,7 +124,7 @@ class PairingViewModelTest {
         assertEquals(120, showing.secondsRemaining)
 
         // The other phone -- a real AccountDeviceSession, not a stub -- answers.
-        val accountDevice = AccountDeviceSession(TestHkdf, clock, bundle)
+        val accountDevice = AccountDeviceSession(HkdfKeyDerivation, clock, bundle)
         val accepted = accountDevice.onScanned(showing.code) as OfferOutcome.Accepted
 
         vm.onIntent(PairingIntent.OfferShown)
@@ -132,7 +160,7 @@ class PairingViewModelTest {
 
         vm.onIntent(PairingIntent.RoleChosen(PairingRole.NewDevice))
         val showing = vm.state.value.stage as PairingStage.ShowingOffer
-        val accepted = AccountDeviceSession(TestHkdf, clock, bundle)
+        val accepted = AccountDeviceSession(HkdfKeyDerivation, clock, bundle)
             .onScanned(showing.code) as OfferOutcome.Accepted
         vm.onIntent(PairingIntent.OfferShown)
         vm.onIntent(PairingIntent.CodeScanned(accepted.sealCode))
@@ -165,7 +193,7 @@ class PairingViewModelTest {
         vm.onIntent(PairingIntent.RoleChosen(PairingRole.HasMyNotes))
         assertTrue(vm.state.value.stage is PairingStage.ScanningOffer)
 
-        val newDevice = NewDeviceSession(TestHkdf, clock)
+        val newDevice = NewDeviceSession(HkdfKeyDerivation, clock)
         vm.onIntent(PairingIntent.CodeScanned(newDevice.offerCode))
         val showing = vm.state.value.stage as PairingStage.ShowingSeal
         assertEquals(120, showing.secondsRemaining)
@@ -215,8 +243,8 @@ class PairingViewModelTest {
         vm.onIntent(PairingIntent.OfferShown)
 
         // A complete pairing between two unrelated sessions, replayed at this one.
-        val strangerOffer = NewDeviceSession(TestHkdf, clock)
-        val strangerSeal = AccountDeviceSession(TestHkdf, clock, bundle)
+        val strangerOffer = NewDeviceSession(HkdfKeyDerivation, clock)
+        val strangerSeal = AccountDeviceSession(HkdfKeyDerivation, clock, bundle)
             .onScanned(strangerOffer.offerCode) as OfferOutcome.Accepted
 
         vm.onIntent(PairingIntent.CodeScanned(strangerSeal.sealCode))
@@ -254,7 +282,7 @@ class PairingViewModelTest {
 
         vm.onIntent(PairingIntent.RoleChosen(PairingRole.NewDevice))
         val showing = vm.state.value.stage as PairingStage.ShowingOffer
-        val accepted = AccountDeviceSession(TestHkdf, clock, bundle)
+        val accepted = AccountDeviceSession(HkdfKeyDerivation, clock, bundle)
             .onScanned(showing.code) as OfferOutcome.Accepted
         vm.onIntent(PairingIntent.OfferShown)
 
@@ -336,7 +364,7 @@ class PairingViewModelTest {
     fun codesArrivingOutsideAScanningStageAreIgnored() = runTest {
         val clock = FakeClock()
         val vm = viewModel(keyMaterial = FakeKeyMaterial(bound = true, bundle = bundle), clock = clock)
-        vm.onIntent(PairingIntent.CodeScanned(NewDeviceSession(TestHkdf, clock).offerCode))
+        vm.onIntent(PairingIntent.CodeScanned(NewDeviceSession(HkdfKeyDerivation, clock).offerCode))
         assertEquals(PairingStage.ChoosingRole, vm.state.value.stage)
     }
 
@@ -347,7 +375,7 @@ class PairingViewModelTest {
         identity: FakeIdentity = FakeIdentity(),
         clock: FakeClock = FakeClock(),
     ) = PairingViewModel(
-        keyDerivation = TestHkdf,
+        keyDerivation = HkdfKeyDerivation,
         keyMaterial = keyMaterial,
         clock = clock,
         deviceIdentity = identity,
@@ -361,7 +389,16 @@ class PairingViewModelTest {
         var adopted: AccountBundle? = null
             private set
 
-        override fun accountBundle(): AccountBundle? = bundle
+        /** How many times the ViewModel asked for a bundle. Minting one is not free. */
+        var bundleRequests: Int = 0
+            private set
+
+        override fun canShareAccount(): Boolean = bundle != null
+
+        override fun accountBundle(): AccountBundle? {
+            bundleRequests++
+            return bundle
+        }
 
         override fun adopt(bundle: AccountBundle) {
             adopted = bundle
