@@ -4,6 +4,9 @@ kotlin = "2.3.21"
 coreKtx = "1.18.0"
 junit = "4.13.2"
 junitVersion = "1.1.5"
+# Pinned to the kotlinx-coroutines-core version this build already resolves, so the test
+# dispatcher and the runtime scheduler are the same implementation.
+coroutinesTest = "1.10.2"
 espressoCore = "3.5.1"
 kotlinGradlePlugin = "2.3.21"
 lifecycleRuntimeKtx = "2.10.0"
@@ -41,6 +44,7 @@ androidx-compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-toolin
 androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
 androidx-compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
 androidx-compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
+kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutinesTest" }
 androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
 androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
 kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlinGradlePlugin" }
