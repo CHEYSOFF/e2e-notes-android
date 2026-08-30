@@ -21,7 +21,7 @@ Build and test it from inside `server/`:
 
 ```
 cd server
-./gradlew test          # 113 tests
+./gradlew test          # 114 tests
 ./gradlew run           # starts on 127.0.0.1:8080
 ./gradlew installDist   # build/install/manana-sync-server/bin/manana-sync-server
 ```
@@ -32,7 +32,7 @@ the Android build uses, which is why `settings.gradle.kts` lists it first — se
 ## Stack
 
 Kotlin/JVM, [Ktor](https://ktor.io) on the CIO engine, SQLite through `org.xerial:sqlite-jdbc`,
-`kotlinx.serialization` for JSON. Seven dependencies, one module, no ORM, no migration framework, no
+`kotlinx.serialization` for JSON. Six dependencies, one module, no ORM, no migration framework, no
 DI container. The schema is six `CREATE TABLE IF NOT EXISTS` statements executed at start-up and
 every query is a hand-written parameterised statement.
 
@@ -112,9 +112,9 @@ is undecryptable without the Account Root Key, which exists only on the paired d
 ## Pointing a client at it
 
 Set the base URL to wherever the proxy terminates, e.g. `https://notes.example.com`. The QR pairing
-payload already carries a `serverUrl` and an SPKI pin
-(`feature-pairing/.../protocol/PairingWire.kt`), so a second device learns the address from the
-first.
+payload already carries a `ServerHint` -- a `url` and an optional `spkiPinSha256`
+(`feature-pairing/.../protocol/PairingWire.kt:278-297`) -- so a second device learns the address
+from the first.
 
 The flow a client performs, in order:
 
@@ -356,7 +356,7 @@ configured to `WARN`, both because Ktor's request logging prints full paths.
 cd server && ./gradlew test
 ```
 
-113 tests. Every endpoint has happy-path and rejection coverage. The properties with a test of their
+114 tests. Every endpoint has happy-path and rejection coverage. The properties with a test of their
 own, by file:
 
 - `CursorTest` — 60 concurrent pushes get contiguous distinct seqs; a puller interleaved with eight
@@ -380,18 +380,29 @@ own, by file:
 
 ### Mutation evidence
 
-The security tests were checked by breaking the production code and confirming a *named* test fails.
-Each mutation was reverted immediately afterwards.
+The security tests were checked the only way a test can be checked: by breaking the production code
+and confirming that a *named* test fails. Each mutation was reverted immediately afterwards, and the
+full suite is green on the committed code.
 
-| Mutation | Test that caught it |
+| Mutation | Tests that failed |
 |---|---|
-| `authorizeDevice` ignores the result of `P256Verify.verify` | `DeviceTest.authorizeSignedByAKeyThatIsNotTheVoucherIsRejected`, and 3 others |
-| `SyncStore.upsertBatch` applies every item regardless of `baseSeq` | `RecordsTest.aStaleBaseSeqIsRejectedWithTheConflictingEnvelopeInline`, and 3 others |
-| `changesSince` filters and orders on `received_at` instead of `seq` | `CursorTest.theCursorIsNotATimestampSoSimultaneousWritesStillOrder`, and 3 others |
+| `authorizeDevice` ignores the result of `P256Verify.verify` | `DeviceTest.authorizeSignedByAKeyThatIsNotTheVoucherIsRejected`, `DeviceTest.authorizeWithASignatureOverADifferentKeyIsRejected` |
+| `SyncStore.upsertBatch` applies every item regardless of `baseSeq` | `RecordsTest.aStaleBaseSeqIsRejectedWithTheConflictingEnvelopeInline`, `RecordsTest.baseSeqZeroAgainstAnExistingRecordIsAConflict`, `RecordsTest.aBaseSeqAheadOfTheHeadIsAConflict`, `RecordsTest.aBatchAppliesTheItemsThatDidNotConflict`, `OpacityTest.noEndpointEverReturnsThePlaintextOfARecord` |
+| `changesSince` filters and orders on `received_at`, and `nextCursor` becomes a timestamp | `CursorTest.theCursorIsNotATimestampSoSimultaneousWritesStillOrder`, `CursorTest.aPullerInterleavedWithConcurrentWritersMissesNothing`, `CursorTest.anUpdateMovesARecordToTheEndOfTheCursorOrder`, `CursorTest.aCursorAheadOfTheServerIsRejected`, and 3 in `RecordsTest` |
 | `authorizeDevice` drops the `voucher.revokedAt != null` check | `DeviceTest.aRevokedDeviceCannotVouchForANewDevice` |
 | `claimReplaySlot` always returns true | `DeviceTest.replayingAValidAuthorizeIsRejected` |
-| `readBounded` ignores the size cap | `ValidationTest.anOversizedBodyIsRejectedWithoutBeingProcessed` |
-| `RequestLog.request` logs the real path instead of the route template | `LoggingTest.logLinesNameRouteTemplatesAndNeverRealPaths` |
+| `readBounded` ignores both the declared and the actual size cap | `ValidationTest.anOversizedBodyIsRejectedWithoutBeingProcessed` |
+| `RequestLog.request` is given the real request path instead of the route template | `LoggingTest.logLinesNameRouteTemplatesAndNeverRealPaths` |
+| `sessionByTokenHash` drops the `d.revoked_at IS NULL` join condition | **Nothing failed.** See below. |
+
+**One mutation survived, and it found a real gap.** Dropping `revoked_at IS NULL` from the session
+lookup broke nothing, because revoking a device already deletes its sessions in the same
+transaction — so the first barrier always fires and the second was never reached from the HTTP
+surface. That is exactly the condition under which a defence quietly stops working.
+`SessionTest.aSessionRowForARevokedDeviceDoesNotResolve` was added to reach past the first barrier:
+it inserts a session row for a revoked device through the store directly, standing in for a future
+code path that forgets to check, and asserts the token still does not resolve. Re-applying the same
+mutation now fails that test.
 
 ---
 
