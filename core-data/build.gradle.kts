@@ -10,6 +10,12 @@ kotlin {
     }
 }
 
+// Required by @Database(exportSchema = true): Room writes the generated schema JSON here so
+// migrations become testable (MigrationTestHelper) and schema drift shows up in review diffs.
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
 android {
     namespace = "my.cheysoff.core_data"
     compileSdk = 36
