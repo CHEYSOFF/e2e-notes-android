@@ -17,6 +17,7 @@
             <option value="$PROJECT_DIR$/core-ui" />
             <option value="$PROJECT_DIR$/feature-auth" />
             <option value="$PROJECT_DIR$/feature-notes" />
+            <option value="$PROJECT_DIR$/feature-settings" />
           </set>
         </option>
       </GradleProjectSettings>
