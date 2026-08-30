@@ -10,6 +10,7 @@ import my.cheysoff.core_data.data.local.toDomain
 import my.cheysoff.core_data.data.local.toEntity
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.Note
+import my.cheysoff.core_domain.model.NotesSortOrder
 import my.cheysoff.core_domain.repository.NotesRepository
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -21,10 +22,15 @@ class RoomNotesRepository @Inject constructor(
     private val database: NoteDatabase,
 ) : NotesRepository {
 
-    override fun getNotes(): Flow<List<Note>> {
-        return noteDao.getNotes().map { entities ->
-            entities.map { it.toDomain() }
+    // The order is picked here rather than sorted in memory: each order is its own verified
+    // @Query, so SQLite does the work and the caller just re-subscribes when the user changes it.
+    override fun getNotes(sortOrder: NotesSortOrder): Flow<List<Note>> {
+        val entities = when (sortOrder) {
+            NotesSortOrder.RECENTLY_EDITED -> noteDao.getNotesByUpdatedAt()
+            NotesSortOrder.NEWEST_CREATED -> noteDao.getNotesByCreatedAt()
+            NotesSortOrder.TITLE_ASC -> noteDao.getNotesByTitle()
         }
+        return entities.map { list -> list.map { it.toDomain() } }
     }
 
     override fun getNoteById(id: String): Flow<Note?> {

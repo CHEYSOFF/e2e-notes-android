@@ -3,9 +3,10 @@ package my.cheysoff.core_domain.repository
 import kotlinx.coroutines.flow.Flow
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.Note
+import my.cheysoff.core_domain.model.NotesSortOrder
 
 interface NotesRepository {
-    fun getNotes(): Flow<List<Note>>
+    fun getNotes(sortOrder: NotesSortOrder): Flow<List<Note>>
     fun getNoteById(id: String): Flow<Note?>
     suspend fun saveNote(note: Note)
     suspend fun deleteNote(id: String)
