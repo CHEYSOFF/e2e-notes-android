@@ -27,6 +27,8 @@ import my.cheysoff.feature_notes.ui.single.SingleNoteViewModel
 import my.cheysoff.feature_notes.ui.trash.TrashEvent
 import my.cheysoff.feature_notes.ui.trash.TrashScreen
 import my.cheysoff.feature_notes.ui.trash.TrashViewModel
+import my.cheysoff.feature_pairing.ui.PairingScreen
+import my.cheysoff.feature_pairing.ui.PairingViewModel
 import my.cheysoff.feature_settings.ui.SettingsScreen
 import my.cheysoff.feature_settings.ui.SettingsViewModel
 
@@ -186,6 +188,26 @@ fun AppNavHost(
             val state by viewModel.state.collectAsState()
 
             SettingsScreen(
+                state = state,
+                onIntent = { intent -> viewModel.onIntent(intent) },
+                onBack = { navController.popBackStack() },
+                // launchSingleTop for the same reason the Profile push has it: a double tap on the
+                // row would otherwise push two copies of a screen that holds a live camera.
+                onPairDevice = { navController.navigate("pairing") { launchSingleTop = true } },
+            )
+        }
+
+        composable("pairing") {
+            // Same lock guard as every other pushed destination. Pairing never opens the database,
+            // but the account key it shares is (once Phase 1 lands) wrapped under the database
+            // passphrase, which exists in memory only while unlocked -- so a locked session has
+            // nothing to pair with.
+            if (!unlocked) return@composable
+
+            val viewModel: PairingViewModel = hiltViewModel()
+            val state by viewModel.state.collectAsState()
+
+            PairingScreen(
                 state = state,
                 onIntent = { intent -> viewModel.onIntent(intent) },
                 onBack = { navController.popBackStack() },

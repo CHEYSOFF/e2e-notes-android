@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.CircularProgressIndicator
@@ -93,6 +94,7 @@ fun SettingsScreen(
     state: SettingsScreenState,
     onIntent: (SettingsIntent) -> Unit,
     onBack: () -> Unit,
+    onPairDevice: () -> Unit,
 ) {
     val spacing = LocalSpacing.current
     val sw = LocalConfiguration.current.screenWidthDp
@@ -211,6 +213,22 @@ fun SettingsScreen(
             }
             state.biometricNotice?.let { FootNote(it) }
 
+            SectionLabel("Devices")
+            SettingsCard {
+                NavigationRow(
+                    title = "Pair a device",
+                    subtitle = "Show a code to another phone so both can hold the same notes.",
+                    onClick = onPairDevice,
+                )
+            }
+            // Every word of this is checkable against :feature-pairing. The pairing exchange is two
+            // QR codes read by the two phones' own cameras; the module declares CAMERA and nothing
+            // else, and deliberately not INTERNET (see its AndroidManifest.xml).
+            FootNote(
+                "Pairing is two QR codes and a camera. Nothing is uploaded, and this screen is " +
+                    "the only place the app uses the camera."
+            )
+
             SectionLabel("About")
             AboutCard(version = state.appVersion)
 
@@ -283,6 +301,51 @@ private fun SettingsTopBar(onBack: () -> Unit, scrollBehavior: TopAppBarScrollBe
         ),
         scrollBehavior = scrollBehavior,
     )
+}
+
+/**
+ * A row that goes somewhere, rather than changing something here.
+ *
+ * Unlike [ToggleRow] the whole row IS the tap target: there is one action, it is unambiguous, and a
+ * chevron-sized hit area on a row about pairing phones would be a poor joke.
+ */
+@Composable
+private fun NavigationRow(title: String, subtitle: String, onClick: () -> Unit) {
+    val sw = LocalConfiguration.current.screenWidthDp
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClickLabel = title, role = Role.Button, onClick = onClick)
+            .padding(start = 18.dp, end = 14.dp, top = 16.dp, bottom = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = TitleGrey,
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontSize = (sw * 0.043f).sp,
+                    fontWeight = FontWeight.Medium,
+                ),
+            )
+            Spacer(Modifier.height(3.dp))
+            Text(
+                text = subtitle,
+                color = BodyGrey,
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = (sw * 0.034f).sp,
+                    lineHeight = (sw * 0.046f).sp,
+                ),
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = Color(0xFF5E5E62),
+            modifier = Modifier.size(20.dp),
+        )
+    }
 }
 
 /** Uppercase section heading, matching the notes list's "PINNED" / "RECENT" labels. */
@@ -526,8 +589,11 @@ private fun SortRow(order: NotesSortOrder, onSelect: (NotesSortOrder) -> Unit) {
  *  - the wrong-PIN backoff numbers: LockoutPolicy (5 free attempts, 30s base, x2, 5min cap).
  *  - re-lock on background: MainApplication's ProcessLifecycleOwner observer.
  *  - no networking: the project contains no HTTP client and no network code, and the merged debug
- *    manifest declares only USE_BIOMETRIC, USE_FINGERPRINT and Compose's own
- *    DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION — no INTERNET.
+ *    manifest declares USE_BIOMETRIC, USE_FINGERPRINT, Compose's own
+ *    DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION and CAMERA — and no INTERNET. CAMERA arrived with
+ *    :feature-pairing, which reads a QR code off another phone's screen and opens no socket; the
+ *    "Devices" section above says so, and the claim below stays true because the app still has
+ *    nowhere to upload anything to.
  *
  * The key is described as "random" rather than as a specific length because an install migrated
  * from the pre-PIN key manager reuses whatever passphrase that version generated; only fresh

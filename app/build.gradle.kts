@@ -57,6 +57,7 @@ dependencies {
     implementation(project(":feature-auth"))
     implementation(project(":feature-notes"))
     implementation(project(":feature-settings"))
+    implementation(project(":feature-pairing"))
     implementation(project(":core-ui"))
     implementation(project(":core-domain"))
     implementation(project(":core-data"))
