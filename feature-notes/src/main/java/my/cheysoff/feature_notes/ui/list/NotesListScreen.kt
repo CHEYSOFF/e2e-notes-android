@@ -66,7 +66,11 @@ import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageShader
 import androidx.compose.ui.graphics.Paint
+import androidx.compose.ui.graphics.ShaderBrush
+import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.layer.drawLayer
@@ -133,8 +137,33 @@ private const val BlurStepCount = 6
  */
 private val BlurEdgeBleed = 32.dp
 
-/** Nav-bar fill opacity. Below ~0.6 the icons start to lose contrast against bright notes. */
-private const val NavBarOpacity = 0.72f
+/**
+ * Size of the repeating dither tile, and the strength of one noise step.
+ *
+ * Blurring near-black content produces gradients so shallow that a single 8-bit step
+ * spans 5-30 rows, which the eye reads as flat contour bands — a "height map" over the
+ * band. Perturbing each pixel by well under one step breaks the contours up without
+ * being visible as grain. This is ordinary gradient dithering, just applied to a blur.
+ */
+private const val DitherTile = 64
+private const val DitherAlpha = 5 // out of 255, i.e. ~1 LSB of white on a near-black ground
+
+/** One tiled noise bitmap, built once and reused as a repeating shader. */
+private fun buildDitherShader(): ShaderBrush {
+    val pixels = IntArray(DitherTile * DitherTile)
+    val random = java.util.Random(20260830L) // fixed seed: identical every launch
+    for (i in pixels.indices) {
+        val a = if (random.nextBoolean()) DitherAlpha else 0
+        pixels[i] = (a shl 24) or 0x00FFFFFF
+    }
+    val bitmap = android.graphics.Bitmap.createBitmap(
+        DitherTile, DitherTile, android.graphics.Bitmap.Config.ARGB_8888,
+    )
+    bitmap.setPixels(pixels, 0, DitherTile, 0, 0, DitherTile, DitherTile)
+    return ShaderBrush(
+        ImageShader(bitmap.asImageBitmap(), TileMode.Repeated, TileMode.Repeated)
+    )
+}
 
 @Composable
 fun NotesListScreen(
@@ -296,6 +325,7 @@ private fun Modifier.progressiveBottomBlur(bandHeight: Dp, background: Color): M
     val blurLayers = List(BlurStepCount) { rememberGraphicsLayer() }
     // One reusable Paint for the saveLayer calls: this runs on every scroll frame.
     val maskPaint = remember { Paint() }
+    val ditherBrush = remember { buildDitherShader() }
 
     // The radii never change once density is known, so configure the layers here rather
     // than churning the render nodes' properties on every frame. Radii grow quadratically:
@@ -370,6 +400,16 @@ private fun Modifier.progressiveBottomBlur(bandHeight: Dp, background: Color): M
                 )
                 drawContext.canvas.restore()
             }
+
+            // Finally dither the whole band. Everything above resolves to 8-bit, and the
+            // blurred near-black content changes so slowly that one step can span 30 rows —
+            // which reads as flat contour bands. Sub-step noise breaks the contours without
+            // being visible as grain.
+            drawRect(
+                brush = ditherBrush,
+                topLeft = Offset(0f, bandTop),
+                size = Size(size.width, size.height - bandTop),
+            )
         }
     }
 }
@@ -733,10 +773,7 @@ private fun FloatingNavBar(
                 .fillMaxWidth()
                 .height(56.dp)
                 .clip(RoundedCornerShape(percent = 50))
-                // Translucent so the blurred notes behind the bar actually read through it.
-                // Fully opaque, the blur band would be hidden and only the sliver below the
-                // pill would show it — which looks like a smudge rather than frosted glass.
-                .background(SurfaceDark.copy(alpha = NavBarOpacity)),
+                .background(SurfaceDark),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceAround,
         ) {
