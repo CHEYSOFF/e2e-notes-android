@@ -50,19 +50,61 @@ class SecureUnlockManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val biometricCipher: BiometricKeystoreCipher,
 ) {
-    private val masterKey = MasterKey.Builder(context)
-        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-        .build()
+    // Lazy for the same reason as [prefs]: building a MasterKey touches the Keystore, and this
+    // @Singleton is injected into Application, so an eager initializer would do that on the main
+    // thread during startup.
+    private val masterKey: MasterKey by lazy {
+        MasterKey.Builder(context)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build()
+    }
+
+    /**
+     * True when the prefs file had to be discarded because its Keystore key was gone (e.g. a
+     * cloud/D2D restore brings back `secret_shared_prefs` but never the non-exportable master key).
+     * The wraps are then unrecoverable, so any existing `notes.db` is undecryptable and must be
+     * dropped — see DataModule, which reads this before opening the database.
+     */
+    @Volatile
+    var wasStateReset: Boolean = false
+        private set
 
     // Mirror EncryptionManager.createSharedPreferences() so we share the legacy prefs file.
+    // Key loss must NOT propagate: isPinSet() is called from the auth screen on the main thread,
+    // so an uncaught GeneralSecurityException here crash-loops the app on every launch with no
+    // way out but clearing app data. Recover the way EncryptionManager did: drop the unreadable
+    // prefs and start clean (the notes they protected are already unrecoverable at this point).
     private val prefs: SharedPreferences by lazy {
-        EncryptedSharedPreferences.create(
-            context,
-            PREFS_NAME,
-            masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-        )
+        try {
+            createPrefs()
+        } catch (e: Exception) {
+            if (!isKeyLoss(e)) throw e
+            context.deleteSharedPreferences(PREFS_NAME)
+            wasStateReset = true
+            createPrefs()
+        }
+    }
+
+    private fun createPrefs(): SharedPreferences = EncryptedSharedPreferences.create(
+        context,
+        PREFS_NAME,
+        masterKey,
+        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+    )
+
+    /** Mirrors EncryptionManager.isKeyLoss: only a missing/invalid Keystore key is recoverable. */
+    private fun isKeyLoss(error: Throwable): Boolean {
+        var e: Throwable? = error
+        while (e != null) {
+            if (e is java.security.GeneralSecurityException ||
+                e is java.security.KeyStoreException ||
+                e is javax.crypto.AEADBadTagException ||
+                e is android.security.keystore.KeyPermanentlyInvalidatedException
+            ) return true
+            e = e.cause
+        }
+        return false
     }
 
     /** In-memory unlocked passphrase, or null while locked. Owned/zeroed by this class. */
@@ -107,11 +149,11 @@ class SecureUnlockManager @Inject constructor(
                 putInt(KEY_PIN_ITERS, wrap.iterations)
                 putInt(KEY_FAIL_COUNT, 0)
                 putLong(KEY_LOCKOUT_UNTIL, 0L)
+                putLong(KEY_LOCKOUT_UNTIL_ELAPSED, 0L)
                 if (migrating) remove(KEY_LEGACY_PASSPHRASE)
             }
             // Keep an in-memory copy; zero the local working copy below.
-            inMem = passphrase.copyOf()
-            _unlocked.value = true
+            setInMem(passphrase.copyOf())
         } finally {
             passphrase.fill(0)
         }
@@ -129,25 +171,46 @@ class SecureUnlockManager @Inject constructor(
             val failCount = prefs.getInt(KEY_FAIL_COUNT, 0) + 1
             val now = System.currentTimeMillis()
             val lockoutUntil = LockoutPolicy.lockoutUntil(failCount, now)
+            // Also record the deadline on the monotonic clock. System.currentTimeMillis() is
+            // user-settable, so a wall-clock-only deadline is skipped by moving the device clock
+            // forward in Settings; SystemClock.elapsedRealtime() cannot be changed that way.
+            val duration = max(0L, lockoutUntil - now)
+            val elapsedUntil =
+                if (duration > 0) android.os.SystemClock.elapsedRealtime() + duration else 0L
             prefs.edit(commit = true) {
                 putInt(KEY_FAIL_COUNT, failCount)
                 putLong(KEY_LOCKOUT_UNTIL, lockoutUntil)
+                putLong(KEY_LOCKOUT_UNTIL_ELAPSED, elapsedUntil)
             }
-            return UnlockResult.WrongPin(max(0L, lockoutUntil - now))
+            return UnlockResult.WrongPin(duration)
         }
 
         prefs.edit(commit = true) {
             putInt(KEY_FAIL_COUNT, 0)
             putLong(KEY_LOCKOUT_UNTIL, 0L)
+            putLong(KEY_LOCKOUT_UNTIL_ELAPSED, 0L)
         }
-        inMem = pp
-        _unlocked.value = true
+        setInMem(pp)
         return UnlockResult.Success
     }
 
-    /** Milliseconds remaining on an active lockout window, or 0 if not locked out. */
-    fun lockoutRemainingMillis(): Long =
-        max(0L, prefs.getLong(KEY_LOCKOUT_UNTIL, 0L) - System.currentTimeMillis())
+    /**
+     * Milliseconds remaining on an active lockout window, or 0 if not locked out.
+     *
+     * Takes the STRICTER of the wall-clock and monotonic deadlines, so winding the device clock
+     * forward doesn't retire the lockout early. A reboot resets elapsedRealtime, which can leave
+     * the monotonic deadline looking far away — that fails closed (at most one MAX_LOCK_MS wait),
+     * which is the right direction for a lockout.
+     */
+    fun lockoutRemainingMillis(): Long {
+        val byWall = prefs.getLong(KEY_LOCKOUT_UNTIL, 0L) - System.currentTimeMillis()
+        val elapsedUntil = prefs.getLong(KEY_LOCKOUT_UNTIL_ELAPSED, 0L)
+        val byElapsed = if (elapsedUntil == 0L) 0L else {
+            (elapsedUntil - android.os.SystemClock.elapsedRealtime())
+                .coerceAtMost(LockoutPolicy.MAX_LOCK_MS)
+        }
+        return max(0L, max(byWall, byElapsed))
+    }
 
     /** True once a biometric-wrapped passphrase exists. */
     fun isBiometricEnabled(): Boolean = prefs.contains(KEY_BIO_CT)
@@ -193,12 +256,19 @@ class SecureUnlockManager @Inject constructor(
      * ciphertext into the in-memory passphrase. Returns true on success.
      */
     fun unlockWithBiometric(unlockedDecryptCipher: Cipher): Boolean {
-        val ct = prefs.getString(KEY_BIO_CT, null)
-            ?: error("unlockWithBiometric() called but no biometric wrap stored")
-        val pp = unlockedDecryptCipher.doFinal(Base64.decode(ct, Base64.DEFAULT))
+        // Missing wrap is a recoverable state (biometric was disabled/cleared), not a crash: return
+        // false so the caller can fall back to the PIN. doFinal may still throw if the Keystore key
+        // was invalidated between init and use — the caller catches that.
+        val ct = prefs.getString(KEY_BIO_CT, null) ?: return false
+        setInMem(unlockedDecryptCipher.doFinal(Base64.decode(ct, Base64.DEFAULT)))
+        return true
+    }
+
+    /** Install a new in-memory passphrase, zeroing any previous one instead of leaking it to GC. */
+    private fun setInMem(pp: ByteArray) {
+        inMem?.fill(0)
         inMem = pp
         _unlocked.value = true
-        return true
     }
 
     /** A copy of the unlocked passphrase, or null if locked. Caller owns/zeroes the copy. */
@@ -239,6 +309,7 @@ class SecureUnlockManager @Inject constructor(
         const val KEY_BIO_CT = "bio_ct"
         const val KEY_FAIL_COUNT = "fail_count"
         const val KEY_LOCKOUT_UNTIL = "lockout_until"
+        const val KEY_LOCKOUT_UNTIL_ELAPSED = "lockout_until_elapsed"
 
         const val KEY_LEGACY_PASSPHRASE = "db_passphrase"
     }

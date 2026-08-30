@@ -81,6 +81,12 @@ fun AppNavHost(
 
         // Notes feature
         composable("notes") {
+            // Never compose the notes graph while locked. hiltViewModel() builds NoteDatabase,
+            // which throws "Database requested while locked". After process death the saved back
+            // stack re-composes this destination in the SAME pass that only registers the re-lock
+            // LaunchedEffect above — effects run after composition, so the redirect is too late.
+            if (!unlocked) return@composable
+
             val viewModel: NotesListViewModel = hiltViewModel()
             val state by viewModel.state.collectAsState()
 
@@ -106,6 +112,9 @@ fun AppNavHost(
                 navArgument("noteId") { type = NavType.StringType }
             )
         ) {
+            // Same lock guard as the notes list — this destination also opens the database.
+            if (!unlocked) return@composable
+
             val viewModel: SingleNoteViewModel = hiltViewModel()
             val state by viewModel.state.collectAsState()
 

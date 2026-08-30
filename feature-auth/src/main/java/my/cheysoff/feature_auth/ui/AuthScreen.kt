@@ -148,6 +148,9 @@ fun AuthScreen(
             BiometricLanding(
                 titleSize = titleSize,
                 secondarySize = secondarySize,
+                // Only surface the error on the landing itself; when the sheet is open it owns the
+                // message slot and would otherwise show it twice.
+                error = state.error.takeIf { state.mode == AuthMode.BIOMETRIC },
                 onIntentReceived = onIntentReceived,
                 modifier = Modifier
                     .align(Alignment.BottomStart)
@@ -186,6 +189,7 @@ fun AuthScreen(
 private fun BiometricLanding(
     titleSize: androidx.compose.ui.unit.TextUnit,
     secondarySize: androidx.compose.ui.unit.TextUnit,
+    error: String?,
     onIntentReceived: (AuthScreenIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -209,8 +213,11 @@ private fun BiometricLanding(
             ),
         )
         Text(
-            text = "Your notes are encrypted on this device.",
-            color = EncryptedNoteGrey,
+            // Biometric failures (unavailable key, unusable wrap) previously set state.error with
+            // no slot to render it here, leaving the Unlock button looking dead. Swap the
+            // reassurance line for the error so the PIN fallback is discoverable.
+            text = error ?: "Your notes are encrypted on this device.",
+            color = if (error != null) ErrorRed else EncryptedNoteGrey,
             style = MaterialTheme.typography.bodySmall.copy(fontSize = secondarySize),
             modifier = Modifier.padding(top = 16.dp),
         )
