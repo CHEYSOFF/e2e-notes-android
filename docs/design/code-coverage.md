@@ -11,8 +11,12 @@
 > `-javaagent` argument (and pairs it with `excludes=jdk.internal.*`, without which the test JVM
 > dies at startup). Anything measured before this was an undercount for any Robolectric test.
 >
-> **2. New numbers.** Line coverage **10.6% → 15.7%** (435/4115 → 649/4121); instruction 11.2%,
-> branch 20.7%, method 20.5%. The movement is entirely in the two modules that own the user's data:
+> **2. New numbers.** Measured on this change alone, against the 10.6% baseline below, line
+> coverage goes **10.6% → 15.7%** (435/4115 → 649/4121). Merged together with the ViewModel tests
+> that landed in parallel, the project now stands at **28.3% line** (1165/4117), 23.1%
+> instruction, 35.4% branch, 36.7% method.
+>
+> The part of that attributable here is the two modules that own the user's data:
 >
 > | Package | Before | After |
 > |---|---|---|
@@ -20,6 +24,9 @@
 > | `core_data/data` (repositories) | **0%** | **54.7%** |
 > | `core_data/data/local` (DAOs, exercised through the repository) | 46.6% | 66.9% |
 > | `core_domain/model` (`TrashPolicy` reached from the repository tests) | 61.1% | 77.8% |
+>
+> (`core_domain/model` reads 87.0% on the merged tree — the ViewModel tests reach it too. The other
+> three rows are unaffected by that merge and read the same either way.)
 >
 > `SecureUnlockManager` itself is **96.3%** (129/134); the five uncovered lines are the four that
 > call straight into the Android Keystore and one defensive `error(...)`. `RoomNotesRepository` is
@@ -31,10 +38,17 @@
 > be tested. Those sixteen lines were inside `SecureUnlockManager`'s 0/144 before, so nothing
 > regressed — they are simply now named as what they are, code that only a real Keystore can run.
 >
-> **`connectedAndroidTest` also works now** (same mirror). It ran the whole instrumented suite on
-> `emulator-5554` and immediately caught a real regression: `Migration4to5Test` had been broken
-> since the v6 (Trash) change — it registered migrations only up to `MIGRATION_4_5` while the
-> database moved to v6 — and nobody saw it because the task could not run at all.
+> **`connectedAndroidTest` also works now** (same mirror — AGP's Unified Test Platform can fetch
+> its own dependencies again). `./gradlew :core-data:connectedAndroidTest` ran all 8 instrumented
+> tests on `emulator-5554`, and the first run immediately caught a real regression:
+> `Migration4to5Test` had been broken since the v6 (Trash) change — it registered migrations only
+> up to `MIGRATION_4_5` while the database moved to v6 — and nobody saw it because the task could
+> not run at all.
+>
+> Note that instrumented coverage is still NOT in this report: `jacocoMergedReport` merges only
+> `testDebugUnitTest` execution data, so a test written under `androidTest` scores zero here no
+> matter how much it exercises. That is why `RoomNotesRepository` is tested under Robolectric
+> rather than alongside the migration tests it otherwise resembles.
 
 > **Status update (2026-08-30, later the same day).** Everything below was written while
 > `org.jacoco:org.jacoco.agent` could not be downloaded, so the document said no report could be
