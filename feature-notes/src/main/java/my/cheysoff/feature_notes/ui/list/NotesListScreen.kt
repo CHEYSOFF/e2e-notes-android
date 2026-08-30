@@ -117,14 +117,14 @@ import kotlin.math.roundToInt
 private val BlurRampHeight = 40.dp
 
 /** Blur radius once the ramp is finished — i.e. everything behind and below the bar. */
-private val BlurMaxRadius = 20.dp
+private val BlurMaxRadius = 16.dp
 
 /**
  * Number of cross-fade steps in the ramp. Each step is one extra GPU blur pass over
  * a band-sized buffer, so this is the main perf/smoothness dial: 2 is cheap and still
  * seam-free, 4 is smooth, above ~5 the extra steps are not visible.
  */
-private const val BlurStepCount = 4
+private const val BlurStepCount = 6
 
 /**
  * Extra content sampled above the band. A blur near the top edge of its own buffer
@@ -132,6 +132,9 @@ private const val BlurStepCount = 4
  * content to sample and is then clipped away.
  */
 private val BlurEdgeBleed = 32.dp
+
+/** Nav-bar fill opacity. Below ~0.6 the icons start to lose contrast against bright notes. */
+private const val NavBarOpacity = 0.72f
 
 @Composable
 fun NotesListScreen(
@@ -730,7 +733,10 @@ private fun FloatingNavBar(
                 .fillMaxWidth()
                 .height(56.dp)
                 .clip(RoundedCornerShape(percent = 50))
-                .background(SurfaceDark),
+                // Translucent so the blurred notes behind the bar actually read through it.
+                // Fully opaque, the blur band would be hidden and only the sliver below the
+                // pill would show it — which looks like a smudge rather than frosted glass.
+                .background(SurfaceDark.copy(alpha = NavBarOpacity)),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceAround,
         ) {
