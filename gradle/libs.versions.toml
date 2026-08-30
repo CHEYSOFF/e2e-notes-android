@@ -4,9 +4,11 @@ kotlin = "2.3.21"
 coreKtx = "1.18.0"
 junit = "4.13.2"
 junitVersion = "1.1.5"
-# Pinned to the kotlinx-coroutines-core version this build already resolves, so the test
-# dispatcher and the runtime scheduler are the same implementation.
-coroutinesTest = "1.10.2"
+# 1.9.0, not the newest, on purpose: kotlinx-coroutines-android is already cached at 1.9.0 here,
+# and Gradle picks the highest requested version across the graph. Asking for test:1.10.2 dragged
+# coroutines-android up to 1.10.2 as well, making TWO jars unavailable instead of one. At 1.9.0 the
+# whole graph settles on versions already present except a single artifact.
+coroutinesTest = "1.9.0"
 espressoCore = "3.5.1"
 kotlinGradlePlugin = "2.3.21"
 lifecycleRuntimeKtx = "2.10.0"
