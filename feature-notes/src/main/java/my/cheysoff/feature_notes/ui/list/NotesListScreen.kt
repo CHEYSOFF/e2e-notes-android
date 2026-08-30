@@ -103,14 +103,18 @@ import my.cheysoff.feature_notes.ui.folder.FolderRef
 import kotlin.math.roundToInt
 
 // ── Progressive blur behind the floating nav bar (tunables) ──────────────────
-// The blurred band runs from `BlurRampHeight` above the top of the nav bar down
-// to the bottom of the screen. Inside the ramp the blur grows from nothing to
-// `BlurMaxRadius`; from the top of the bar downwards it just stays at the max,
-// so notes sliding under the bar are already fully soft by the time they get
-// there and there is no hard seam anywhere.
+// The blurred band starts exactly at the TOP OF THE NAV BAR and runs to the bottom
+// of the screen — content above the bar stays completely sharp. Inside the band the
+// blur grows from nothing to `BlurMaxRadius` over `BlurRampHeight`, then holds at the
+// max for the rest of the bar. Ramping inside the band rather than starting at full
+// strength keeps the band's top edge from reading as a hard seam.
 
-/** Vertical distance over which the blur fades in, measured up from the nav bar. */
-private val BlurRampHeight = 96.dp
+/**
+ * Vertical distance over which the blur fades in, measured DOWN from the top of the
+ * nav bar. Must stay comfortably shorter than the bar's own height or the blur never
+ * reaches full strength before the screen ends.
+ */
+private val BlurRampHeight = 40.dp
 
 /** Blur radius once the ramp is finished — i.e. everything behind and below the bar. */
 private val BlurMaxRadius = 20.dp
@@ -176,7 +180,7 @@ fun NotesListScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .progressiveBottomBlur(
-                    bandHeight = innerPadding.calculateBottomPadding() + BlurRampHeight,
+                    bandHeight = innerPadding.calculateBottomPadding(),
                     background = MaterialTheme.colorScheme.background,
                 ),
             columns = StaggeredGridCells.Fixed(2),
