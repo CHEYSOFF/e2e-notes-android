@@ -16,7 +16,16 @@ activityCompose = "1.13.0"
 composeBom = "2026.05.01"
 appcompat = "1.7.1"
 material = "1.14.0"
-dagger = "2.59.2"
+# 2.60.1, not 2.59.2, because of the richeditor 1.1.0 bump below. richeditor 1.1.0 is built with
+# Kotlin 2.4.10 and its POM requires kotlin-stdlib 2.4.10, which Gradle resolves for the whole
+# graph (the project itself still COMPILES with Kotlin 2.3.21 -- only the stdlib moves). Hilt
+# reads @Metadata off the classes it processes, and 2.59.2 ships a kotlin-metadata-jvm that
+# refuses anything past metadata version 2.3.0, so :app:hiltJavaCompileDebug failed outright with
+# "Provided Metadata instance has version 2.4.0, while maximum supported version is 2.3.0".
+# 2.60.1 reads it. The alternative -- forcing kotlin-stdlib back to 2.3.21 -- was tried and also
+# builds, but it would run a library compiled against the 2.4 stdlib on the 2.3 one, so this is
+# the safer of the two. Nothing else about Hilt changed.
+dagger = "2.60.1"
 hiltNavigationCompose = "1.3.0"
 biometric = "1.4.0-alpha05"
 materialIconsExtended = "1.7.8"
@@ -27,7 +36,21 @@ sqlite = "2.4.0"
 room = "2.8.4"
 lifecycleProcess = "2.10.0"
 datastore = "1.2.1"
-richeditor = "1.0.0-rc14"
+# Treat a change to this line as a content-schema change, not a routine dependency bump: the
+# version decides how every HTML note body is serialised, and the two versions do NOT agree.
+# 1.0.0-rc14 escaped text through KsoupEntities.encodeHtml, which emits a named entity for nearly
+# every punctuation mark and every non-ASCII letter -- "." became "&period;", "@" became
+# "&commat;", and each Cyrillic letter became something like "&Pcy;". 1.1.0 escapes only "&", "<"
+# and ">". For a Russian note that is a real difference: a heading + bold + bullet-list note
+# measured 357 bytes of stored UTF-8 under rc14 and 168 under 1.1.0, and a one-line Cyrillic
+# paragraph went from 130 bytes to 54.
+#
+# Both directions were verified on an API 33 emulator before this bump, and both are guarded by
+# RichEditorHtmlRoundTripTest: 1.1.0 decodes rc14's entity-escaped bytes losslessly, and rc14
+# decodes 1.1.0's literal bytes losslessly, so the upgrade is reversible. Re-run that test on
+# every change to this line -- it is the only thing standing between a version bump and silently
+# mangling the whole note library.
+richeditor = "1.1.0"
 ksp = "2.3.9"
 
 [libraries]
