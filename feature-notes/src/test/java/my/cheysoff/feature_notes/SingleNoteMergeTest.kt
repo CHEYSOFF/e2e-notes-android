@@ -3,14 +3,17 @@ package my.cheysoff.feature_notes
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.feature_notes.model.single.ChecklistItem
 import my.cheysoff.feature_notes.model.single.SingleNoteScreenState
+import my.cheysoff.feature_notes.model.single.normalizeChecklistText
+import my.cheysoff.feature_notes.model.single.parseChecklist
 import my.cheysoff.feature_notes.model.single.serializeChecklist
-import my.cheysoff.feature_notes.ui.single.NEW_NOTE_GRACE_MS
-import my.cheysoff.feature_notes.ui.single.isFreshlyCreatedBlankNote
+import my.cheysoff.feature_notes.ui.single.isDiscardableOnOpen
 import my.cheysoff.feature_notes.ui.single.mergeChecklist
 import my.cheysoff.feature_notes.ui.single.mergeIncomingNote
 import my.cheysoff.feature_notes.ui.single.toEditorBaseline
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -180,6 +183,28 @@ class SingleNoteMergeTest {
     }
 
     @Test
+    fun `an unchanged checklist keeps its ids when another field changes externally`() {
+        // The test above is characterization only: every field of state and incoming is equal
+        // there, so the old row-level "nothing changed at all" shortcut passed it too. Here the
+        // checklist is identical but folderId moved (the list screen's MoveNoteToFolder), so the
+        // row IS different and only per-field merging can keep the ids alive.
+        val items = listOf(item("a", "milk"), item("b", "eggs", done = true))
+        val state = SingleNoteScreenState(checklist = items, folderId = null, isLoaded = true)
+        val baseline =
+            note(checklist = items.serializeChecklist(), folderId = null).toEditorBaseline()
+
+        val merged = mergeIncomingNote(
+            state,
+            baseline,
+            note(checklist = items.serializeChecklist(), folderId = "f2"),
+        )
+
+        assertEquals("f2", merged.state.folderId)
+        assertEquals(listOf("a", "b"), merged.state.checklist.map { it.id })
+        assertSame(items, merged.state.checklist)
+    }
+
+    @Test
     fun `a checklist keystroke is not rolled back by the echo of the previous save`() {
         val local = listOf(item("a", "milkk"))
         val state = SingleNoteScreenState(checklist = local, isLoaded = true)
@@ -206,8 +231,43 @@ class SingleNoteMergeTest {
 
         assertSame(current[0], merged[0])
         assertEquals("eggs" to true, merged[1].text to merged[1].isDone)
-        // The changed row gets a fresh id; it must at least still be a distinct, non-empty id.
+        // The changed row gets a fresh id: distinct from the one it replaced, distinct from its
+        // neighbour's (Compose keys off it), and non-empty.
+        assertNotEquals(current[1].id, merged[1].id)
+        assertNotEquals(merged[0].id, merged[1].id)
         assertTrue(merged[1].id.isNotEmpty())
+    }
+
+    @Test
+    fun `a newline pasted into an item survives the echo with its id intact`() {
+        // The single-line field can still receive a multi-line paste. serializeChecklist folds the
+        // newline to a space, so text held un-normalized in state comes back as different text and
+        // the row the user is typing into gets re-identified. Normalizing on the way in fixes it.
+        val pasted = "milk\neggs"
+        val local = listOf(item("a", normalizeChecklistText(pasted)))
+
+        val merged = mergeChecklist(local, local.serializeChecklist())
+
+        assertEquals(listOf("a"), merged.map { it.id })
+        assertSame(local[0], merged[0])
+
+        // Without the normalization the very same echo mints a fresh id — the bug being pinned.
+        val unnormalized = listOf(item("a", pasted))
+        assertNotSame(
+            unnormalized[0],
+            mergeChecklist(unnormalized, unnormalized.serializeChecklist())[0],
+        )
+    }
+
+    @Test
+    fun `normalized item text round-trips through serialize and parse unchanged`() {
+        val normalized = normalizeChecklistText("line one\nline two")
+
+        assertEquals("line one line two", normalized)
+        assertEquals(
+            listOf(normalized),
+            parseChecklist(listOf(item("a", normalized)).serializeChecklist()).map { it.text },
+        )
     }
 
     @Test
@@ -229,45 +289,37 @@ class SingleNoteMergeTest {
 
     @Test
     fun `the blank row the plus button just inserted is discardable`() {
-        val openedAt = 100_000L
-        assertTrue(
-            isFreshlyCreatedBlankNote(
-                note(createdAt = openedAt - 20L, updatedAt = openedAt - 20L),
-                openedAt,
-            )
-        )
+        assertTrue(isDiscardableOnOpen(openedForNewNote = true, note = note()))
     }
 
     @Test
-    fun `an existing note emptied in an earlier session is never discardable`() {
-        // The bug: it is blank on open, but emptying it went through a save that bumped updatedAt.
-        val openedAt = 100_000L
+    fun `a blank note opened without the isNew flag is never discardable`() {
+        // Every route into the editor other than the "+" button leaves isNew at its default. An
+        // existing note the user emptied out looks exactly like a brand new one on open, and this
+        // is the only thing separating them.
+        assertFalse(isDiscardableOnOpen(openedForNewNote = false, note = note()))
+    }
+
+    @Test
+    fun `a legacy row whose createdAt was just backfilled is not discardable`() {
+        // The regression: the old test inferred "created for this screen" from timestamps. A legacy
+        // pre-migration row stores createdAt = 0, and the upsert rewrites that to now on the first
+        // post-migration save — so createdAt != 0, createdAt == updatedAt AND createdAt is inside
+        // the grace window all become true for an ordinary note the user has emptied out. It was
+        // then hard-deleted, with its pin/favorite/folder, on the next back press.
+        val now = 100_000L
         assertFalse(
-            isFreshlyCreatedBlankNote(
-                note(createdAt = openedAt - 20L, updatedAt = openedAt - 10L),
-                openedAt,
+            isDiscardableOnOpen(
+                openedForNewNote = false,
+                note = note(createdAt = now, updatedAt = now, isPinned = true, folderId = "f1"),
             )
         )
     }
 
     @Test
-    fun `a blank note created in an earlier session is not discardable`() {
-        val openedAt = 100_000L
-        val createdAt = openedAt - NEW_NOTE_GRACE_MS - 1L
-        assertFalse(isFreshlyCreatedBlankNote(note(createdAt = createdAt, updatedAt = createdAt), openedAt))
-    }
-
-    @Test
-    fun `a legacy row with no timestamps is not discardable`() {
-        assertFalse(isFreshlyCreatedBlankNote(note(createdAt = 0L, updatedAt = 0L), 100_000L))
-    }
-
-    @Test
-    fun `a note with content is not discardable`() {
-        val openedAt = 100_000L
-        val stamp = openedAt - 20L
-        assertFalse(isFreshlyCreatedBlankNote(note(title = "hi", createdAt = stamp, updatedAt = stamp), openedAt))
-        assertFalse(isFreshlyCreatedBlankNote(note(content = "hi", createdAt = stamp, updatedAt = stamp), openedAt))
-        assertFalse(isFreshlyCreatedBlankNote(note(checklist = "0hi", createdAt = stamp, updatedAt = stamp), openedAt))
+    fun `a note with content is not discardable even when opened as new`() {
+        assertFalse(isDiscardableOnOpen(openedForNewNote = true, note = note(title = "hi")))
+        assertFalse(isDiscardableOnOpen(openedForNewNote = true, note = note(content = "hi")))
+        assertFalse(isDiscardableOnOpen(openedForNewNote = true, note = note(checklist = "0hi")))
     }
 }
