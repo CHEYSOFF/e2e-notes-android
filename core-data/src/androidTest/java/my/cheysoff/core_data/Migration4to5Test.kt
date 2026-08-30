@@ -99,6 +99,20 @@ class Migration4to5Test {
         db.close()
     }
 
+    /**
+     * Opens the seeded v4 file through Room, which runs the migrations on first access.
+     *
+     * EVERY migration has to be registered, not just the one under test: Room migrates all the way
+     * to the @Database version, so with the database at v6 a builder that stopped at MIGRATION_4_5
+     * throws `IllegalStateException: A migration from 4 to 6 was required but not found`. That is
+     * what this file did between the v6 (Trash) change and now — the omission was invisible because
+     * `connectedAndroidTest` could not run at all while AGP's Unified Test Platform was unable to
+     * fetch its own dependencies.
+     *
+     * Running 5 -> 6 as well does not dilute what this test checks. v6 is purely additive
+     * ALTER TABLE ... ADD COLUMN (see NoteDatabase.MIGRATION_5_6); it never reads or writes
+     * `content` or `contentFormat`, which are the columns every assertion below is about.
+     */
     private fun openMigrated(): NoteDatabase =
         Room.databaseBuilder(ctx, NoteDatabase::class.java, dbName)
             .addMigrations(
@@ -106,6 +120,7 @@ class Migration4to5Test {
                 NoteDatabase.MIGRATION_2_3,
                 NoteDatabase.MIGRATION_3_4,
                 NoteDatabase.MIGRATION_4_5,
+                NoteDatabase.MIGRATION_5_6,
             )
             .build()
 
@@ -115,7 +130,9 @@ class Migration4to5Test {
         val db = openMigrated()
         try {
             // Room opens lazily, so touching the helper is what actually runs the migration.
-            assertEquals(5, db.openHelper.readableDatabase.version)
+            // The file lands on the CURRENT schema version, not on 5: Room does not stop at the
+            // migration under test. See openMigrated().
+            assertEquals(6, db.openHelper.readableDatabase.version)
 
             fixtures.forEach { (id, content, expectedFormat) ->
                 db.openHelper.readableDatabase.query(
