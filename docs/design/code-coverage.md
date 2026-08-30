@@ -1,3 +1,26 @@
+> **Status update (2026-08-30, later the same day).** Everything below was written while
+> `org.jacoco:org.jacoco.agent` could not be downloaded, so the document said no report could be
+> produced here. That is no longer true. The blocker was never JaCoCo specifically: **this network
+> gets HTTP 403 from Maven Central for every artifact**, and adding Google's read-through mirror of
+> Central to `settings.gradle.kts` fixed it for JaCoCo and for `kotlinx-coroutines-test` alike.
+>
+> The report now runs. **First measured result: 10.6% line coverage** (435/4115 lines), 7.8%
+> instruction, 17.2% branch, 13.2% method. §6 on how to read that number stands, and the measured
+> per-package split below vindicates it: everything that scores is a pure function, and every
+> ViewModel, repository, DI module and screen is at zero.
+>
+> | Package | Line coverage |
+> |---|---|
+> | `feature_notes/model/single` | 87.5% |
+> | `core_domain/model` | 61.1% |
+> | `feature_notes/model/list` | 54.2% |
+> | `core_data/data/local` | 46.6% |
+> | `core_crypto` (policies only) | 22.2% |
+> | `feature_notes/ui/single` | 13.8% |
+> | `core_data/data` (repositories) | **0%** |
+> | `feature_auth/ui`, `feature_settings/ui`, `feature_notes/ui/list`, `ui/trash`, `ui/folder` | **0%** |
+> | `notes/navigation`, all `di` packages | **0%** |
+
 # Code coverage
 
 > Status: **configuration shipped, never executed.** Written 2026-08-30 against `master` @ `26ac7d7`.
