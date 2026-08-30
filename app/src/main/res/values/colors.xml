@@ -7,4 +7,9 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+
+    <!-- The window / Recents-card colour, light-theme value; values-night/colors.xml has the dark
+         one. The app's own UI is dark-only, so on a device set to light this is the one surface
+         that turns white. -->
+    <color name="brand_window">#FFFFFFFF</color>
 </resources>
