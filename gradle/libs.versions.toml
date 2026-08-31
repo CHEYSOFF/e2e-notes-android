@@ -10,11 +10,15 @@ kotlin = "2.3.21"
 coreKtx = "1.18.0"
 junit = "4.13.2"
 junitVersion = "1.1.5"
-# 1.9.0, not the newest, on purpose: kotlinx-coroutines-android is already cached at 1.9.0 here,
-# and Gradle picks the highest requested version across the graph. Asking for test:1.10.2 dragged
-# coroutines-android up to 1.10.2 as well, making TWO jars unavailable instead of one. At 1.9.0 the
-# whole graph settles on versions already present except a single artifact.
-coroutinesTest = "1.9.0"
+# 1.11.0, and this line no longer has a choice: `ktor-client-core:3.5.2` (:core-sync-net) requires
+# kotlinx-coroutines 1.11.0, and Gradle resolves the highest version requested anywhere in the
+# graph, so every coroutines artifact in this build is 1.11.0 whatever these two lines say.
+#
+# They used to say 1.9.0, to keep the graph on jars already cached on a machine that cannot reach
+# Maven Central. That constraint has not gone away -- see settings.gradle.kts -- but it is no longer
+# satisfiable: the whole 1.11.0 set (core, android, test) was checked against the Google mirror and
+# is served there, which is what makes this bump safe rather than merely unavoidable.
+coroutinesTest = "1.11.0"
 espressoCore = "3.5.1"
 kotlinGradlePlugin = "2.3.21"
 lifecycleRuntimeKtx = "2.10.0"
@@ -58,17 +62,31 @@ datastore = "1.2.1"
 # mangling the whole note library.
 richeditor = "1.1.0"
 ksp = "2.3.9"
-# The app's first and only network library, used by :core-sync-net. 4.12.0 rather than a 5.x
-# release: 4.x is the line whose minSdk (21) is below this project's floor and whose only
-# transitive dependencies are okio and the Kotlin stdlib. Chosen for `CertificatePinner`, which
-# pins on the SHA-256 of the DER SubjectPublicKeyInfo -- exactly the value the pairing QR already
-# carries as `ServerHint.spkiPinSha256`. See docs/design/e2e-sync-phase3-plan.md §10, decision D1.
-okhttp = "4.12.0"
-# 1.9.0 to match `coroutinesTest` above, and for the same reason it is pinned there: Gradle
-# resolves the highest version requested anywhere in the graph, so asking for a newer core here
-# would drag kotlinx-coroutines-android up with it and make an artifact that is cached locally
-# suddenly need fetching.
-coroutines = "1.9.0"
+# What actually opens the socket on Android and on the JVM. It is reached through Ktor's OkHttp
+# *engine* rather than directly, so that the same client code can run on an Apple target through the
+# Darwin engine -- see core-sync-net/src/jvmCommonMain/.../SyncEngine.jvmCommon.kt.
+#
+# Chosen originally for `CertificatePinner`, which pins on the SHA-256 of the DER
+# SubjectPublicKeyInfo -- exactly the value the pairing QR already carries as
+# `ServerHint.spkiPinSha256`. See docs/design/e2e-sync-phase3-plan.md §10, decision D1. That is
+# still why OkHttp and not something else.
+#
+# 5.3.2, and NOT the 4.12.0 this line used to hold: `ktor-client-okhttp:3.5.2` requires okhttp-jvm
+# 5.3.2 and compiles against its API, so Gradle resolves 5.3.2 whatever this line says. It is
+# written out rather than left implicit because a version this project runs on and does not name is
+# a version nobody is watching. The old reasoning for 4.x (minSdk 21, okio and the stdlib as its
+# only transitive dependencies) still holds of 5.x on both counts; what changed is that OkHttp now
+# ships a separate `okhttp-android` artifact, which Gradle picks for the Android variant.
+okhttp = "5.3.2"
+# The multiplatform HTTP client :core-sync-net is written against. It is a client with SWAPPABLE
+# ENGINES, not a second HTTP implementation: `KtorHttpTransport` is one file of common code and the
+# per-platform part is the engine underneath it (OkHttp on Android and the JVM, Darwin on Apple).
+# That distinction is the whole reason for the dependency -- a hand-written second client for Apple
+# would be two implementations whose only job is to agree with each other, which is the failure this
+# repository has already shipped once (two HKDFs).
+ktor = "3.5.2"
+# 1.11.0 to match `coroutinesTest` above, and forced by the same dependency. See its comment.
+coroutines = "1.11.0"
 zxing = "3.5.3"
 camerax = "1.5.0"
 robolectric = "4.16"
@@ -117,6 +135,13 @@ androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycl
 androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
 robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+ktor-client-core = { group = "io.ktor", name = "ktor-client-core", version.ref = "ktor" }
+ktor-client-okhttp = { group = "io.ktor", name = "ktor-client-okhttp", version.ref = "ktor" }
+# Not referenced by any build script yet, because there is no Apple target on this machine to
+# reference it from -- the Kotlin/Native Apple compilers only run on macOS. It is declared here so
+# that adding `iosArm64()` and an `appleMain` source set to :core-sync-net is a source-set addition
+# and a one-line dependency, rather than a hunt for the right coordinate and version.
+ktor-client-darwin = { group = "io.ktor", name = "ktor-client-darwin", version.ref = "ktor" }
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
 atomicfu = { group = "org.jetbrains.kotlinx", name = "atomicfu", version.ref = "atomicfu" }
 
