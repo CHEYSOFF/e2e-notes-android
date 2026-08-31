@@ -57,6 +57,18 @@ datastore = "1.2.1"
 # every change to this line -- it is the only thing standing between a version bump and silently
 # mangling the whole note library.
 richeditor = "1.1.0"
+# The desktop app's richeditor, deliberately a different line from the Android one above.
+#
+# 1.2.0 is the first release that publishes a `richeditor-compose-desktop` variant, so :desktop
+# cannot use 1.1.0 at all -- there is no artifact. The two versions agree on the thing that
+# matters for a shared note library: both escape only "&", "<" and ">" and write "." as ".", so
+# HTML authored on either platform round-trips through the other. (The version that does NOT agree
+# is 1.0.0-rc14, which entity-escaped nearly every punctuation mark; bodies written by it are
+# still on disk and are decoded by DesktopHtmlText, not by the editor.)
+#
+# Android is NOT moved to 1.2.0 here: that would be a content-schema change under the rule stated
+# above, needs the RichEditorHtmlRoundTripTest evidence on a device, and is not this change.
+richeditorDesktop = "1.2.0"
 ksp = "2.3.9"
 # The app's first and only network library, used by :core-sync-net. 4.12.0 rather than a 5.x
 # release: 4.x is the line whose minSdk (21) is below this project's floor and whose only
@@ -110,6 +122,21 @@ androidx-room-compiler = { group = "androidx.room", name = "room-compiler", vers
 androidx-lifecycle-process = { group = "androidx.lifecycle", name = "lifecycle-process", version.ref = "lifecycleProcess" }
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
 richeditor-compose = { group = "com.mohamedrejeb.richeditor", name = "richeditor-compose", version.ref = "richeditor" }
+# The desktop variant is addressed by its own coordinate rather than through the multiplatform
+# `richeditor-compose` root: :desktop is a plain Kotlin/JVM module, so Gradle has no
+# `org.jetbrains.kotlin.platform.type` attribute to disambiguate the root module's variants with.
+richeditor-compose-desktop = { group = "com.mohamedrejeb.richeditor", name = "richeditor-compose-desktop", version.ref = "richeditorDesktop" }
+# richeditor's own HTML entity codec, declared explicitly because richeditor exposes it at RUNTIME
+# only (its `desktopApiElements` variant lists nothing but kotlin-stdlib). :desktop needs it at
+# compile time to decode note bodies written by the 1.0.0-rc14 era, which entity-escaped nearly
+# every punctuation mark and every Cyrillic letter. Using the same library that encoded them is
+# what makes the decode a guaranteed inverse rather than a hand-maintained entity table.
+# Icons.Default for the desktop app. The CORE set, not material-icons-extended: this UI needs
+# seven glyphs and the extended artifact is two orders of magnitude larger. Pinned at 1.7.3
+# because that is the last version the Compose Multiplatform icon artifacts were published at --
+# they contain nothing but ImageVector definitions, so they do not track the runtime version.
+compose-material-icons-core = { group = "org.jetbrains.compose.material", name = "material-icons-core-desktop", version = "1.7.3" }
+ksoup-entities = { group = "com.mohamedrejeb.ksoup", name = "ksoup-entities-jvm", version = "0.6.0" }
 zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
 androidx-camera-core = { group = "androidx.camera", name = "camera-core", version.ref = "camerax" }
 androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camerax" }
