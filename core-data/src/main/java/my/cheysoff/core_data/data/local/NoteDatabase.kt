@@ -15,16 +15,17 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * stale the moment the next migration lands — which is how Migration4to5Test came to be broken
  * without anyone noticing.
  */
-internal const val NOTE_DATABASE_VERSION = 6
+internal const val NOTE_DATABASE_VERSION = 7
 
 @Database(
-    entities = [NoteEntity::class, FolderEntity::class],
+    entities = [NoteEntity::class, FolderEntity::class, SyncStateEntity::class],
     version = NOTE_DATABASE_VERSION,
     exportSchema = true,
 )
 abstract class NoteDatabase : RoomDatabase() {
     abstract val noteDao: NoteDao
     abstract val folderDao: FolderDao
+    abstract val syncStateDao: SyncStateDao
 
     companion object {
         /**
@@ -127,6 +128,69 @@ abstract class NoteDatabase : RoomDatabase() {
             }
         }
 
+        // v6 -> v7: the sync bookkeeping every row needs before this device can ever talk to
+        // another one — a hybrid logical clock, per-field clocks, and the two flags that say
+        // whether the server has seen this version of the row. Plus `sync_state`, which records
+        // how far through the account's history this device has read.
+        //
+        // Purely additive ALTER TABLE ... ADD COLUMN plus one CREATE TABLE. Nothing is dropped,
+        // nothing is rewritten, and — unlike MIGRATION_4_5 — not one byte of existing content is
+        // read, so there is no classification pass to get wrong and no CursorWindow to overflow.
+        // The whole risk of this migration is in six DEFAULT clauses, and one of them in
+        // particular:
+        //
+        // ⚠️ `dirty` DEFAULTs to 1, NOT 0. ⚠️
+        //
+        //   Every row already on disk when this runs has, by definition, never been pushed to a
+        //   server — there was no sync engine when it was written. `DEFAULT 1` says exactly that:
+        //   "this row is a local change the server has not seen". `DEFAULT 0` would say the
+        //   opposite, that the user's entire existing library is already safely uploaded, and the
+        //   first pull would then reconcile a full local library against an account the server has
+        //   never heard of. A record the server does not have, which the client believes it has
+        //   already pushed, is a record that was deleted elsewhere. The library would be tombstoned
+        //   note by note, on every paired device, with no undo. That is one character in this file.
+        //
+        //   Three places have to agree on it and all three are checked: this DDL, the Kotlin
+        //   default on NoteEntity/FolderEntity, and @ColumnInfo(defaultValue = "1") — which is what
+        //   makes Room compare its expectation against the real table on every open, so a wrong
+        //   default here fails at startup rather than at the first sync. Migration6to7Test asserts
+        //   the migrated value directly as well, because a test that would still pass with a 0 in
+        //   this line is not a test of this line.
+        //
+        // The rest:
+        //  - hlcMs/hlcCounter DEFAULT 0 and hlcNode DEFAULT '': the zero clock, which compares
+        //    BELOW every real one. A migrated row therefore loses to any genuine remote edit it
+        //    knows nothing about, which is the right way round — the row is still dirty, so its
+        //    content is pushed and merged rather than dropped, and the first local write stamps it
+        //    with a real clock. Stamping every row with the migration's own clock instead would
+        //    invent a history that never happened and would make thousands of rows tie.
+        //  - fieldHlc DEFAULT '': "every field of this row is at the row clock", which is exactly
+        //    true of a row whose fields were all written together before any of this existed.
+        //  - lastSyncedSeq DEFAULT 0: "the server has no version of this record", which is what
+        //    the server itself reads a baseSeq of 0 as.
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                for (table in listOf("notes", "folders")) {
+                    db.execSQL("ALTER TABLE $table ADD COLUMN hlcMs INTEGER NOT NULL DEFAULT 0")
+                    db.execSQL("ALTER TABLE $table ADD COLUMN hlcCounter INTEGER NOT NULL DEFAULT 0")
+                    db.execSQL("ALTER TABLE $table ADD COLUMN hlcNode TEXT NOT NULL DEFAULT ''")
+                    db.execSQL("ALTER TABLE $table ADD COLUMN fieldHlc TEXT NOT NULL DEFAULT ''")
+                    db.execSQL("ALTER TABLE $table ADD COLUMN dirty INTEGER NOT NULL DEFAULT 1")
+                    db.execSQL("ALTER TABLE $table ADD COLUMN lastSyncedSeq INTEGER NOT NULL DEFAULT 0")
+                }
+
+                // Copied from Room's own generated DDL for SyncStateEntity (see
+                // core-data/schemas/…/7.json). It has to match column for column, including the
+                // backticks and the absence of DEFAULT clauses, or Room's schema validation
+                // rejects the migrated database on the next open.
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `sync_state` " +
+                        "(`accountId` TEXT NOT NULL, `cursor` INTEGER NOT NULL, " +
+                        "`lastPullAt` INTEGER NOT NULL, PRIMARY KEY(`accountId`))"
+                )
+            }
+        }
+
         /**
          * Every migration above, in order. `DataModule` spreads this into Room's builder instead
          * of listing the fields a second time, so the chain the app ships with cannot be missing a
@@ -148,6 +212,7 @@ abstract class NoteDatabase : RoomDatabase() {
             MIGRATION_3_4,
             MIGRATION_4_5,
             MIGRATION_5_6,
+            MIGRATION_6_7,
         )
     }
 }

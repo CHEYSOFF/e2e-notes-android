@@ -14,6 +14,8 @@ import my.cheysoff.core_data.data.RoomNotesRepository
 import my.cheysoff.core_data.data.local.FolderDao
 import my.cheysoff.core_data.data.local.NoteDao
 import my.cheysoff.core_data.data.local.NoteDatabase
+import my.cheysoff.core_data.data.local.SyncStateDao
+import my.cheysoff.core_data.data.sync.SyncClock
 import my.cheysoff.core_domain.repository.NotesRepository
 import my.cheysoff.core_domain.repository.SettingsRepository
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
@@ -132,5 +134,30 @@ abstract class DataModule {
         fun provideFolderDao(database: NoteDatabase): FolderDao {
             return database.folderDao
         }
+
+        @Provides
+        @Singleton
+        fun provideSyncStateDao(database: NoteDatabase): SyncStateDao {
+            return database.syncStateDao
+        }
+
+        /**
+         * The process-wide hybrid logical clock.
+         *
+         * `@Singleton` is not a preference here, it is the correctness requirement: two
+         * [SyncClock]s would keep two independent counters and could mint the same clock twice for
+         * two different writes, which is precisely the situation the counter exists to prevent.
+         *
+         * It depends on [SecureUnlockManager] only for the node pseudonym, and takes it as a
+         * function rather than a value because the node arrives at unlock and changes when the
+         * device joins an account. Note that this deliberately does NOT depend on [NoteDatabase]:
+         * the clock has to be constructible while the app is locked, and asking for the database
+         * here would throw. The database-derived seed is applied by `RoomNotesRepository` before
+         * its first write instead.
+         */
+        @Provides
+        @Singleton
+        fun provideSyncClock(secureUnlockManager: SecureUnlockManager): SyncClock =
+            SyncClock(node = { secureUnlockManager.hlcNode })
     }
 }
