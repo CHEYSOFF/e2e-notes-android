@@ -47,3 +47,6 @@ include(":core-domain")
 include(":core-data")
 include(":feature-settings")
 include(":feature-pairing")
+// The network transport for E2E sync (Phase 3). It is the only module that declares INTERNET; see
+// core-sync-net/src/main/AndroidManifest.xml for what that permission is for and when it is used.
+include(":core-sync-net")
