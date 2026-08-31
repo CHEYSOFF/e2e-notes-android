@@ -16,18 +16,17 @@ import my.cheysoff.core_sync_net.SyncException
  * **Every JSON field name this client sends or reads, and every conversion between JSON and the
  * types in [my.cheysoff.core_sync_net.SyncApi]. One file, on purpose.**
  *
- * The wire format is not settled. `hlc`, `recType` and the plaintext device `label` are all
- * candidates for removal -- the server stores them in the clear and, if it never reads them, they
- * do not belong outside the sealed envelope. `hlc` in particular tells a server operator which of
- * the user's devices made every individual edit (`server/README.md`, "Can see"). Nothing has ever
- * synced, so changing the format now costs a rebase; after Phase 3 ships it costs a migration
- * across every device.
- *
- * So the names live here as constants and every read and write of one goes through a function in
- * this file. Removing a field is then a small, complete diff -- delete a constant, delete the line
- * that writes it, delete the line that reads it -- rather than a hunt through call sites. Nothing
+ * The names live here as constants and every read and write of one goes through a function in this
+ * file. Removing a field is then a small, complete diff -- delete a constant, delete the line that
+ * writes it, delete the line that reads it -- rather than a hunt through call sites. Nothing
  * outside this file mentions a JSON field name; `WireFieldNamesAreInOnePlaceTest` is what keeps
  * that true.
+ *
+ * That arrangement has since been spent once, and it paid. `recType`, `hlc`, `receivedAt` and the
+ * plaintext device `label` all left the wire after the server was shown never to read them: the
+ * first three moved inside the sealed envelope and the fourth became `sealedLabel`. Every JSON edit
+ * that change needed was in this file, and the compiler found the rest -- the two types that
+ * lost fields, and every call site that built or read one. Nothing had to be grepped for.
  *
  * The names themselves are the server's, from `server/.../Wire.kt`. They are duplicated here rather
  * than shared because the server build is standalone and deliberately not on the Android build's
@@ -66,7 +65,15 @@ internal object SyncWire {
     private const val DEVICE_PUBLIC_KEY = "devicePublicKey"
     private const val NEW_PUBLIC_KEY = "newPublicKey"
     private const val VOUCHER_DEVICE_ID = "voucherDeviceId"
-    private const val DEVICE_LABEL = "deviceLabel"
+
+    /**
+     * The device's name, sealed by `core-crypto/.../sync/DeviceLabelCipher` and base64url encoded.
+     *
+     * Sent on enrolment and read back from `GET /v1/devices`, so one constant serves both. It was
+     * `deviceLabel` on the way out and `label` on the way back, both plaintext; the server now
+     * rejects a value that is not base64url with `400 invalid_label`.
+     */
+    private const val SEALED_LABEL = "sealedLabel"
     private const val TS = "ts"
     private const val SIGNATURE = "signature"
     private const val CREATED_AT = "createdAt"
@@ -78,18 +85,15 @@ internal object SyncWire {
 
     // GET /v1/devices
     private const val DEVICES = "devices"
-    private const val LABEL = "label"
     private const val PUBLIC_KEY = "publicKey"
     private const val REVOKED_AT = "revokedAt"
     private const val SELF = "self"
 
-    // Records, in every direction.
+    // A record is exactly these three fields, in every direction. `recType`, `hlc` and `receivedAt`
+    // used to be here; the first two are inside the envelope now and the third does not exist.
     private const val BLINDED_ID = "blindedId"
-    private const val REC_TYPE = "recType"
-    private const val HLC = "hlc"
     private const val SEQ = "seq"
     private const val ENVELOPE = "envelope"
-    private const val RECEIVED_AT = "receivedAt"
 
     // GET /v1/changes
     private const val RECORDS = "records"
@@ -125,17 +129,21 @@ internal object SyncWire {
      * covers the *text*: the server rebuilds `SignedMessage.claim(accountId, devicePublicKey, ts)`
      * from the strings in this body, so the string signed and the string sent must be the same
      * object, not two encodings of one key.
+     *
+     * @param sealedLabelB64 base64url of a `DeviceLabelCipher` seal, or `""` for no label. The
+     *   server decodes it and answers `400 invalid_label` if it is not base64url; it is never
+     *   plaintext.
      */
     fun claimRequest(
         accountId: String,
         publicKeyB64: String,
-        deviceLabel: String,
+        sealedLabelB64: String,
         ts: Long,
         signatureB64: String,
     ): ByteArray = JsonWriter().obj {
         field(ACCOUNT_ID, accountId)
         field(DEVICE_PUBLIC_KEY, publicKeyB64)
-        field(DEVICE_LABEL, deviceLabel)
+        field(SEALED_LABEL, sealedLabelB64)
         field(TS, ts)
         field(SIGNATURE, signatureB64)
     }.toBytes()
@@ -144,14 +152,14 @@ internal object SyncWire {
     fun authorizeRequest(
         accountId: String,
         newPublicKeyB64: String,
-        deviceLabel: String,
+        sealedLabelB64: String,
         ts: Long,
         voucherDeviceId: String,
         signatureB64: String,
     ): ByteArray = JsonWriter().obj {
         field(ACCOUNT_ID, accountId)
         field(NEW_PUBLIC_KEY, newPublicKeyB64)
-        field(DEVICE_LABEL, deviceLabel)
+        field(SEALED_LABEL, sealedLabelB64)
         field(TS, ts)
         field(VOUCHER_DEVICE_ID, voucherDeviceId)
         field(SIGNATURE, signatureB64)
@@ -181,12 +189,14 @@ internal object SyncWire {
      *
      * [PushItem.envelope] is base64url-encoded here and nowhere else. This is the only thing this
      * module ever does to an envelope.
+     *
+     * The server decodes this body **strictly**, so an item may carry these three fields and no
+     * others: one extra field -- a reinstated `recType`, say -- is `400 malformed_request` for the
+     * whole batch, not for the item.
      */
     fun upsertRequest(items: List<PushItem>): ByteArray = JsonWriter().obj {
         arrayField(ITEMS, items) { item ->
             field(BLINDED_ID, item.blindedId)
-            field(REC_TYPE, item.recType)
-            field(HLC, item.hlc)
             field(BASE_SEQ, item.baseSeq)
             field(ENVELOPE, Base64Codec.encodeUrl(item.envelope))
         }
@@ -248,13 +258,31 @@ internal object SyncWire {
         SessionToken(token = it.string(TOKEN), expiresAt = it.long(EXPIRES_AT))
     }
 
-    fun decodeDevices(body: ByteArray): List<RemoteDevice> =
+    /**
+     * `GET /v1/devices`.
+     *
+     * @param openLabel opens a sealed label, given the *base64url text of the public key exactly as
+     *   the server sent it*. The seal is bound to that text, so it is passed through verbatim
+     *   rather than re-encoded from the decoded bytes -- re-encoding would put a third
+     *   implementation of base64url between the sealer and the opener, and this repository has
+     *   already shipped one pair of primitives that disagreed. Returns null for a label this device
+     *   cannot open, which is an unnamed device and not an error -- see `DeviceLabelCipher.open`.
+     */
+    fun decodeDevices(
+        body: ByteArray,
+        openLabel: (publicKeyB64: String, sealed: ByteArray) -> String?,
+    ): List<RemoteDevice> =
         readObject(body, "devices").array(DEVICES).map { element ->
             val device = element.asObject(DEVICES)
+            val publicKeyB64 = device.string(PUBLIC_KEY)
+            val publicKey = Base64Codec.decodeUrl(publicKeyB64) ?: malformed(PUBLIC_KEY)
+            val sealedLabel = device.base64(SEALED_LABEL)
             RemoteDevice(
                 deviceId = device.string(DEVICE_ID),
-                label = device.string(LABEL),
-                publicKey = device.base64(PUBLIC_KEY),
+                // An empty `sealedLabel` is how a device with no name enrols, and there is nothing
+                // to open. Asking the sealer would answer null anyway; not asking says why.
+                label = if (sealedLabel.isEmpty()) null else openLabel(publicKeyB64, sealedLabel),
+                publicKey = publicKey,
                 createdAt = device.long(CREATED_AT),
                 revokedAt = device.longOrNull(REVOKED_AT),
                 isSelf = device.bool(SELF),
@@ -272,12 +300,12 @@ internal object SyncWire {
      * ascending in `seq`.
      *
      * That check is cheap and it is the one that matters. The cursor is the server's monotonic
-     * sequence number and never a timestamp -- `seq` is allocated inside the same transaction as
-     * the insert it labels, so every reader sees the same order, which is a property no timestamp
-     * has. A client that advanced its cursor with `receivedAt` instead would skip every record
-     * whose timestamp tied with one already seen, silently and permanently. Reading the number from
-     * the wrong field, on either side of the wire, breaks one of these three relations, so this
-     * refuses the page rather than storing a cursor that will lose data.
+     * sequence number -- `seq` is allocated inside the same transaction as the insert it labels, so
+     * every reader sees the same order, which is a property no timestamp has. A record now carries
+     * no timestamp at all, so building a cursor out of one is not expressible any more; what is
+     * still expressible is reading the number from the wrong field, or a server that pages
+     * incorrectly, and either breaks one of these three relations. This refuses such a page rather
+     * than storing a cursor that will lose data.
      *
      * @param requestedSince the `since` that was sent, needed to check the empty-page case.
      */
@@ -342,11 +370,8 @@ internal object SyncWire {
     /** One record, in whichever body it appears -- a change page, a conflict, or a history entry. */
     private fun JsonValue.Obj.toRecord(): RemoteRecord = RemoteRecord(
         blindedId = string(BLINDED_ID),
-        recType = string(REC_TYPE),
-        hlc = string(HLC),
         seq = long(SEQ),
         envelope = base64(ENVELOPE),
-        receivedAt = long(RECEIVED_AT),
     )
 
     // -----------------------------------------------------------------------------------------
@@ -397,7 +422,7 @@ internal object SyncWire {
             else -> malformed(field)
         }
 
-    /** A base64url field decoded to bytes: public keys and sealed envelopes. */
+    /** A base64url field decoded to bytes: public keys, sealed envelopes and sealed labels. */
     private fun JsonValue.Obj.base64(field: String): ByteArray =
         Base64Codec.decodeUrl(string(field)) ?: malformed(field)
 

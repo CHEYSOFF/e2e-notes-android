@@ -81,6 +81,29 @@ Stated plainly, because a document that oversells a gate is worse than no docume
   reminder, and a checkbox is a reminder, not a gate.
 - **It does not measure coverage.** That is `./gradlew jacocoMergedReport`; see
   [code-coverage.md](code-coverage.md).
+- **It does not run the sync-server contract test.** `verify` runs `test`, and
+  `SyncServerContractTest` skips itself unless `-PsyncContract` is passed. See §3.1.
+
+### 3.1 The one test `verify` deliberately skips
+
+`:core-sync-net`'s `SyncServerContractTest` starts the **real** sync server from `server/` on a
+random port and drives claim → session → push → pull → conflict → history → vouch → revoke through
+the real HTTP client:
+
+```
+./gradlew :core-sync-net:testDebugUnitTest -PsyncContract
+```
+
+It is the only test in the repository where a client/server disagreement can fail — every other
+sync test uses a fake transport, and a fake transport can only ever agree with whatever the client
+believes. It has already earned that twice: once on a session request that carried no signature,
+and once on a client still sending `recType` on a wire the server had stopped accepting. Both suites
+were green.
+
+It is opt-in because it needs a JDK 17 toolchain, a second Gradle build (`server/gradlew
+installDist`, built on demand and then reused from `server/build/install/manana-sync-server`) and a
+free TCP port, none of which a plain `./gradlew test` should require. Pre-build the image with
+`cd server && ./gradlew installDist` if you would rather not pay for it inside the test.
 
 ## 4. What changed, and what is now obsolete
 

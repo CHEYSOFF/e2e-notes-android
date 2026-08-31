@@ -9,16 +9,14 @@ import java.io.File
  *
  * ## Why this is worth a test
  *
- * The wire format is not settled. `hlc`, `recType` and the plaintext device `label` are all
- * candidates for removal, because the server stores them in the clear and, if it never reads them,
- * they do not belong outside the sealed envelope -- `hlc` in particular tells the operator which of
- * the user's devices made every individual edit. Nothing has ever synced, so the change is a rebase
- * today and a migration across every device after Phase 3 ships.
+ * It has already been collected on once. `recType`, `hlc`, `receivedAt` and the plaintext device
+ * `label` all left the wire when the server was shown never to read them, and on this side that was
+ * four deleted constants and two renames in one file: whoever made the change deleted a constant
+ * and followed the compiler, because there was no call site anywhere else spelling a name out.
  *
- * Whoever makes that change should be able to delete a constant and follow the compiler. That is
- * only true while no other file spells a field name out, and "no other file spells it out" is the
- * kind of property that is true when it is written and false three commits later. So it is
- * asserted rather than hoped for.
+ * That is only true while no other file spells a field name out, and "no other file spells it out"
+ * is the kind of property that is true when it is written and false three commits later. The wire
+ * is not finished changing, so it is asserted rather than hoped for.
  *
  * ## How it reads the source
  *
@@ -40,10 +38,10 @@ class WireFieldNamesAreInOnePlaceTest {
         "error", "message",
         "status", "version",
         "accountId", "deviceId", "devicePublicKey", "newPublicKey", "voucherDeviceId",
-        "deviceLabel", "ts", "signature", "createdAt",
+        "sealedLabel", "ts", "signature", "createdAt",
         "challenge", "expiresAt", "token",
-        "devices", "label", "publicKey", "revokedAt", "self",
-        "blindedId", "recType", "hlc", "seq", "envelope", "receivedAt",
+        "devices", "publicKey", "revokedAt", "self",
+        "blindedId", "seq", "envelope",
         "records", "nextCursor", "hasMore",
         "items", "baseSeq", "results", "accountSeq", "current",
         "versions",
@@ -66,6 +64,38 @@ class WireFieldNamesAreInOnePlaceTest {
 
         assertTrue(
             "wire field names must appear only in SyncWire.kt, so removing one is a small diff:\n" +
+                offenders.joinToString("\n"),
+            offenders.isEmpty(),
+        )
+    }
+
+    /**
+     * The names that were taken off the wire, which no main-source file may spell any more --
+     * `SyncWire.kt` included.
+     *
+     * The server decodes strictly, so a reinstated `recType` on an upsert item is
+     * `400 malformed_request` for the whole batch, and a client reading `receivedAt` off a record
+     * gets a protocol error on every page. `SyncServerContractTest` catches both against the real
+     * server; this catches them without one, and names the file.
+     */
+    @Test
+    fun `no main-source file spells a field that was removed from the wire`() {
+        val removed = listOf("recType", "hlc", "receivedAt", "deviceLabel", "label")
+        val sourceRoot = File(repositoryRoot(), "core-sync-net/src/main/java")
+        assertTrue("the module's source root moved: $sourceRoot", sourceRoot.isDirectory)
+
+        val offenders = mutableListOf<String>()
+        sourceRoot.walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .forEach { file ->
+                val literals = codeStringLiterals(file.readText())
+                for (name in removed) {
+                    if (name in literals) offenders += "${file.name} still spells '$name'"
+                }
+            }
+
+        assertTrue(
+            "these names left the wire and must not be sent or read any more:\n" +
                 offenders.joinToString("\n"),
             offenders.isEmpty(),
         )

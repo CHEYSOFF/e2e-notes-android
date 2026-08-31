@@ -99,7 +99,7 @@ class DeviceTest {
             AuthorizeRequest(
                 first.accountId,
                 joining.publicKeyB64,
-                "joining",
+                joining.sealedLabel,
                 ts,
                 first.deviceId,
                 // Correct message, wrong key.
@@ -127,7 +127,7 @@ class DeviceTest {
             AuthorizeRequest(
                 first.accountId,
                 attacker.publicKeyB64,
-                "attacker",
+                attacker.sealedLabel,
                 ts,
                 first.deviceId,
                 first.device.sign(SignedMessage.authorize(first.accountId, intended.publicKeyB64, ts)),
@@ -150,7 +150,7 @@ class DeviceTest {
             AuthorizeRequest(
                 first.accountId,
                 joining.publicKeyB64,
-                "joining",
+                joining.sealedLabel,
                 ts,
                 first.deviceId,
                 first.device.sign(SignedMessage.authorize(first.accountId, joining.publicKeyB64, ts)),
@@ -179,7 +179,7 @@ class DeviceTest {
             AuthorizeRequest(
                 first.accountId,
                 joining.publicKeyB64,
-                "joining",
+                joining.sealedLabel,
                 ts,
                 first.deviceId,
                 first.device.sign(SignedMessage.authorize(first.accountId, joining.publicKeyB64, ts)),

@@ -5,8 +5,16 @@ import kotlinx.serialization.Serializable
 /**
  * Every JSON body the server accepts or produces.
  *
- * All binary fields -- public keys, signatures, envelopes -- travel as unpadded base64url strings,
- * the same encoding the client's `core-crypto/.../sync/Base64Url.kt` emits for blinded record IDs.
+ * All binary fields -- public keys, signatures, envelopes, sealed device labels -- travel as
+ * unpadded base64url strings, the same encoding the client's `core-crypto/.../sync/Base64Url.kt`
+ * emits for blinded record IDs.
+ *
+ * **Nothing here describes a record except the handle it is filed under and the sequence number
+ * this server gave it.** A record's type and its hybrid logical clock were once fields of
+ * [UpsertRequestItem] and [RecordDto]; the server never read either -- it length-checked, stored
+ * and echoed them -- so they moved inside the sealed envelope, where `recType` distinguishing a
+ * note from a folder and an HLC node naming the device that made an edit are encrypted like
+ * everything else. A field the server does not itself act on does not belong in this file.
  *
  * Decoding is **strict**: an unknown field is a decode failure and therefore a `400`. That is the
  * opposite of the client's usual `ignoreUnknownKeys = true` posture and it is deliberate. On the
@@ -28,8 +36,12 @@ class ClaimRequest(
     val accountId: String,
     /** SEC1 uncompressed P-256 point, base64url. */
     val devicePublicKey: String,
-    /** Client-chosen, operator-visible. See the privacy section of the README. */
-    val deviceLabel: String = "",
+    /**
+     * The device's name, sealed by `core-crypto/.../sync/DeviceLabelCipher` and base64url encoded.
+     * Opaque here: the server stores it, returns it in [DeviceDto], and can do nothing else with
+     * it. Empty for a client that sends no name.
+     */
+    val sealedLabel: String = "",
     /** Client wall-clock, epoch milliseconds. Must be within the server's freshness window. */
     val ts: Long,
     /** DER `SHA256withECDSA` over `SignedMessage.claim(...)`, base64url. */
@@ -48,7 +60,8 @@ class AuthorizeRequest(
     val accountId: String,
     /** The joining device's public key, SEC1 uncompressed, base64url. */
     val newPublicKey: String,
-    val deviceLabel: String = "",
+    /** The joining device's sealed name, base64url. See [ClaimRequest.sealedLabel]. */
+    val sealedLabel: String = "",
     val ts: Long,
     /** Which enrolled device is vouching. Its stored public key verifies [signature]. */
     val voucherDeviceId: String,
@@ -88,7 +101,8 @@ class SessionResponse(val token: String, val expiresAt: Long)
 @Serializable
 class DeviceDto(
     val deviceId: String,
-    val label: String,
+    /** Whatever sealed blob was sent at enrolment, base64url, byte for byte. */
+    val sealedLabel: String,
     /** SEC1 uncompressed P-256 point, base64url -- so a client can show a fingerprint. */
     val publicKey: String,
     val createdAt: Long,
@@ -110,14 +124,10 @@ class RevokeResponse(val deviceId: String, val revoked: Boolean = true)
 @Serializable
 class RecordDto(
     val blindedId: String,
-    val recType: String,
-    /** The record's hybrid logical clock, opaque here and bound into the client's AEAD AAD. */
-    val hlc: String,
     /** This version's per-account monotonic sequence number. The cursor is made of these. */
     val seq: Long,
     /** The sealed envelope, base64url. The server never opens, parses or validates it. */
     val envelope: String,
-    val receivedAt: Long,
 )
 
 @Serializable
@@ -132,8 +142,6 @@ class ChangesResponse(
 @Serializable
 class UpsertRequestItem(
     val blindedId: String,
-    val recType: String,
-    val hlc: String,
     /** The seq this edit was based on; 0 asserts the record does not exist yet. */
     val baseSeq: Long,
     val envelope: String,

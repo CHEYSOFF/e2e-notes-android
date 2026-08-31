@@ -1,5 +1,7 @@
 package my.cheysoff.core_sync_net
 
+import my.cheysoff.core_crypto.sync.DeviceLabelCipher
+import my.cheysoff.core_sync_net.auth.DeviceLabelSealer
 import my.cheysoff.core_sync_net.auth.DeviceSigner
 import my.cheysoff.core_sync_net.http.Delayer
 import my.cheysoff.core_sync_net.http.HttpRequest
@@ -135,4 +137,26 @@ class TestDeviceSigner(private val keyPair: KeyPair = generateP256()) : DeviceSi
             System.arraycopy(bytes, start, out, offset + (32 - length), length)
         }
     }
+}
+
+/**
+ * A [DeviceLabelSealer] over the real [DeviceLabelCipher], under a fixed test ARK.
+ *
+ * Deliberately the production cipher rather than a stub that returns the label back. What has to be
+ * proved is that what crosses the wire is base64url of a 157-byte AES-GCM seal, that the server
+ * accepts it as `sealedLabel` and stores it byte for byte, and that it opens again against the
+ * public-key string the server re-encoded — none of which a stub would exercise, and all of which
+ * `SyncServerContractTest` checks against the real server.
+ *
+ * The production implementation is `:app`'s `ArkDeviceLabelSealer`, which is this plus fetching the
+ * ARK from `SecureUnlockManager` and zeroing it afterwards. That fetch is the only part that needs
+ * Android, and it is the only part not covered here.
+ */
+class ArkLabelSealer(private val ark: ByteArray) : DeviceLabelSealer {
+
+    override fun seal(devicePublicKeyB64: String, label: String): ByteArray =
+        DeviceLabelCipher.seal(ark, devicePublicKeyB64, label)
+
+    override fun open(devicePublicKeyB64: String, sealed: ByteArray): String? =
+        DeviceLabelCipher.open(ark, devicePublicKeyB64, sealed)
 }
