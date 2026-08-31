@@ -1,5 +1,12 @@
 # Test coverage review
 
+> **Update, 2026-08-31 — §1 is out of date.** `settings.gradle.kts` has since gained Google's
+> read-through mirror of Maven Central, and every "403 / not resolvable" claim below is now false.
+> All nine modules assemble `androidTest`, `connectedAndroidTest` works, and Espresso and
+> `kotlinx-coroutines-test` both resolve. See [running-the-tests.md](running-the-tests.md) §4 for
+> what that changed and §5 for what replaced the hand-rolled `adb` procedure this document proposed.
+> Everything outside §1 — the coverage gaps, the risk ranking, §6 — still stands.
+
 > Status: **research + one shipped test suite.** Written 2026-08-30 against `master` @ `26ac7d7`.
 > Every resolution claim below was produced by running the build on this machine on that date, not
 > by reading a version catalog. Where a claim contradicts a comment already in the repo, the

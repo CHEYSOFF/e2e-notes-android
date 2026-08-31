@@ -308,3 +308,134 @@ tasks.register<JacocoReport>("jacocoMergedReport") {
 // Nobody has seen this project's number yet. A threshold picked before the first measurement is
 // either set low enough to be meaningless or high enough to block every build, and both outcomes
 // teach the team to bypass it. Add one once there is a real baseline to hold the line at.
+
+// ---------------------------------------------------------------------------------------------
+// `verify` — the pre-merge gate
+// ---------------------------------------------------------------------------------------------
+// See docs/design/running-the-tests.md for the reasoning and for what this deliberately does not
+// do. In short: `./gradlew test` runs the JVM tests and nothing else, which is how
+// `Migration4to5Test` stayed red for the entire life of schema v6 — it still compiled, so the only
+// signal anybody looked at stayed green. `verify` adds the two things `test` leaves out:
+//
+//  1. `assembleDebugAndroidTest` everywhere, so an androidTest source set cannot quietly stop
+//     compiling. This is a weak gate and is not sold as more than one: it would NOT have caught
+//     `Migration4to5Test`, which compiled perfectly well and failed at run time.
+//  2. `connectedDebugAndroidTest` in every module that has instrumented tests. That is the gate
+//     that would have caught it, and it needs a device.
+//
+// With no device attached the build fails at configuration time rather than passing quietly: a
+// verification task that reports success without verifying is precisely the failure mode this
+// exists to remove. `-PallowNoDevice` runs the JVM and compile halves alone and prints, by name,
+// what it skipped.
+// ---------------------------------------------------------------------------------------------
+
+// Same guard as `coverageRequestedByTaskName` above, for the same reason: `adb devices` should not
+// be run by builds that are not asking for it. Matches `verify`, `:verify` and `-p` forms.
+val verifyRequested = gradle.startParameter.taskNames.any {
+    it.substringAfterLast(':') == "verify"
+}
+val allowNoDevice = providers.gradleProperty("allowNoDevice").isPresent
+
+// A module counts as instrumented if src/androidTest holds at least one source file. Detected
+// rather than listed, so a module that gains its first instrumented test joins the gate without
+// anyone remembering to edit this file — forgetting to update a hand-kept list is the same class
+// of omission the whole task exists to catch.
+val instrumentedModules = subprojects.filter { sub ->
+    sub.file("src/androidTest").walkTopDown().any {
+        it.isFile && (it.extension == "kt" || it.extension == "java")
+    }
+}
+
+/** `adb`, from ANDROID_HOME / ANDROID_SDK_ROOT / local.properties, or null if none point at one. */
+fun findAdb(): File? {
+    val sdkDir = System.getenv("ANDROID_HOME")
+        ?: System.getenv("ANDROID_SDK_ROOT")
+        ?: runCatching {
+            java.util.Properties().apply {
+                rootProject.file("local.properties").inputStream().use { load(it) }
+            }.getProperty("sdk.dir")
+        }.getOrNull()
+        ?: return null
+    val executable = if (System.getProperty("os.name").startsWith("Windows")) "adb.exe" else "adb"
+    return File(sdkDir, "platform-tools/$executable").takeIf { it.isFile }
+}
+
+/**
+ * Serials `adb` reports as `device`. `offline`, `unauthorized` and `no permissions` are excluded
+ * because none of them can run a test, and a device stuck in one of those states is exactly when
+ * a "device attached, all good" message would be most misleading.
+ *
+ * Narrowed to ANDROID_SERIAL when that is set, because AGP honours it too — this project is often
+ * developed with both an emulator and a physical phone attached, and a list that disagreed with
+ * what actually gets tested would make the messages below untrue.
+ */
+fun attachedDevices(): List<String> {
+    val adb = findAdb() ?: return emptyList()
+    val output = runCatching {
+        providers.exec { commandLine(adb.absolutePath, "devices") }.standardOutput.asText.get()
+    }.getOrElse { return emptyList() }
+    // Line 1 is adb's "List of devices attached" header.
+    val serials = output.lineSequence().drop(1).mapNotNull { line ->
+        val columns = line.trim().split(Regex("\\s+"))
+        if (columns.size >= 2 && columns[1] == "device") columns[0] else null
+    }.toList()
+    val pinned = System.getenv("ANDROID_SERIAL")
+    return if (pinned.isNullOrBlank()) serials else serials.filter { it == pinned }
+}
+
+val verifyDevices = if (verifyRequested) attachedDevices() else emptyList()
+
+/** e.g. `  :core-data      Migration4to5Test.kt, NoteDaoTest.kt`, for the messages below. */
+fun instrumentedSourceListing(): String = instrumentedModules.joinToString("\n") { sub ->
+    val files = sub.file("src/androidTest").walkTopDown()
+        .filter { it.isFile && (it.extension == "kt" || it.extension == "java") }
+        .map { it.name }
+        .sorted()
+        .joinToString(", ")
+    "  ${sub.path.padEnd(20)}$files"
+}
+
+if (verifyRequested && verifyDevices.isEmpty() && !allowNoDevice) {
+    error(
+        "`verify` found no device to run the instrumented tests on.\n\n" +
+            "These source sets would be compiled but never executed:\n" +
+            instrumentedSourceListing() + "\n\n" +
+            "They cover the Room migrations and the DAO — the writes this app cannot undo — so a\n" +
+            "green `verify` without them would mean less than it looks like it means.\n\n" +
+            "Start an emulator (or attach a device) and re-run, or run the JVM and compile halves\n" +
+            "on their own with `./gradlew verify -PallowNoDevice`."
+    )
+}
+
+tasks.register("verify") {
+    group = "verification"
+    description =
+        "Pre-merge gate: JVM unit tests, every androidTest source set compiled, and the " +
+            "instrumented suites run on an attached device."
+
+    dependsOn(subprojects.map { "${it.path}:test" })
+    dependsOn(subprojects.map { "${it.path}:assembleDebugAndroidTest" })
+
+    if (verifyRequested) {
+        if (verifyDevices.isNotEmpty()) {
+            dependsOn(instrumentedModules.map { "${it.path}:connectedDebugAndroidTest" })
+            doLast {
+                logger.lifecycle(
+                    "verify: instrumented suites ran on ${verifyDevices.joinToString(", ")}."
+                )
+            }
+        } else {
+            // Reached only with -PallowNoDevice; the check above has already failed otherwise.
+            doLast {
+                logger.warn(
+                    "\n" +
+                        "=".repeat(94) + "\n" +
+                        "verify: NO DEVICE. The instrumented suites were compiled and NOT run.\n\n" +
+                        instrumentedSourceListing() + "\n\n" +
+                        "This build has not verified the Room migrations or the DAO.\n" +
+                        "=".repeat(94)
+                )
+            }
+        }
+    }
+}
