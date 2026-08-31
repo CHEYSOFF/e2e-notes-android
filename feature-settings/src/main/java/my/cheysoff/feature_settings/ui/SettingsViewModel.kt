@@ -145,9 +145,21 @@ class SettingsViewModel @Inject constructor(
 
             is SyncServerUrlCheck.Ok -> viewModelScope.launch {
                 syncSettingsRepository.setServerUrl(check.normalized)
-                // The field is no longer a draft: the flow collector above may now overwrite it,
-                // and will put the normalised form on screen.
-                _state.update { it.copy(serverUrlDirty = false, serverUrlError = null) }
+                // The normalised form is put in the field here rather than left to the flow
+                // collector above. The collector cannot be relied on for it: it refuses to touch
+                // a dirty draft, and `serverUrlDirty` is still true while this write is in
+                // flight, so an emission that arrives first is ignored -- and once the value is
+                // stored, a later write of the same string is swallowed by distinctUntilChanged
+                // and no second emission ever comes. Without this the field would keep showing
+                // the raw text (a typed "https://host/" against a stored "https://host"), which
+                // leaves Save on screen forever offering to save what is already saved.
+                _state.update {
+                    it.copy(
+                        serverUrlDraft = check.normalized,
+                        serverUrlDirty = false,
+                        serverUrlError = null,
+                    )
+                }
             }
         }
     }
