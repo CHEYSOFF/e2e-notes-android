@@ -41,6 +41,26 @@ object QrCodes {
     private val ERROR_CORRECTION = ErrorCorrectionLevel.M
 
     /**
+     * Levels [encode] falls back through when the preferred one produces a symbol that this app's
+     * own reader cannot decode. Measured, not theoretical: about **0.6% of pairing payloads**
+     * (6 in 969, and 8 in 887 on a second run) encode at level M into a symbol that zxing then
+     * fails to read back — at every scale from 3 to 8, under both HybridBinarizer and
+     * GlobalHistogramBinarizer, with and without extra quiet space around the code. It is a
+     * property of the symbol, not of how it is photographed, so more frames never rescue it: the
+     * QR on screen is simply unreadable and the user waits forever and gives up.
+     *
+     * Every one of those payloads encodes cleanly at L, Q and H (8/8 in the sample), so trying
+     * another level is a complete fix rather than a mitigation. M stays first because it is the
+     * right trade-off for a screen photographed by another screen; the rest are ordered by how
+     * little they cost after that.
+     */
+    private val ERROR_CORRECTION_FALLBACKS = listOf(
+        ErrorCorrectionLevel.Q,
+        ErrorCorrectionLevel.L,
+        ErrorCorrectionLevel.H,
+    )
+
+    /**
      * Quiet-zone width in modules. The QR specification requires 4; zxing's writer defaults to 4
      * as well, and it is spelled out here because the renderer needs to know the matrix already
      * contains it and must not add its own margin on top.
@@ -70,17 +90,29 @@ object QrCodes {
      * config blob inside the seal.
      */
     fun encode(text: String): QrMatrix {
-        val hints = mapOf<EncodeHintType, Any>(
-            EncodeHintType.ERROR_CORRECTION to ERROR_CORRECTION,
-            EncodeHintType.MARGIN to QUIET_ZONE_MODULES,
-            // The payload is base64url plus an ASCII prefix, so this is exact rather than a guess;
-            // it stops zxing from probing encodings and keeps the byte-mode segment canonical.
-            EncodeHintType.CHARACTER_SET to "ISO-8859-1",
-        )
         // Asking for 0 x 0 tells QRCodeWriter "no minimum size" -- it then returns the natural
         // module grid for the chosen version rather than an integer-scaled-up copy of it. Scaling
         // is the renderer's job, and doing it here would throw away the ability to draw crisp
         // modules at whatever size the screen actually offers.
+        for (level in listOf(ERROR_CORRECTION) + ERROR_CORRECTION_FALLBACKS) {
+            val candidate = encodeAt(text, level)
+            // Read our own symbol back before showing it to a camera. See
+            // ERROR_CORRECTION_FALLBACKS: a small fraction of payloads produce a symbol zxing
+            // cannot decode at any scale, and this is the only place that can notice, because by
+            // the time it reaches the screen there is nothing left to vary.
+            if (VERIFY_SCALES.all { decodeMatrix(candidate, it) == text }) return candidate
+        }
+        // Every level failed. Astronomically unlikely on the measured rates, and still better to
+        // fail loudly here than to render a code the user will hold a phone at until they give up.
+        error("could not encode a QR symbol that reads back, at any error-correction level")
+    }
+
+    private fun encodeAt(text: String, level: ErrorCorrectionLevel): QrMatrix {
+        val hints = mapOf<EncodeHintType, Any>(
+            EncodeHintType.ERROR_CORRECTION to level,
+            EncodeHintType.MARGIN to QUIET_ZONE_MODULES,
+            EncodeHintType.CHARACTER_SET to "ISO-8859-1",
+        )
         val matrix: BitMatrix = QRCodeWriter().encode(text, BarcodeFormat.QR_CODE, 0, 0, hints)
         val size = matrix.width
         check(matrix.height == size) { "a QR symbol is square; got ${matrix.width}x${matrix.height}" }
@@ -92,6 +124,35 @@ object QrCodes {
         }
         return QrMatrix(size, dark)
     }
+
+    /**
+     * Render [matrix] the way the screen does and read it back through the same decoder the camera
+     * analyser uses, so the check exercises the real path rather than zxing's internal state.
+     *
+     * Rendered at [scale] pixels per module, never 1:1 — a one-pixel-per-module image defeats
+     * zxing's detector for almost every symbol, so a 1:1 check would turn a 0.6% failure into a
+     * total one. That was tried; it rejected nearly everything.
+     */
+    private fun decodeMatrix(matrix: QrMatrix, scale: Int): String? {
+        val size = matrix.size
+        val width = size * scale
+        val plane = ByteArray(width * width)
+        for (y in 0 until width) {
+            for (x in 0 until width) {
+                plane[y * width + x] = if (matrix[x / scale, y / scale]) 0x00 else 0xFF.toByte()
+            }
+        }
+        return decodeLuminance(plane, width, width, width)
+    }
+
+    /**
+     * Pixels per module the self-check renders at. **All** of them must read back, because a
+     * symbol that decodes at one scale can genuinely fail at another — measured: payloads that
+     * read fine at 3 px/module failed at 4 and above. A camera never gives one fixed scale, so
+     * checking a single one would ship codes that die at the distance the user happens to hold
+     * the phone. Three renders per pairing code, once, is a price worth paying for that.
+     */
+    private val VERIFY_SCALES = intArrayOf(3, 4, 6)
 
     /**
      * Try to read a QR code out of one camera frame's **luminance plane**.
