@@ -11,6 +11,7 @@ import my.cheysoff.core_domain.sync.FieldClocks
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -79,7 +80,11 @@ class RecordNotesRepositoryTest {
         val asText = String(row.envelope, Charsets.ISO_8859_1)
         assertFalse(asText.contains("a very distinctive title"))
         assertFalse(asText.contains("and its body"))
-        assertFalse(row.blindedId.contains("a"))
+        // The label is an HMAC of the identity, not the identity. Compared whole rather than with
+        // `contains`: a blinded ID is 22 base64url characters, so it holds any given letter about
+        // 29% of the time by chance, and `contains("a")` would fail on roughly one run in three
+        // while looking like a real finding. (It did, under mutation M05, before this was fixed.)
+        assertNotEquals("a", row.blindedId)
     }
 
     @Test
