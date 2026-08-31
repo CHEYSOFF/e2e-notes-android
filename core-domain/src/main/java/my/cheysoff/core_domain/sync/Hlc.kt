@@ -22,20 +22,28 @@ package my.cheysoff.core_domain.sync
  * is *deterministic and identical on every device*, which is the only property that matters: it
  * is what stops two replicas from each deciding that the other's write lost.
  *
- * ## [node] is plaintext to the sync server
+ * ## [node] is not visible to the sync server
  *
- * The row clock travels **outside** the encrypted envelope, because a client has to read it to
- * order records before it can decrypt them. Everything else about a note is opaque to the
- * operator; this string is not. It must therefore never be a device identifier — see `HlcNode`
- * in `core-crypto`, which is the only place a node is minted and which documents the derivation
- * and the threat in full.
+ * **Corrected.** This section previously said the opposite, and the code it described has since
+ * changed underneath it. The row clock used to travel *outside* the envelope, as part of the
+ * record's associated data — which forced it onto the wire in plaintext and handed the operator a
+ * per-edit log of this string. `RecordEnvelope`'s associated data is now `ver ‖ blindedId` and
+ * nothing else, and the clock lives **inside** the sealed payload; see the correction block in
+ * `docs/design/e2e-sync-architecture.md` under "Record envelope", and `e2e-sync-phase3-plan.md`
+ * §4.
+ *
+ * So the privacy argument for a derived pseudonym is no longer load-bearing. `HlcNode` derives
+ * one anyway and should keep doing so — it costs nothing, it is the right value for a tie-breaker,
+ * and it means a device that leaves one account and joins another cannot be linked across the two
+ * even by an operator hosting both. The reason is now hygiene rather than disclosure, which is the
+ * position `e2e-sync-phase3-plan.md` §4 takes in as many words.
  *
  * ## Wire form
  *
- * [toString] is `"$ms-$counter-$node"`, the canonical form the record envelope's associated data
- * is built from. [parse] is its exact inverse. The two are pinned together by `HlcTest`; a
- * disagreement between them would produce records that decrypt on the device that wrote them and
- * nowhere else.
+ * [toString] is `"$ms-$counter-$node"`, and [parse] is its exact inverse. The two are pinned
+ * together by `HlcTest`, and the property that matters is `parse(x.toString()) == x` for every
+ * constructible `x`: the string is what the sealed payload carries, so a disagreement between them
+ * would produce records that this device can read back and no other device can order correctly.
  */
 data class Hlc(
     /** Physical component: milliseconds since the epoch, as observed by the minting device. */
@@ -46,8 +54,9 @@ data class Hlc(
      * The minting node's per-account pseudonym, or `""` on a device that has no account key yet.
      *
      * Empty is a legitimate value, not a missing one: a device that has never paired has no ARK
-     * to derive a pseudonym from, and inventing a local identifier would hand the operator a
-     * device-specific string the moment those rows were first pushed. See `HlcNode`.
+     * to derive a pseudonym from, and there is no account for a per-account pseudonym to belong
+     * to. It is also harmless — rows written before an account existed cannot collide with another
+     * device's rows, because no other device has ever seen their uuids. See `HlcNode`.
      */
     val node: String,
 ) : Comparable<Hlc> {
