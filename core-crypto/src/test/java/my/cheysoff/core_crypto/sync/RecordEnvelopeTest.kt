@@ -16,39 +16,35 @@ import org.junit.Test
  * the AAD is invisible to a round-trip test and is exactly the kind of omission that turns into a
  * server-rollback vulnerability years later.
  *
- * Two things here are protected twice over, and that redundancy hides them from any seal/open
- * test: `blindedId` feeds **both** the per-record key derivation and the associated data, and the
- * version byte is **both** checked structurally by `open` and bound into the associated data.
- * Dropping either from its associated-data half changes nothing a round trip can see. The
- * redundancy is deliberate, so rather than leave those halves unasserted, the last two sections
- * of this file assert `associatedData` and `perRecordKeyBytes` directly.
+ * Everything in the associated data is protected twice over, and that redundancy hides it from any
+ * seal/open test: `blindedId` feeds **both** the per-record key derivation and the associated data,
+ * and the version byte is **both** checked structurally by `open` and bound into the associated
+ * data. Dropping either from its associated-data half changes nothing a round trip can see, so the
+ * last two sections of this file assert `associatedData` and `perRecordKeyBytes` directly — down to
+ * the exact bytes, which is also what holds the wire format: `recType` and `hlc` were removed from
+ * the associated data when they were removed from the wire, and a known-answer assertion is what
+ * makes putting either back a failing test rather than a silent regression.
  */
 class RecordEnvelopeTest {
 
     private val kContent = ByteArray(32) { it.toByte() }
     private val otherKContent = ByteArray(32) { (it + 7).toByte() }
 
-    private val recType = "note"
     private val blindedId = "AAECAwQFBgcICQoLDA"
-    private val hlc = "1756500000000:3:pixel7"
 
     private val payload = "<p>Remember the milk.</p>".toByteArray()
 
     private fun seal(
-        recType: String = this.recType,
         blindedId: String = this.blindedId,
-        hlc: String = this.hlc,
         payload: ByteArray = this.payload,
         key: ByteArray = kContent,
-    ) = RecordEnvelope.seal(key, recType, blindedId, hlc, payload)
+    ) = RecordEnvelope.seal(key, blindedId, payload)
 
     private fun open(
         envelope: ByteArray,
-        recType: String = this.recType,
         blindedId: String = this.blindedId,
-        hlc: String = this.hlc,
         key: ByteArray = kContent,
-    ) = RecordEnvelope.open(key, recType, blindedId, hlc, envelope)
+    ) = RecordEnvelope.open(key, blindedId, envelope)
 
     /** Offsets of the three tamperable regions of `ver ‖ nonce ‖ ciphertext ‖ tag`. */
     private fun nonceOffset() = 1
@@ -74,7 +70,7 @@ class RecordEnvelopeTest {
 
     @Test
     fun `a payload spanning several buckets round-trips`() {
-        val large = ByteArray(3000) { (it % 253).toByte() }
+        val large = ByteArray(3 * SyncProtocol.PADDING_BUCKET_BYTES - 1) { (it % 253).toByte() }
 
         assertArrayEquals(large, open(seal(payload = large)))
     }
@@ -103,9 +99,11 @@ class RecordEnvelopeTest {
 
     @Test
     fun `envelope length reveals only the bucket, not the payload size`() {
-        // A 1-byte note and a 200-byte note must be the same size on the wire.
+        // An empty note and a three-thousand-character note must be the same size on the wire.
+        // This is the assertion the 4 KiB bucket exists for: at the 256-byte bucket this file
+        // started with, these two differed by eleven buckets.
         val tiny = seal(payload = ByteArray(1))
-        val bigger = seal(payload = ByteArray(200))
+        val bigger = seal(payload = ByteArray(3000))
 
         assertEquals(tiny.size, bigger.size)
     }
@@ -229,30 +227,8 @@ class RecordEnvelopeTest {
     }
 
     // ---------------------------------------------------------------------------------------
-    // Tampering with the associated data — one component at a time
+    // Tampering with the associated data
     // ---------------------------------------------------------------------------------------
-
-    @Test
-    fun `opening with a different recType fails`() {
-        assertNull(open(seal(), recType = "folder"))
-    }
-
-    @Test
-    fun `opening with a recType that differs by one character fails`() {
-        assertNull(open(seal(), recType = "notf"))
-    }
-
-    @Test
-    fun `opening with a different hlc fails`() {
-        // This is the server-rollback defence: an old envelope served under a new clock, or a new
-        // envelope replayed under an old one, cannot be opened.
-        assertNull(open(seal(), hlc = "1756500000001:3:pixel7"))
-    }
-
-    @Test
-    fun `opening with an hlc that differs only in its device component fails`() {
-        assertNull(open(seal(), hlc = "1756500000000:3:pixel8"))
-    }
 
     @Test
     fun `an envelope sealed for one blindedId cannot be opened as another`() {
@@ -266,16 +242,10 @@ class RecordEnvelopeTest {
     }
 
     @Test
-    fun `an envelope with shifted field boundaries cannot be opened`() {
-        // ("note", "AB…") and ("not", "eAB…") are the same bytes under naive concatenation.
-        // This envelope must not open under the shifted labels. Note *why* it does not: the
-        // shifted `blindedId` also selects a different per-record key, so this assertion would
-        // still hold even if the associated data were built naively. The length-prefix property
-        // itself is asserted directly in `associatedData is injective …` below.
-        val envelope = seal(recType = "note", blindedId = "ABCDEF")
-
-        assertNull(open(envelope, recType = "not", blindedId = "eABCDEF"))
-        assertArrayEquals(payload, open(envelope, recType = "note", blindedId = "ABCDEF"))
+    fun `an envelope sealed for one blindedId cannot be opened as a prefix of it`() {
+        // A blinded ID is fixed-length in practice, but nothing in this class enforces that, and a
+        // prefix is the cheapest thing an attacker holding the wire value can try.
+        assertNull(open(seal(), blindedId = blindedId.dropLast(1)))
     }
 
     // ---------------------------------------------------------------------------------------
@@ -284,14 +254,12 @@ class RecordEnvelopeTest {
     // seal/open cannot expose these: `blindedId` and the version byte are each protected twice
     // over (key derivation and a structural version check respectively), so dropping either from
     // the associated data changes no observable seal/open behaviour. Asserting on the associated
-    // data itself is the only way to show that half is really wired up.
+    // data itself is the only way to show that half is really wired up — and the only way to hold
+    // the format to exactly the fields the wire still carries.
     // ---------------------------------------------------------------------------------------
 
-    private fun aad(
-        recType: String = this.recType,
-        blindedId: String = this.blindedId,
-        hlc: String = this.hlc,
-    ) = RecordEnvelope.associatedData(recType, blindedId, hlc).toHex()
+    private fun aad(blindedId: String = this.blindedId) =
+        RecordEnvelope.associatedData(blindedId).toHex()
 
     @Test
     fun `associated data begins with the envelope version byte`() {
@@ -299,22 +267,21 @@ class RecordEnvelopeTest {
     }
 
     @Test
-    fun `associated data changes with every one of its four components`() {
-        val baseline = aad()
+    fun `associated data is exactly the version byte and the length-prefixed blindedId`() {
+        // A known answer, and the reason it is a known answer rather than a shape check: `recType`
+        // and `hlc` were removed from the wire, so nothing outside the sealed payload should be
+        // able to appear here again. Appending either back — the natural way to "restore" the old
+        // rollback comment — makes this test fail instead of silently reintroducing a plaintext
+        // field that every other test in this file would still pass.
+        val id = "ABC"
+        val expected = "01" + "0003" + "414243"
 
-        assertNotEquals(baseline, aad(recType = "folder"))
-        assertNotEquals(baseline, aad(blindedId = "somethingElseEntirely"))
-        assertNotEquals(baseline, aad(hlc = "1756500000001:3:pixel7"))
+        assertEquals(expected, aad(blindedId = id))
     }
 
     @Test
-    fun `associated data is injective across shifted field boundaries`() {
-        // The property the 2-byte length prefixes exist for. Naive concatenation would make each
-        // of these pairs identical, which would let an envelope authenticate under labels it was
-        // never sealed with.
-        assertNotEquals(aad(recType = "note", blindedId = "ABC"), aad(recType = "not", blindedId = "eABC"))
-        assertNotEquals(aad(blindedId = "ABC", hlc = "12"), aad(blindedId = "ABC1", hlc = "2"))
-        assertNotEquals(aad(recType = "a", blindedId = "bc"), aad(recType = "ab", blindedId = "c"))
+    fun `associated data changes with the blindedId`() {
+        assertNotEquals(aad(), aad(blindedId = "somethingElseEntirely"))
     }
 
     @Test
@@ -325,10 +292,10 @@ class RecordEnvelopeTest {
     @Test(expected = IllegalArgumentException::class)
     fun `a field too long to length-prefix is rejected rather than silently truncated`() {
         // 65_536 bytes does not fit the 2-byte length prefix. Writing the low 16 bits anyway would
-        // silently produce associated data that two different field triples could share, which is
-        // the exact ambiguity the prefixes exist to remove. No real recType, blinded ID or HLC is
-        // remotely this long; the check is here so a future caller cannot make one.
-        RecordEnvelope.associatedData(recType, blindedId, "h".repeat(0x10000))
+        // silently produce associated data that two different blinded IDs could share, which is the
+        // exact ambiguity the prefix exists to remove. No real blinded ID is remotely this long;
+        // the check is here so a future caller cannot make one.
+        RecordEnvelope.associatedData("b".repeat(0x10000))
     }
 
     // ---------------------------------------------------------------------------------------
@@ -344,9 +311,8 @@ class RecordEnvelopeTest {
     fun `records under the same key use different per-record keys`() {
         // Two records sealed under one K_content must not be interchangeable. Asserting the
         // envelopes differ is not enough — random nonces guarantee that anyway — so this checks
-        // that neither opens under the other's label. As with the boundary test above, this
-        // passes for two overlapping reasons (different key AND different associated data); the
-        // key half is isolated by the next test.
+        // that neither opens under the other's label. This passes for two overlapping reasons
+        // (different key AND different associated data); the key half is isolated by the next test.
         val first = seal(blindedId = "recordAAAAAAAAAAAAAAAA")
         val second = seal(blindedId = "recordBBBBBBBBBBBBBBBB")
 
@@ -391,23 +357,40 @@ class RecordEnvelopeTest {
         val keys = AccountRootKey.derive(ark)
         val id = BlindedRecordId.compute(keys.kId, "note", "3f2504e0-4f89-11d3-9a0c-0305e82c3301")
 
-        val envelope = RecordEnvelope.seal(keys.kContent, "note", id, hlc, payload)
+        val envelope = RecordEnvelope.seal(keys.kContent, id, payload)
 
-        assertArrayEquals(payload, RecordEnvelope.open(keys.kContent, "note", id, hlc, envelope))
+        assertArrayEquals(payload, RecordEnvelope.open(keys.kContent, id, envelope))
+    }
+
+    @Test
+    fun `a note's envelope does not open under the folder blinded id for the same uuid`() {
+        // `recType` no longer travels beside the envelope and is no longer in the associated data.
+        // It is still bound, because it is part of the blinded-ID HMAC message and the blinded ID
+        // both derives the key and is the associated data. This is that binding, end to end: the
+        // server cannot make a note's ciphertext appear as the folder of the same underlying UUID.
+        val ark = AccountRootKey.generateArk()
+        val keys = AccountRootKey.derive(ark)
+        val uuid = "3f2504e0-4f89-11d3-9a0c-0305e82c3301"
+        val noteId = BlindedRecordId.compute(keys.kId, "note", uuid)
+        val folderId = BlindedRecordId.compute(keys.kId, "folder", uuid)
+
+        val envelope = RecordEnvelope.seal(keys.kContent, noteId, payload)
+
+        assertNotEquals(noteId, folderId)
+        assertNull(RecordEnvelope.open(keys.kContent, folderId, envelope))
     }
 
     @Test
     fun `a second device deriving from the same ARK opens the first device's envelope`() {
         // The property that makes pairing work: nothing device-specific is baked into an envelope.
+        // Since `hlc` left the associated data, that is now true by construction rather than by
+        // the caller remembering to pass the same clock string.
         val ark = AccountRootKey.generateArk()
         val deviceA = AccountRootKey.derive(ark)
         val deviceB = AccountRootKey.derive(ark)
 
-        val envelope = RecordEnvelope.seal(deviceA.kContent, recType, blindedId, hlc, payload)
+        val envelope = RecordEnvelope.seal(deviceA.kContent, blindedId, payload)
 
-        assertArrayEquals(
-            payload,
-            RecordEnvelope.open(deviceB.kContent, recType, blindedId, hlc, envelope),
-        )
+        assertArrayEquals(payload, RecordEnvelope.open(deviceB.kContent, blindedId, envelope))
     }
 }

@@ -39,9 +39,15 @@ class ServerConfig(
     val rateLimitPerMinute: Int = 120,
     val rateLimitBurst: Int = 120,
 
-    val maxLabelChars: Int = 64,
-    val maxHlcChars: Int = 128,
-    val maxRecTypeChars: Int = 32,
+    /**
+     * Cap on a sealed device label, in decoded bytes.
+     *
+     * `DeviceLabelCipher` emits a constant 157 bytes today. The cap is deliberately looser than
+     * that: the blob is opaque to this server, so pinning an exact size would make a future label
+     * format a server change for no benefit. It is not so loose that the `devices` table can be
+     * used as storage.
+     */
+    val maxSealedLabelBytes: Int = 512,
     val maxBlindedIdChars: Int = 64,
     val maxTokenChars: Int = 128,
 ) {
