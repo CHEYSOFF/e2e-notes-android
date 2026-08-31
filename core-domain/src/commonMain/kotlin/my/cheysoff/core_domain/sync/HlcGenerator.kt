@@ -1,5 +1,8 @@
 package my.cheysoff.core_domain.sync
 
+import kotlinx.atomicfu.locks.SynchronizedObject
+import kotlinx.atomicfu.locks.synchronized
+
 /**
  * The only thing that mints [Hlc] readings. One instance per process, held as a `@Singleton`.
  *
@@ -39,8 +42,8 @@ package my.cheysoff.core_domain.sync
  *
  * No Android, no clock of its own — [next] takes `wallMs` from the caller — and no coroutines, so
  * the whole thing is unit-testable on the JVM, which is where `HlcGeneratorTest` proves the
- * monotonicity claim above under a deliberately hostile clock. The mutable pair is guarded by an
- * intrinsic lock because Room's write coroutines are not confined to one thread; the critical
+ * monotonicity claim above under a deliberately hostile clock. The mutable pair is guarded by a
+ * lock because Room's write coroutines are not confined to one thread; the critical
  * section is a handful of arithmetic operations, so contention is not a consideration.
  *
  * @param node supplies the node pseudonym for each minted clock. A function rather than a value
@@ -51,7 +54,10 @@ package my.cheysoff.core_domain.sync
  */
 class HlcGenerator(private val node: () -> String) {
 
-    private val lock = Any()
+    // atomicfu's lock rather than `kotlin.synchronized`, which exists only on the JVM. On the JVM
+    // and Android this compiles to the same intrinsic monitor it always did; it is a portability
+    // change, not a concurrency one.
+    private val lock = SynchronizedObject()
 
     /** Highest physical component issued or observed so far. */
     private var lastMs: Long = 0L
