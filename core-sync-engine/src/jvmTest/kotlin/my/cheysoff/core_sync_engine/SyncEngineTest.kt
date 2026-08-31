@@ -506,6 +506,58 @@ class SyncEngineTest {
         assertEquals("mine, since edited", store.noteRow(copyId)!!.record.text(FieldClocks.CONTENT))
     }
 
+    /**
+     * The baseline advances against the record that **arrived**, never against the merged result.
+     *
+     * The two devices agreed on the incoming version; they have never agreed on a three-way merge
+     * only this one performed. Taking the merged record's content clock marks this device's own
+     * unpublished body as published, and the next merge then discards it without a copy — a body
+     * the user typed, gone, with nothing anywhere saying so.
+     *
+     * The scenario needs two arrivals, because the damage is done by the first and only visible on
+     * the second.
+     */
+    @Test
+    fun `the baseline advances against the record that arrived, not the merged result`() = runBlocking {
+        val store = RecordingStore()
+        store.put(
+            stored(
+                note(uuid = "n1", content = "mine", rowClock = hlc(10)),
+                dirty = true,
+                contentBaseline = hlc(1),
+            )
+        )
+        val transport = ScriptedTransport(
+            pages = listOf(
+                // Same body at an OLDER content clock, so the merge keeps this device's version of
+                // `content` (clock 10) while the agreed version's is 5.
+                openedPage(
+                    note(
+                        uuid = "n1",
+                        content = "mine",
+                        title = "renamed elsewhere",
+                        rowClock = hlc(20),
+                        fieldClocks = mapOf(FieldClocks.CONTENT to hlc(5)),
+                    ),
+                    firstSeq = 1L,
+                ),
+                // A genuinely concurrent body. This device's "mine" is still unpublished, so it
+                // must survive as a copy.
+                openedPage(note(uuid = "n1", content = "theirs", rowClock = hlc(30)), firstSeq = 2L),
+            ),
+        )
+        val engine = engine(store, transport)
+
+        engine.runPass()
+        assertEquals(hlc(5), store.noteRow("n1")!!.contentBaseline)
+
+        engine.runPass()
+
+        assertEquals("theirs", store.noteRow("n1")!!.record.text(FieldClocks.CONTENT))
+        val copy = store.noteRow(ConflictCopies.idFor("n1", hlc(10)))
+        assertEquals("the unpublished body must not have been discarded", "mine", copy?.record?.text(FieldClocks.CONTENT))
+    }
+
     // ── The pass, and stopping ─────────────────────────────────────────────────────────────────
 
     /**

@@ -261,7 +261,18 @@ tasks.register<JacocoReport>("jacocoMergedReport") {
     // `createDebugUnitTestCoverageReport`: the only thing this task needs from them is the .exec
     // execution data, which `testDebugUnitTest` is what actually writes. Running the eight
     // per-module reports as well would just be eight extra HTML trees nobody reads.
-    dependsOn(subprojects.map { "${it.path}:testDebugUnitTest" })
+    //
+    // Matched rather than named for the same reason `verify` matches below: a multiplatform module
+    // has `jvmTest`, not `testDebugUnitTest`, and naming a task a module does not have fails the
+    // whole graph rather than that module. Note that a KMP module contributes its .exec data and
+    // its sources but NOT its classes -- `debugClassPatterns` below is an AGP layout and the
+    // built-in Kotlin compiler writes a multiplatform module's classes elsewhere -- so this makes
+    // the report run again; it does not yet make it count :core-domain or :core-sync-engine.
+    dependsOn(
+        subprojects.map { sub ->
+            sub.tasks.matching { it.name == "testDebugUnitTest" || it.name == "jvmTest" }
+        }
+    )
 
     val moduleClassDirs = subprojects.map { sub ->
         sub.fileTree(sub.layout.buildDirectory) {
@@ -428,7 +439,16 @@ tasks.register("verify") {
             "instrumented suites run on an attached device."
 
     dependsOn(subprojects.map { "${it.path}:test" })
-    dependsOn(subprojects.map { "${it.path}:assembleDebugAndroidTest" })
+    // The Android library plugin names this `assembleDebugAndroidTest`; its multiplatform
+    // counterpart names it `assembleAndroidTest`, because a KMP Android library has no build-type
+    // dimension. Naming one of them outright fails the WHOLE task graph for a module that has the
+    // other -- `verify` stopped configuring at all the moment :core-domain became multiplatform.
+    // Matching is empty-safe and picks up whichever the module actually has.
+    dependsOn(
+        subprojects.map { sub ->
+            sub.tasks.matching { it.name == "assembleDebugAndroidTest" || it.name == "assembleAndroidTest" }
+        }
+    )
 
     if (verifyRequested) {
         if (verifyDevices.isNotEmpty()) {

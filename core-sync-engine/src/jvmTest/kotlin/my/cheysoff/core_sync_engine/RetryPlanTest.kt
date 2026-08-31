@@ -64,11 +64,18 @@ class RetryPlanTest {
         assertEquals(60_000L, plan.retryAfterMillis(TransportFault.RATE_LIMITED, 86_400_000L))
     }
 
-    /** The spread stops growing past a minute; more randomness only makes the client look broken. */
+    /**
+     * The spread stops growing past a minute; more randomness only makes the client look broken.
+     *
+     * Drawn many times rather than once. A single draw from an uncapped window would still land
+     * under the cap nine times out of ten, so a one-draw test passes just as happily with the cap
+     * removed — which is the definition of not testing it.
+     */
     @Test
     fun `the spread is capped even when the base is larger`() {
-        val huge = RetryJitter.RANDOM.spreadMillis(RetryJitter.SPREAD_CAP_MILLIS * 10)
-
-        assertTrue("spread $huge exceeded the cap", huge <= RetryJitter.SPREAD_CAP_MILLIS)
+        repeat(500) {
+            val huge = RetryJitter.RANDOM.spreadMillis(RetryJitter.SPREAD_CAP_MILLIS * 10)
+            assertTrue("spread $huge exceeded the cap", huge <= RetryJitter.SPREAD_CAP_MILLIS)
+        }
     }
 }
