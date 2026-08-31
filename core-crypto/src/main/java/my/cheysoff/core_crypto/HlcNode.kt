@@ -8,18 +8,30 @@ import my.cheysoff.core_crypto.sync.Hkdf
  *
  * ## Read this before changing anything here
  *
- * The row clock travels to the sync server in **plaintext**, outside the encrypted envelope. It
- * has to: a client reads `hlc` to order records and to build the envelope's associated data,
- * before it is in a position to decrypt anything, and the server reads it to detect a stale
- * `baseSeq`. Every other fact about a note is opaque to the operator — the title, the body, even
- * the record's real UUID (which is blinded through `K_id`). The node is not.
+ * **Corrected, and the correction matters because it demotes this file's original argument.** This
+ * section used to say that the row clock travels to the server in plaintext, outside the envelope,
+ * and that the operator therefore gets a per-record log of this string for every edit the account
+ * ever makes. That was true of the design it was written against and is **no longer true of the
+ * code**: `RecordEnvelope`'s associated data is now `ver ‖ blindedId` alone, and `recType` and the
+ * clock both live inside the sealed payload. A record on the wire is `(blindedId, seq, envelope)`
+ * and nothing else. See the "Record envelope" correction block in
+ * `docs/design/e2e-sync-architecture.md`, `e2e-sync-phase3-plan.md` §4, and `SyncWire.kt`, which
+ * says the same thing from the transport's side.
  *
- * So whatever goes in this string, the operator gets a **per-record log of it, for every edit the
- * account ever makes**. If it were a device identifier — `Settings.Secure.ANDROID_ID`, the model
- * name, the server's own `deviceId`, or any value that outlives an account — the operator would
- * learn which of the user's devices made every single edit, and could follow that device across
- * accounts. That is a materially different product from "the server stores opaque blobs", and it
- * would be true without a single line of it appearing in the threat model.
+ * So the node is **not** disclosed to the operator, and the disclosure argument below is no longer
+ * what justifies the derivation. What justifies it now is that the derivation is free and better
+ * than the alternatives on their own merits, which is the position `e2e-sync-phase3-plan.md` §4
+ * takes explicitly: *"Keep a pseudonym anyway if it is already built — it is still the right value
+ * for a tie-breaker, and it costs nothing — but the reason to have one is now hygiene rather than
+ * disclosure."*
+ *
+ * The hygiene is real. A per-account pseudonym cannot link a device across two accounts even to
+ * someone holding both ARKs, it never becomes a stable device identifier that could leak through
+ * some future channel this file does not know about, and it is a value the codebase can copy into
+ * every payload and every conflict copy without having to think about it again. A device
+ * identifier — `Settings.Secure.ANDROID_ID`, the model name, the server's own `deviceId` — would
+ * have none of those properties and would be one envelope-format change away from being disclosed
+ * after all.
  *
  * ## The derivation
  *
@@ -41,22 +53,22 @@ import my.cheysoff.core_crypto.sync.Hkdf
  *    decide the other's write lost. `deviceId` is a locally generated 128-bit random string
  *    ([SecureUnlockManager.deviceId]) — never hardware-derived, never `ANDROID_ID`, never the
  *    model name — so nothing about the device leaks into it even before the HKDF.
- *  - **HKDF** is one-way, so the operator cannot recover `deviceId` from the node even though
- *    `deviceId` is a value it will separately be told during the session handshake. Learning both
- *    does not let it link them.
+ *  - **HKDF** is one-way, so nothing that ever sees a node can recover `deviceId` from it —
+ *    which matters because `deviceId` IS sent to the server in the clear, during the session
+ *    handshake. Holding both does not let anyone link them.
  *
  * The output is 8 bytes / 16 hex characters. Long enough that two devices on one account
- * practically never collide; short enough that the whole `"$ms-$counter-$node"` string stays far
- * inside the server's 128-character limit for it.
+ * practically never collide; short enough that the whole `"$ms-$counter-$node"` string stays
+ * comfortably small inside a sealed payload.
  *
  * ## When there is no ARK, there is no node
  *
  * A device that has never paired has no account key, so there is nothing to derive from and no
  * account for the pseudonym to belong to. The clock's node is then `""` — see [Hlc.node] — rather
- * than some local fallback. That is deliberate: any fallback would be a device-specific string
- * that eventually reaches the operator on the first push, which is exactly what this file exists
- * to prevent. Rows written before an account existed cannot collide with another device's rows
- * anyway; their record UUIDs were minted locally and no other device has ever seen them.
+ * than some local fallback. That is deliberate: a fallback would be a device-specific string that
+ * is stable across accounts, which is precisely the shape this derivation exists to avoid, and it
+ * would buy nothing. Rows written before an account existed cannot collide with another device's
+ * rows anyway; their record UUIDs were minted locally and no other device has ever seen them.
  *
  * ## Open question D4, restated honestly
  *
@@ -77,8 +89,9 @@ object HlcNode {
      * that file is one two devices must agree on byte for byte; this one is local — no other
      * device ever derives this device's node, and changing it breaks nothing on the wire. What it
      * *would* do is change this device's node, which is harmless for correctness (the node only
-     * breaks ties) but would split one device's history into two pseudonyms in the operator's
-     * view. Change it only with that in mind.
+     * breaks ties) but would split one device's history into two pseudonyms, so clocks minted
+     * before and after the change would tie-break against each other differently. Change it only
+     * with that in mind.
      */
     const val INFO_HLC_NODE = "manana/sync/v1/hlcnode"
 
@@ -92,8 +105,9 @@ object HlcNode {
      * stable across unlocks, process restarts and app upgrades without being stored anywhere.
      *
      * [ark] is not modified and remains the caller's; the intermediate key material is zeroed
-     * before returning. The result is not a secret — it is published to the operator with every
-     * record — but it must not be invertible, which is the HKDF's job.
+     * before returning. The result is not a secret — it is copied into every record this device
+     * writes, and into every conflict copy derived from one — but it must not be invertible back
+     * to `deviceId`, which is the HKDF's job.
      */
     fun derive(ark: ByteArray, deviceId: String): String {
         require(deviceId.isNotEmpty()) { "deviceId must not be empty" }
