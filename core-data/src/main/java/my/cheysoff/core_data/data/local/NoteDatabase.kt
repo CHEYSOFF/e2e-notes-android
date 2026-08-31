@@ -126,5 +126,28 @@ abstract class NoteDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE folders ADD COLUMN deletedAt INTEGER")
             }
         }
+
+        /**
+         * Every migration above, in order. `DataModule` spreads this into Room's builder instead
+         * of listing the fields a second time, so the chain the app ships with cannot be missing a
+         * step that exists here.
+         *
+         * `MigrationChainTest` asserts the list runs 1 -> [NOTE_DATABASE_VERSION] with no gap and
+         * no repeat, so bumping the schema without writing the matching migration fails on the JVM
+         * rather than on a user's device.
+         *
+         * The two instrumented migration tests still assemble their own lists by hand — they are
+         * out of scope here, and #56 rewrites them onto MigrationTestHelper anyway.
+         *
+         * Declared last because a companion object initialises its properties in source order; a
+         * list placed above the migrations it names would be an array of nulls.
+         */
+        val ALL_MIGRATIONS: Array<Migration> = arrayOf(
+            MIGRATION_1_2,
+            MIGRATION_2_3,
+            MIGRATION_3_4,
+            MIGRATION_4_5,
+            MIGRATION_5_6,
+        )
     }
 }
