@@ -59,3 +59,7 @@ include(":core-sync-net")
 // Android, no Room, no HTTP -- so that the N-replica convergence harness can drive the real engine
 // on the JVM in milliseconds. See core-sync-engine/build.gradle.kts.
 include(":core-sync-engine")
+
+// The Compose Desktop app. Plain Kotlin/JVM -- it is the same binary on Windows, macOS and
+// Linux, and jpackage builds whichever installer the host OS supports.
+include(":desktop")
