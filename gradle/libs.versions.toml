@@ -1,5 +1,11 @@
 [versions]
 agp = "9.0.1"
+# Compose Multiplatform. 1.12.0 is the current stable and resolves through the Google mirror
+# (Maven Central 403s from this network -- see settings.gradle.kts).
+composeMultiplatform = "1.12.0"
+# Multiplatform locks. Needed because `kotlin.synchronized` is JVM-only, which the mingwX64
+# canary target in :core-domain caught -- see HlcGenerator.
+atomicfu = "0.33.0"
 kotlin = "2.3.21"
 coreKtx = "1.18.0"
 junit = "4.13.2"
@@ -112,12 +118,18 @@ androidx-camera-view = { group = "androidx.camera", name = "camera-view", versio
 robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
+atomicfu = { group = "org.jetbrains.kotlinx", name = "atomicfu", version.ref = "atomicfu" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 android-library = { id = "com.android.library", version.ref = "agp" }
+kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+# AGP 9 refuses `com.android.library` alongside the KMP plugin; this is its replacement for a
+# multiplatform module that has an Android target. See core-domain/build.gradle.kts.
+android-kmp-library = { id = "com.android.kotlin.multiplatform.library", version.ref = "agp" }
+compose-multiplatform = { id = "org.jetbrains.compose", version.ref = "composeMultiplatform" }
 kotlin-kapt = { id = "org.jetbrains.kotlin.kapt", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 dagger-hilt = { id = "com.google.dagger.hilt.android", version.ref = "dagger" }

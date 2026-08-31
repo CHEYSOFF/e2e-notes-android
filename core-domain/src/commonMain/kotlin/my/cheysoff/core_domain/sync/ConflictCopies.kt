@@ -1,6 +1,5 @@
 package my.cheysoff.core_domain.sync
 
-import java.util.UUID
 
 /**
  * How a losing body becomes a note of its own.
@@ -83,16 +82,18 @@ object ConflictCopies {
      * the same id and therefore the same single copy, which is exactly the idempotence the sync
      * loop needs — a re-delivered record must not grow a second duplicate.
      *
-     * `UUID.nameUUIDFromBytes` is MD5-based, and that is fine here and nowhere else: this is a
+     * The derivation is MD5-based, and that is fine here and nowhere else: this is a
      * naming function, not a security one. Nothing is authenticated by this id, an attacker who
      * could choose it gains only the ability to name a note in an account they would already have
      * to hold the ARK to read, and the property actually required is determinism across devices,
      * which MD5 has. It is used because it is in the JDK and produces a value shaped exactly like
-     * every other note id in this app.
+     * every other note id in this app. It is computed by [NameUuid] rather than by the JDK so
+     * that a non-JVM device derives the same id; see the note there, and `NameUuidParityTest`,
+     * which pins the two against each other.
      */
     fun idFor(sourceUuid: String, loserContentClock: Hlc): String {
         val name = "$ID_NAMESPACE|$sourceUuid|$loserContentClock"
-        return UUID.nameUUIDFromBytes(name.toByteArray(Charsets.UTF_8)).toString()
+        return NameUuid.v3(name.encodeToByteArray())
     }
 
     /**
