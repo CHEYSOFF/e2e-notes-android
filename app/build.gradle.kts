@@ -62,6 +62,10 @@ dependencies {
     implementation(project(":core-domain"))
     implementation(project(":core-data"))
     implementation(project(":core-crypto"))
+    // The sync transport. This is what brings the INTERNET permission into the merged manifest --
+    // the declaration itself lives in core-sync-net/src/main/AndroidManifest.xml, next to the
+    // network code, and that file explains what it is for.
+    implementation(project(":core-sync-net"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -78,7 +82,11 @@ dependencies {
     ksp(libs.hilt.compiler)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
-    androidTestImplementation(libs.androidx.espresso.core)
+    // androidx.test:runner rather than espresso-core. Every screen in this app is Compose, so
+    // Espresso's View matchers have nothing to act on, and `Espresso` appears nowhere in the repo;
+    // the runner named in testInstrumentationRunner above is the only part of that dependency tree
+    // androidTest actually uses. Compose UI tests, when they get written, use ui-test-junit4 below.
+    androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
