@@ -43,6 +43,11 @@ include(":feature-auth")
 include(":core-ui")
 include(":feature-notes")
 include(":core-crypto")
+// The portable half of :core-crypto -- the sync primitives, the record envelope, the passphrase
+// wrap -- split out so the desktop app can use them. :core-crypto keeps everything that needs the
+// AndroidKeyStore, EncryptedSharedPreferences or BiometricPrompt. Package names are unchanged
+// across the split, so no import anywhere in the app moved.
+include(":core-crypto-shared")
 include(":core-domain")
 include(":core-data")
 include(":feature-settings")

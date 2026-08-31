@@ -91,7 +91,7 @@ random port and drives claim → session → push → pull → conflict → hist
 the real HTTP client:
 
 ```
-./gradlew :core-sync-net:testDebugUnitTest -PsyncContract
+./gradlew :core-sync-net:jvmTest -PsyncContract
 ```
 
 It is the only test in the repository where a client/server disagreement can fail — every other
@@ -99,6 +99,11 @@ sync test uses a fake transport, and a fake transport can only ever agree with w
 believes. It has already earned that twice: once on a session request that carried no signature,
 and once on a client still sending `recType` on a wire the server had stopped accepting. Both suites
 were green.
+
+`KtorHttpTransportTest` covers the layer *below* the fake transport — the real HTTP client against a
+throwaway `com.sun.net.httpserver` on loopback — and it is **not** opt-in, so `verify` runs it. It
+does not overlap with the contract test: it proves the transport puts the request on the socket and
+reads the response back, and says nothing about whether the sync server agrees with the bodies.
 
 It is opt-in because it needs a JDK 17 toolchain, a second Gradle build (`server/gradlew
 installDist`, built on demand and then reused from `server/build/install/manana-sync-server`) and a
