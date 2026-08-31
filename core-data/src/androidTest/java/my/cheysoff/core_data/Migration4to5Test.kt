@@ -113,6 +113,7 @@ class Migration4to5Test {
                 // test in this class fails. That is exactly what happened when v6 landed — the
                 // class still compiled, so nothing surfaced it until the suite was next executed.
                 NoteDatabase.MIGRATION_5_6,
+                NoteDatabase.MIGRATION_6_7,
             )
             .build()
 

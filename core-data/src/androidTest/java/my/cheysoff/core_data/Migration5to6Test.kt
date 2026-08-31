@@ -109,6 +109,12 @@ class Migration5to6Test {
                 NoteDatabase.MIGRATION_3_4,
                 NoteDatabase.MIGRATION_4_5,
                 NoteDatabase.MIGRATION_5_6,
+                // The chain has to reach the CURRENT version, not the one this file is named for:
+                // Room opens the database at NOTE_DATABASE_VERSION and refuses to stop halfway. So
+                // this test now migrates 5 -> 7 and asserts the v6 outcomes on the far side of
+                // both steps, which is strictly the stronger claim — MIGRATION_6_7 must not
+                // disturb anything MIGRATION_5_6 established.
+                NoteDatabase.MIGRATION_6_7,
             )
             .build()
 
@@ -212,7 +218,7 @@ class Migration5to6Test {
         val db = openMigrated()
         try {
             val dao = db.noteDao
-            dao.softDeleteNote("filed", 12_345L)
+            dao.softDeleteNote("filed", 12_345L, 12_345L, 0, "testnode", "")
 
             assertTrue("updatedAt order still returns the deleted note",
                 dao.getNotesByUpdatedAt().first().none { it.id == "filed" })
@@ -228,7 +234,7 @@ class Migration5to6Test {
             assertEquals("in a folder", trashed.single().content)
             assertEquals(12_345L, trashed.single().deletedAt)
 
-            dao.restoreNote("filed")
+            dao.restoreNote("filed", 12_346L, 0, "testnode", "")
             assertTrue("restore did not bring the note back",
                 dao.getNotesByUpdatedAt().first().any { it.id == "filed" })
             assertTrue("restore left the note in Trash", dao.getDeletedNotes().first().isEmpty())
@@ -243,8 +249,12 @@ class Migration5to6Test {
         seedV5()
         val db = openMigrated()
         try {
-            db.noteDao.clearFolder("f1", 99_000L)
-            db.folderDao.softDeleteFolder("f1", 99_000L)
+            // The shape RoomNotesRepository.deleteFolder uses since v7: one clock for the whole
+            // action, one UPDATE per affected note.
+            db.noteDao.rowClocksInFolder("f1").forEach {
+                db.noteDao.clearFolderForNote(it.id, 99_000L, 99_000L, 0, "testnode", "")
+            }
+            db.folderDao.softDeleteFolder("f1", 99_000L, 99_000L, 0, "testnode", "")
 
             val notes = db.noteDao.getNotesByUpdatedAt().first()
             val affected = notes.filter { it.id == "html" || it.id == "filed" }
