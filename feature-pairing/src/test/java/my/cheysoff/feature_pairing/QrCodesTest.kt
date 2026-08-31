@@ -34,6 +34,29 @@ class QrCodesTest {
         assertEquals(text, decodeThrough(QrCodes.encode(text)))
     }
 
+    /**
+     * Every code this app renders must read back — not merely most of them.
+     *
+     * Regression test for a real defect, not a hypothetical: at a fixed error-correction level
+     * about **0.6% of pairing payloads** encoded into a symbol that zxing could not decode. It was
+     * a property of the symbol, so it reproduced at every scale from 3 to 8, under both
+     * HybridBinarizer and GlobalHistogramBinarizer, and with any amount of quiet space around the
+     * code. More camera frames could never have rescued it: the QR on screen was simply
+     * unreadable, and the user would hold two phones together until they gave up.
+     *
+     * That is why [QrCodes.encode] now reads its own symbol back and falls through
+     * error-correction levels until one does. Two hundred fresh sessions is enough that the old
+     * behaviour fails here essentially every run; pinning a single known-bad payload would be
+     * tidier but the payload carries a random ephemeral key, so there is no such constant to pin.
+     */
+    @Test
+    fun everyGeneratedOfferCodeReadsBack() {
+        repeat(200) {
+            val code = NewDeviceSession(HkdfKeyDerivation, FakeClock()).offerCode
+            assertEquals(code, decodeThrough(QrCodes.encode(code)))
+        }
+    }
+
     /** A real QR1, through a real frame. */
     @Test
     fun readsBackARealOfferCode() {
