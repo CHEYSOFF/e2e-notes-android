@@ -68,6 +68,10 @@ dependencies {
     implementation(project(":core-sync-net"))
 
     implementation(libs.androidx.core.ktx)
+    // The sync server address is a preference, stored the same way every other preference in this
+    // app is. It is here rather than in :core-data because the only code that reads it is the sync
+    // transport wiring next door in my/cheysoff/notes/sync -- see DataStoreSyncSettingsRepository.
+    implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
