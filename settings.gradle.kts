@@ -50,3 +50,7 @@ include(":feature-pairing")
 // The network transport for E2E sync (Phase 3). It is the only module that declares INTERNET; see
 // core-sync-net/src/main/AndroidManifest.xml for what that permission is for and when it is used.
 include(":core-sync-net")
+// The sync coordinator: the push/pull pass loop that drives `Merge`. Pure `commonMain` -- no
+// Android, no Room, no HTTP -- so that the N-replica convergence harness can drive the real engine
+// on the JVM in milliseconds. See core-sync-engine/build.gradle.kts.
+include(":core-sync-engine")
