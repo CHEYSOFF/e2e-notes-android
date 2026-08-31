@@ -52,6 +52,17 @@ datastore = "1.2.1"
 # mangling the whole note library.
 richeditor = "1.1.0"
 ksp = "2.3.9"
+# The app's first and only network library, used by :core-sync-net. 4.12.0 rather than a 5.x
+# release: 4.x is the line whose minSdk (21) is below this project's floor and whose only
+# transitive dependencies are okio and the Kotlin stdlib. Chosen for `CertificatePinner`, which
+# pins on the SHA-256 of the DER SubjectPublicKeyInfo -- exactly the value the pairing QR already
+# carries as `ServerHint.spkiPinSha256`. See docs/design/e2e-sync-phase3-plan.md §10, decision D1.
+okhttp = "4.12.0"
+# 1.9.0 to match `coroutinesTest` above, and for the same reason it is pinned there: Gradle
+# resolves the highest version requested anywhere in the graph, so asking for a newer core here
+# would drag kotlinx-coroutines-android up with it and make an artifact that is cached locally
+# suddenly need fetching.
+coroutines = "1.9.0"
 zxing = "3.5.3"
 camerax = "1.5.0"
 robolectric = "4.16"
@@ -99,6 +110,8 @@ androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", 
 androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
 androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
 robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
