@@ -49,6 +49,12 @@ dependencies {
     // post-PIN-setup enrollment uses. This is the only reason a feature module depends on another
     // feature module: duplicating the enrollment sequence is the alternative, and it is worse.
     implementation(project(":feature-auth"))
+    // For ServerEndpoint, and for that alone. The sync-server field validates by constructing the
+    // exact object the transport would be built from, so the address this screen accepts and the
+    // address the transport accepts cannot drift apart -- see SyncServerUrl.kt. Nothing here
+    // touches SyncApi or opens a connection; the screen's one network action goes through
+    // :core-domain's SyncTransportStatus, which :app implements.
+    implementation(project(":core-sync-net"))
 
     implementation(libs.androidx.core.ktx)
     // For FragmentActivity, which the biometric prompt must be hosted by.
