@@ -1,6 +1,9 @@
 package my.cheysoff.core_sync_net
 
 import kotlinx.coroutines.test.runTest
+import my.cheysoff.core_crypto.sync.DeviceLabelCipher
+import my.cheysoff.core_crypto.sync.SyncProtocol
+import my.cheysoff.core_sync_net.auth.DeviceLabelSealer
 import my.cheysoff.core_sync_net.http.RetryPolicy
 import my.cheysoff.core_sync_net.http.ServerEndpoint
 import my.cheysoff.core_sync_net.http.TransportLog
@@ -37,10 +40,12 @@ class SyncHttpClientTest {
         retryPolicy: RetryPolicy = RetryPolicy(),
         maxResponseBytes: Int = 1024 * 1024,
         log: TransportLog = TransportLog.NONE,
+        labelSealer: DeviceLabelSealer = ArkLabelSealer(ARK),
     ) = SyncHttpClient(
         endpoint = endpoint,
         transport = transport,
         signer = signer,
+        labelSealer = labelSealer,
         clock = { FIXED_NOW },
         retryPolicy = retryPolicy,
         delayer = delayer,
@@ -110,6 +115,118 @@ class SyncHttpClientTest {
 
         assertTrue(client().claimAccount(accountId, "Pixel 7") is ClaimOutcome.AlreadyClaimed)
     }
+
+    /**
+     * The device label is ciphertext on the wire, and this is the test that says so.
+     *
+     * `server/README.md` used to list the device name under "Can see"; it no longer does, and the
+     * only thing keeping that honest on this side is that the client seals before it writes. So the
+     * assertion is deliberately blunt -- the name must not appear **anywhere** in the request body,
+     * in any field -- rather than checking that one particular field looks like base64.
+     */
+    @Test
+    fun `a claim seals the device label and never sends the plaintext`() = runTest {
+        transport.enqueue(201, """{"accountId":"$accountId","deviceId":"dev-9","createdAt":7}""")
+
+        client().claimAccount(accountId, "Vova's Pixel 7")
+
+        val body = transport.bodies().single()
+        assertFalse("the device name must not appear in the request", body.contains("Pixel"))
+        val sealed = Base64Codec.decodeUrl(body.jsonString("sealedLabel"))!!
+        assertEquals(
+            "every sealed label is the same size, whatever the name",
+            DeviceLabelCipher.SEALED_BYTES,
+            sealed.size,
+        )
+        assertEquals(
+            "Vova's Pixel 7",
+            DeviceLabelCipher.open(ARK, body.jsonString("devicePublicKey"), sealed),
+        )
+    }
+
+    /**
+     * A vouched label is sealed against the **joining** device's key.
+     *
+     * Sealing it against the voucher's -- the client's own, which is the key every other signature
+     * in this request uses -- enrols the device perfectly happily and stores 157 bytes that nothing
+     * on the account will ever open. The failure would surface as an unnamed row in a device list,
+     * long after the enrolment that caused it.
+     */
+    @Test
+    fun `a vouched enrolment seals the label against the joining device's key`() = runTest {
+        val joining = TestDeviceSigner()
+        transport.enqueue(201, """{"deviceId":"dev-2","createdAt":11}""")
+
+        client().authorizeDevice(accountId, "dev-1", joining.publicKeySec1(), "Tablet")
+
+        val body = transport.bodies().single()
+        assertFalse(body.contains("Tablet"))
+        val sealed = Base64Codec.decodeUrl(body.jsonString("sealedLabel"))!!
+        assertEquals("Tablet", DeviceLabelCipher.open(ARK, body.jsonString("newPublicKey"), sealed))
+        assertNull(
+            "a label sealed against the voucher's key would open for nobody",
+            DeviceLabelCipher.open(
+                ARK,
+                Base64Codec.encodeUrl(signer.publicKeySec1()),
+                sealed,
+            ),
+        )
+    }
+
+    /**
+     * **A client that cannot seal sends no label. It must never fall back to the plaintext.**
+     *
+     * The realistic way to reach this is a locked device: the ARK lives in memory only while the
+     * user is unlocked, so `ArkDeviceLabelSealer` answers null. An unnamed device is a real cost --
+     * it is one row harder to tell apart when revoking a lost phone -- and it is still the right
+     * answer, because the alternative silently undoes the whole change on exactly the runs nobody
+     * is watching.
+     */
+    @Test
+    fun `a client that cannot seal enrols with no label rather than a plaintext one`() = runTest {
+        transport.enqueue(201, """{"accountId":"$accountId","deviceId":"dev-9","createdAt":7}""")
+
+        client(labelSealer = DeviceLabelSealer.NONE).claimAccount(accountId, "Vova's Pixel 7")
+
+        val body = transport.bodies().single()
+        assertFalse(body.contains("Pixel"))
+        assertEquals("", body.jsonString("sealedLabel"))
+    }
+
+    /**
+     * A device listing opens what it can and calls the rest unnamed.
+     *
+     * The three rows are the three cases a real list contains: this account's own label, one sealed
+     * under a key this device does not have (another account's, or one substituted in transit), and
+     * a device that enrolled without a name at all. **None of them may be dropped** -- a row the
+     * user cannot see is a device the user cannot revoke.
+     */
+    @Test
+    fun `a device listing opens the sealed label and reads an unopenable one as unnamed`() =
+        runTest {
+            val keyB64 = Base64Codec.encodeUrl(signer.publicKeySec1())
+            val mine = Base64Codec.encodeUrl(DeviceLabelCipher.seal(ARK, keyB64, "Pixel 7"))
+            val foreignArk = ByteArray(SyncProtocol.ARK_BYTES) { 9 }
+            val theirs = Base64Codec.encodeUrl(
+                DeviceLabelCipher.seal(foreignArk, keyB64, "Somebody else's phone")
+            )
+            enqueueHandshake()
+            transport.enqueue(
+                200,
+                """{"devices":[""" +
+                    """{"deviceId":"d1","sealedLabel":"$mine","publicKey":"$keyB64",""" +
+                    """"createdAt":1,"self":true},""" +
+                    """{"deviceId":"d2","sealedLabel":"$theirs","publicKey":"$keyB64",""" +
+                    """"createdAt":2,"self":false},""" +
+                    """{"deviceId":"d3","sealedLabel":"","publicKey":"$keyB64",""" +
+                    """"createdAt":3,"self":false}]}""",
+            )
+
+            val devices = client().listDevices(credentials)
+
+            assertEquals("no row may be hidden", listOf("d1", "d2", "d3"), devices.map { it.deviceId })
+            assertEquals(listOf("Pixel 7", null, null), devices.map { it.label })
+        }
 
     @Test
     fun `authorize signs over the joining device's key, not its own`() = runTest {
@@ -287,18 +404,18 @@ class SyncHttpClientTest {
     }
 
     /**
-     * **The cursor is the server's monotonic `seq` and never a timestamp.**
+     * **The cursor is the server's monotonic `seq`, and the client checks it before storing it.**
      *
-     * This is the guard for that. `receivedAt` is present in every record precisely because a UI
-     * may want it, which is what makes taking the cursor from it a plausible mistake -- here the
-     * two fields disagree, so a client that read the wrong one produces a `nextCursor` that does
-     * not match the page and the page is refused rather than stored.
+     * A record carries no timestamp any more, so the old mistake -- advancing the cursor with
+     * `receivedAt` -- is not expressible from this side. What is still expressible is a
+     * `nextCursor` that does not describe the page it arrived with, and storing one would skip
+     * records silently and permanently. So the page is refused instead.
      */
     @Test
     fun `a next cursor that does not match the page's largest seq is refused`() = runTest {
         enqueueHandshake()
-        // seq 4 and 9; receivedAt 1700000000000 and 1700000000001. A cursor built from the
-        // timestamps cannot equal the cursor built from the sequence numbers.
+        // The page's largest seq is 9; the cursor claims a millisecond-scale number no sequence
+        // allocator on this account could have produced.
         transport.enqueue(
             200,
             """{"records":[${record("aa", seq = 4)},${record("bb", seq = 9)}],""" +
@@ -446,7 +563,7 @@ class SyncHttpClientTest {
 
         client().pushRecords(
             credentials,
-            listOf(PushItem("aa", "note", "1-0-x", 0, envelope)),
+            listOf(PushItem("aa", 0, envelope)),
         )
 
         val sent = transport.bodies().last().jsonString("envelope")
@@ -578,7 +695,10 @@ class SyncHttpClientTest {
     @Test
     fun `a response missing a field this client needs names the field and nothing else`() = runTest {
         enqueueHandshake()
-        transport.enqueue(200, """{"devices":[{"deviceId":"d","label":"l","createdAt":1,"self":true}]}""")
+        transport.enqueue(
+            200,
+            """{"devices":[{"deviceId":"d","sealedLabel":"","createdAt":1,"self":true}]}""",
+        )
 
         try {
             client().listDevices(credentials)
@@ -593,8 +713,8 @@ class SyncHttpClientTest {
         enqueueHandshake()
         transport.enqueue(
             200,
-            """{"records":[{"blindedId":"aa","recType":"note","hlc":"1-0-x","seq":1,""" +
-                """"envelope":"not base64!!","receivedAt":2}],"nextCursor":1,"hasMore":false}""",
+            """{"records":[{"blindedId":"aa","seq":1,"envelope":"not base64!!"}],""" +
+                """"nextCursor":1,"hasMore":false}""",
         )
 
         try {
@@ -684,16 +804,11 @@ class SyncHttpClientTest {
     // Helpers
     // ------------------------------------------------------------------------------------------
 
-    private fun record(
-        blindedId: String,
-        seq: Long,
-        envelope: String = "AQID",
-        receivedAt: Long = 1_700_000_000_000L + seq,
-    ) = """{"blindedId":"$blindedId","recType":"note","hlc":"1-0-node","seq":$seq,""" +
-        """"envelope":"$envelope","receivedAt":$receivedAt}"""
+    private fun record(blindedId: String, seq: Long, envelope: String = "AQID") =
+        """{"blindedId":"$blindedId","seq":$seq,"envelope":"$envelope"}"""
 
     private fun pushItem(blindedId: String, baseSeq: Long) =
-        PushItem(blindedId, "note", "1-0-node", baseSeq, byteArrayOf(1, 2, 3))
+        PushItem(blindedId, baseSeq, byteArrayOf(1, 2, 3))
 
     /** Pulls a string field out of a request body, without depending on the wire codec. */
     private fun String.jsonString(field: String): String =
@@ -722,6 +837,9 @@ class SyncHttpClientTest {
     private companion object {
         const val FIXED_NOW = 1_700_000_000_000L
         const val JITTER_MILLIS = 250L
+
+        /** Any 32 bytes: `DeviceLabelCipher` asks for a length, not for entropy. */
+        val ARK = ByteArray(SyncProtocol.ARK_BYTES) { it.toByte() }
     }
 }
 

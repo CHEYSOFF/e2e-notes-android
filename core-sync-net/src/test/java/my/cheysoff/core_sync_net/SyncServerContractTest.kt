@@ -1,6 +1,7 @@
 package my.cheysoff.core_sync_net
 
 import kotlinx.coroutines.runBlocking
+import my.cheysoff.core_crypto.sync.SyncProtocol
 import my.cheysoff.core_sync_net.http.OkHttpTransport
 import my.cheysoff.core_sync_net.http.ServerEndpoint
 import my.cheysoff.core_sync_net.wire.Base64Codec
@@ -8,6 +9,7 @@ import org.junit.AfterClass
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Assume.assumeTrue
@@ -79,7 +81,7 @@ class SyncServerContractTest {
         val health = clientA.health()
         assertEquals("ok", health.status)
 
-        val outcome = clientA.claimAccount(accountId, "Contract test device A")
+        val outcome = clientA.claimAccount(accountId, LABEL_A)
         val claimed = outcome as? ClaimOutcome.Claimed
             ?: error("the first claim on a fresh account must succeed, got $outcome")
         deviceIdA = claimed.deviceId
@@ -117,6 +119,34 @@ class SyncServerContractTest {
         )
     }
 
+    /**
+     * The device label survives a real round trip **sealed**.
+     *
+     * Three things have to line up for this to pass, and none of them is checked by a fake
+     * transport: the client seals with `DeviceLabelCipher` and base64url-encodes the result; the
+     * server accepts that as `sealedLabel`, decodes it and stores the bytes; and the same bytes come
+     * back so the client can open them against the public-key string the server re-encoded. If the
+     * server's base64url and `core-crypto`'s disagree by one character, or if the server truncates
+     * the blob, the tag stops verifying and this reads null.
+     */
+    @Test
+    fun `step 03b - the device label round-trips sealed and opens back to its plaintext`() =
+        runBlocking {
+            assertEquals(LABEL_A, clientA.listDevices(credentialsA()).single().label)
+        }
+
+    /**
+     * ...and it really is sealed, rather than a plaintext string this client happens to echo.
+     *
+     * The same enrolled device, the same session, the same response bytes -- only the account key
+     * differs. A label the operator could read would read the same under any key; this one does not
+     * open at all, which is only possible if what crossed the wire was ciphertext.
+     */
+    @Test
+    fun `step 03c - a device holding a different account key cannot read the label`() = runBlocking {
+        assertNull(clientWrongArk.listDevices(credentialsA()).single().label)
+    }
+
     // ------------------------------------------------------------------------------------------
     // 2. Push and pull
     // ------------------------------------------------------------------------------------------
@@ -126,8 +156,8 @@ class SyncServerContractTest {
         val outcome = clientA.pushRecords(
             credentialsA(),
             listOf(
-                PushItem(RECORD_ONE, "note", "1000-0-nodeA", baseSeq = 0, envelope = ENVELOPE_ONE),
-                PushItem(RECORD_TWO, "folder", "1001-0-nodeA", baseSeq = 0, envelope = ENVELOPE_TWO),
+                PushItem(RECORD_ONE, baseSeq = 0, envelope = ENVELOPE_ONE),
+                PushItem(RECORD_TWO, baseSeq = 0, envelope = ENVELOPE_TWO),
             ),
         )
 
@@ -154,17 +184,16 @@ class SyncServerContractTest {
         assertEquals(RECORD_TWO, page.records[1].blindedId)
         assertArrayEquals(ENVELOPE_ONE, page.records[0].envelope)
         assertArrayEquals(ENVELOPE_TWO, page.records[1].envelope)
-        assertEquals("note", page.records[0].recType)
-        assertEquals("1000-0-nodeA", page.records[0].hlc)
         assertEquals(seqTwo, page.nextCursor.seq)
         assertFalse(page.hasMore)
     }
 
     /**
      * The cursor is the server's `seq` and nothing else. Pulling from the cursor the previous page
-     * ended at must return nothing -- which is only true if the number came from `seq`. A cursor
-     * taken from `receivedAt` would be a millisecond timestamp far larger than any sequence number,
-     * and the server would answer `409 cursor_ahead_of_server` instead.
+     * ended at must return nothing -- which is only true if the number came from `seq`. There is no
+     * longer a timestamp on a record to take it from by mistake; what remains reachable is a client
+     * or a server that pages from the wrong number, and a millisecond-scale cursor would come back
+     * as `409 cursor_ahead_of_server` rather than as an empty page.
      */
     @Test
     fun `step 06 - pulling from the returned cursor yields an empty page`() = runBlocking {
@@ -203,9 +232,9 @@ class SyncServerContractTest {
                 credentialsA(),
                 listOf(
                     // Correct base: this record is still at seqOne.
-                    PushItem(RECORD_ONE, "note", "2000-0-nodeA", baseSeq = seqOne, envelope = ENVELOPE_THREE),
+                    PushItem(RECORD_ONE, baseSeq = seqOne, envelope = ENVELOPE_THREE),
                     // Stale base: this record moved to seqTwo, and 0 asserts it does not exist.
-                    PushItem(RECORD_TWO, "folder", "2001-0-nodeA", baseSeq = 0, envelope = ENVELOPE_TWO),
+                    PushItem(RECORD_TWO, baseSeq = 0, envelope = ENVELOPE_TWO),
                 ),
             )
 
@@ -263,7 +292,7 @@ class SyncServerContractTest {
             accountId = accountId,
             voucherDeviceId = deviceIdA,
             newPublicKey = signerB.publicKeySec1(),
-            deviceLabel = "Contract test device B",
+            deviceLabel = LABEL_B,
         )
         deviceIdB = enrolled.deviceId
 
@@ -273,6 +302,11 @@ class SyncServerContractTest {
             signerB.publicKeySec1(),
             devices.single { it.deviceId == deviceIdB }.publicKey,
         )
+        // A vouched label is sealed against the JOINING device's key, not the voucher's. Sealing it
+        // against the wrong one still enrols the device and still stores 157 bytes; it just
+        // produces a name nothing on the account can ever open, which is what this catches.
+        assertEquals(LABEL_B, devices.single { it.deviceId == deviceIdB }.label)
+        assertEquals(LABEL_A, devices.single { it.deviceId == deviceIdA }.label)
     }
 
     @Test
@@ -330,8 +364,25 @@ class SyncServerContractTest {
         private val signerA = TestDeviceSigner()
         private val signerB = TestDeviceSigner()
 
+        /**
+         * The account key both devices share, and one they do not.
+         *
+         * A real device gets its ARK from `SecureUnlockManager`, which needs Android. Here it is
+         * 32 bytes of nothing in particular, because `DeviceLabelCipher` only wants 32 bytes -- the
+         * point of the fixture is that both clients seal and open under the *same* key and the
+         * third does not.
+         */
+        private val ark = ByteArray(SyncProtocol.ARK_BYTES) { it.toByte() }
+        private val foreignArk = ByteArray(SyncProtocol.ARK_BYTES) { (it + 1).toByte() }
+
         private lateinit var clientA: SyncApi
         private lateinit var clientB: SyncApi
+
+        /** Device A's identity with somebody else's account key. See `step 03c`. */
+        private lateinit var clientWrongArk: SyncApi
+
+        private const val LABEL_A = "Contract test device A"
+        private const val LABEL_B = "Contract test device B"
 
         private lateinit var deviceIdA: String
         private lateinit var deviceIdB: String
@@ -381,11 +432,19 @@ class SyncServerContractTest {
                 endpoint = endpoint,
                 transport = OkHttpTransport.create(endpoint),
                 signer = signerA,
+                labelSealer = ArkLabelSealer(ark),
             )
             clientB = SyncHttpClient(
                 endpoint = endpoint,
                 transport = OkHttpTransport.create(endpoint),
                 signer = signerB,
+                labelSealer = ArkLabelSealer(ark),
+            )
+            clientWrongArk = SyncHttpClient(
+                endpoint = endpoint,
+                transport = OkHttpTransport.create(endpoint),
+                signer = signerA,
+                labelSealer = ArkLabelSealer(foreignArk),
             )
             awaitHealthy(clientA)
         }
@@ -411,14 +470,39 @@ class SyncServerContractTest {
             if (libraries.isDirectory && libraries.listFiles { f -> f.extension == "jar" }?.isNotEmpty() == true) {
                 return libraries
             }
-            val wrapper = if (isWindows()) "gradlew.bat" else "./gradlew"
-            val build = ProcessBuilder(wrapper, "installDist", "--console=plain")
-                .directory(serverDir)
-                .redirectErrorStream(true)
-                .start()
+            // Resolved absolutely, and this is not a style preference. `ProcessBuilder.directory()`
+            // sets the CHILD's working directory; the executable in argv[0] is still resolved
+            // against this JVM's working directory and PATH. A bare "gradlew.bat" was therefore
+            // looked for in the repository root -- where there is an Android wrapper, not the
+            // server's -- and on PATH, and found in neither: `CreateProcess error=2`, thrown from
+            // @BeforeClass before a single protocol step ran. "./gradlew" had the same defect and
+            // merely hid it, working only when this JVM's cwd already happened to be `server/`.
+            val wrapper = File(serverDir, if (isWindows()) "gradlew.bat" else "gradlew")
+            check(wrapper.isFile) { "the server's Gradle wrapper is missing: $wrapper" }
+            // Git does not preserve the executable bit on a Windows checkout, so a Unix run of a
+            // repository cloned or shared from Windows can find `gradlew` present and not runnable.
+            // Setting it is cheaper than a confusing "Permission denied" from ProcessBuilder.
+            if (!isWindows() && !wrapper.canExecute()) wrapper.setExecutable(true)
+
+            val command = listOf(wrapper.absolutePath, "installDist", "--console=plain")
+            val build = try {
+                ProcessBuilder(command)
+                    .directory(serverDir)
+                    .redirectErrorStream(true)
+                    .start()
+            } catch (e: java.io.IOException) {
+                // Without this the failure is a bare `CreateProcess error=2` naming nothing.
+                throw IllegalStateException(
+                    "could not start the sync server build: ${command.joinToString(" ")} " +
+                        "(working directory $serverDir)",
+                    e,
+                )
+            }
             val log = build.inputStream.bufferedReader().readText()
             check(build.waitFor(15, TimeUnit.MINUTES)) { "building the sync server timed out" }
-            check(build.exitValue() == 0) { "building the sync server failed:\n$log" }
+            check(build.exitValue() == 0) {
+                "building the sync server failed: ${command.joinToString(" ")}\n$log"
+            }
             check(libraries.isDirectory) { "installDist produced no lib directory at $libraries" }
             return libraries
         }
