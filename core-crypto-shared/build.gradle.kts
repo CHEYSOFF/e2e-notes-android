@@ -18,10 +18,14 @@ kotlin {
 
     // NOTE: no `mingwX64()` canary here, unlike :core-domain, and the absence is deliberate.
     //
-    // Everything in this module is built on the JCA -- `javax.crypto.Cipher`, `Mac`,
+    // The crypto in this module is built on the JCA -- `javax.crypto.Cipher`, `Mac`,
     // `SecretKeyFactory`, `java.security.SecureRandom` -- so it is JVM-bound by construction, not
     // by neglect. A canary target would only be satisfiable by stubbing the crypto out, which
     // would make it prove nothing.
+    //
+    // `commonMain` holds the two pieces that are NOT crypto: `Base64Url` and `SyncProtocol`. They
+    // are there because :core-sync-net's transport is common code and uses both -- see their own
+    // KDoc. They are pure Kotlin, so the canary argument above does not apply to them either way.
     //
     // An Apple target needs real actuals (CryptoKit/CommonCrypto) behind an `expect` seam, and
     // those must produce byte-identical output to these or two devices cannot read each other's
