@@ -31,6 +31,20 @@ class PinWrap(
  */
 object PassphraseCipher {
 
+    /**
+     * The Android app's iteration count, and the default for [wrapWithPin].
+     *
+     * It is a *default* rather than the only value because the two products this class now serves
+     * have different threat models. On Android the wrap is inside `EncryptedSharedPreferences`,
+     * behind a non-exportable Keystore key, so the only way at the PIN is on the device through
+     * `LockoutPolicy` and the iteration count is the second line of defence. On the desktop the
+     * wrap is an ordinary file and the iteration count is the *only* cost an offline guess pays;
+     * `PassphrasePolicy` picks a higher one and explains the arithmetic.
+     *
+     * Raising this constant would re-wrap nothing: [PinWrap] records the count it was created with
+     * and [unwrapWithPin] derives with `wrap.iterations`, so every existing wrap keeps opening at
+     * its own cost. Which is also what makes the parameter safe to add.
+     */
     const val ITERATIONS = 210_000
 
     private const val KEY_BITS = 256
@@ -44,16 +58,27 @@ object PassphraseCipher {
 
     private val secureRandom = SecureRandom()
 
-    /** Wrap [passphrase] under a PBKDF2(pin)-derived AES-256-GCM key. The caller owns/zeroes [pin]. */
-    fun wrapWithPin(passphrase: ByteArray, pin: CharArray): PinWrap {
+    /**
+     * Wrap [passphrase] under a PBKDF2(pin)-derived AES-256-GCM key. The caller owns/zeroes [pin].
+     *
+     * [iterations] defaults to [ITERATIONS]; a caller whose wrap is not protected by a hardware
+     * key passes a higher one. It is recorded in the returned [PinWrap] and is what
+     * [unwrapWithPin] derives with, so the two never have to agree out of band.
+     */
+    fun wrapWithPin(
+        passphrase: ByteArray,
+        pin: CharArray,
+        iterations: Int = ITERATIONS,
+    ): PinWrap {
+        require(iterations > 0) { "iteration count must be positive" }
         val salt = ByteArray(SALT_BYTES).also(secureRandom::nextBytes)
         val iv = ByteArray(IV_BYTES).also(secureRandom::nextBytes)
 
-        val key = deriveKey(pin, salt, ITERATIONS)
+        val key = deriveKey(pin, salt, iterations)
         val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(TAG_BITS, iv))
         val ciphertext = cipher.doFinal(passphrase)
-        return PinWrap(salt = salt, iv = iv, ciphertext = ciphertext, iterations = ITERATIONS)
+        return PinWrap(salt = salt, iv = iv, ciphertext = ciphertext, iterations = iterations)
     }
 
     /** Unwrap; returns null when the PIN is wrong (GCM tag mismatch) or data is tampered. */
