@@ -1,4 +1,4 @@
-package my.cheysoff.core_domain.sync.harness
+package my.cheysoff.core_sync_engine.harness
 
 import my.cheysoff.core_domain.sync.RecordType
 import my.cheysoff.core_domain.sync.SyncRecord

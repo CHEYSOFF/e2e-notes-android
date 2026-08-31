@@ -1,8 +1,8 @@
-package my.cheysoff.core_domain.sync.harness
+package my.cheysoff.core_sync_engine.harness
 
 import my.cheysoff.core_domain.sync.FieldClocks
-import my.cheysoff.core_domain.sync.MergeResult
 import my.cheysoff.core_domain.sync.SyncRecord
+import my.cheysoff.core_sync_engine.PassStats
 
 /**
  * N replicas over one [FakeServer], driven by a [Schedule].
@@ -43,9 +43,6 @@ class Simulation(
 
     val server = FakeServer()
 
-    /** Every merge every replica performed, in order. */
-    val observations = mutableListOf<Replica.MergeObservation>()
-
     val replicas: List<Replica> = List(replicaCount) { index ->
         Replica(
             name = "r$index",
@@ -56,9 +53,18 @@ class Simulation(
             useBaselines = useBaselines,
             // Staggered start times, so the replicas' wall clocks disagree the way real ones do.
             wallMs = 1_000L + index * 3L,
-            onMerge = { observations += it },
         )
     }
+
+    /**
+     * Every replica's pass counts, added together.
+     *
+     * These come from the engine's own [PassStats] rather than from a hook the harness wraps around
+     * the merge. That is deliberate: a sweep that asserts it reached the conflict-copy branch is
+     * asserting it against the number the engine will report in production, so a counter that stops
+     * being incremented is a failing test rather than a quietly weaker sweep.
+     */
+    fun stats(): PassStats = replicas.fold(PassStats.NONE) { total, replica -> total + replica.stats }
 
     /** Runs every operation in [schedule], in order. */
     fun run(schedule: Schedule) {
@@ -76,9 +82,9 @@ class Simulation(
                 is Op.DeleteFolder -> replica.deleteFolder(folderId(op.folder))
                 is Op.Pull -> replica.pull()
                 is Op.Push -> replica.push()
-                // Drop the acknowledgement for everything this replica is about to push, which is
-                // the worst case of the crash §3.3 describes rather than a convenient single row.
-                is Op.CrashDuringPush -> replica.push(dropAckFor = replica.snapshot().keys)
+                // The whole batch is committed by the server and none of it is acknowledged, which
+                // is the worst case of the crash §3.3 describes rather than a convenient single row.
+                is Op.CrashDuringPush -> replica.pushLosingTheAcknowledgement()
                 is Op.SkewClock -> replica.advanceClock(op.deltaMs)
             }
             replica.advanceClock(clockStepMs)
@@ -137,14 +143,21 @@ class Simulation(
         }
     }
 
-    /** How many merges took the conflict-copy branch. */
-    fun conflictCopyCount(): Int = observations.count { it.result is MergeResult.ConflictCopy }
+    /**
+     * How many conflict copies were **written**.
+     *
+     * Not "how many merges decided one was owed", which is a larger number: the copy's uuid is
+     * derived from the losing body, so the same conflict resolved a second time — by a re-delivered
+     * record here or by the mirror-image merge on the other device — names a copy that already
+     * exists and the engine writes nothing. Copies written is the number the user would count.
+     */
+    fun conflictCopyCount(): Int = stats().conflictCopies
 
-    /** How many merges were fed a version handed back by a rejected push. */
-    fun casConflictCount(): Int = observations.count { it.fromConflict }
+    /** How many pushes the server refused with a `409`, each of which was merged rather than dropped. */
+    fun casConflictCount(): Int = stats().conflicts
 
     /** How many merges decided nothing had to be written — the idempotence branch. */
-    fun noChangeCount(): Int = observations.count { it.result == MergeResult.NoChange }
+    fun noChangeCount(): Int = stats().unchanged
 
     /** The whole run, for a failure message. */
     fun describe(): String = buildString {
