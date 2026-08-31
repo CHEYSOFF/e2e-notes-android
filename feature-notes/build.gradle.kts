@@ -60,7 +60,11 @@ dependencies {
     ksp(libs.hilt.compiler)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
-    androidTestImplementation(libs.androidx.espresso.core)
+    // androidx.test:runner rather than espresso-core. Every screen in this app is Compose, so
+    // Espresso's View matchers have nothing to act on, and `Espresso` appears nowhere in the repo;
+    // the runner named in testInstrumentationRunner above is the only part of that dependency tree
+    // androidTest actually uses. Compose UI tests, when they get written, use ui-test-junit4 below.
+    androidTestImplementation(libs.androidx.test.runner)
 
     // --- Test-only, added so ViewModel and Compose UI tests become possible ---------------------
     // kotlinx-coroutines-test is the gate: it supplies the test dispatcher without which no

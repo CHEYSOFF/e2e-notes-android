@@ -62,5 +62,9 @@ dependencies {
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.junit)
-    androidTestImplementation(libs.androidx.espresso.core)
+    // androidx.test:runner rather than espresso-core. Every screen in this app is Compose, so
+    // Espresso's View matchers have nothing to act on, and `Espresso` appears nowhere in the repo;
+    // the runner named in testInstrumentationRunner above is the only part of that dependency tree
+    // androidTest actually uses.
+    androidTestImplementation(libs.androidx.test.runner)
 }
