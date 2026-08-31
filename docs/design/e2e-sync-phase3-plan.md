@@ -21,15 +21,16 @@ built in isolation, and three of the four things it depends on are not finished.
 | Thing | Where | Status |
 |---|---|---|
 | HKDF-SHA256 | `core-crypto/.../sync/Hkdf.kt` | done, RFC 5869 vectors |
-| `ARK → K_content, K_id, accountId` | `core-crypto/.../sync/AccountKeys.kt` | done; **no production call site yet** |
+| `ARK → K_content, K_id, accountId` | `core-crypto/.../sync/AccountKeys.kt` | done; `derive` is called by `feature-pairing/.../SecureUnlockArkStore`, `K_content`/`K_id` still have no consumer |
 | Blinded record IDs | `core-crypto/.../sync/BlindedRecordId.kt` | done |
 | Record envelope (AES-256-GCM, per-record keys, AAD) | `core-crypto/.../sync/RecordEnvelope.kt` | done |
 | 4 KiB bucket padding | `core-crypto/.../sync/RecordPadding.kt` | done |
-| Sealed device labels | `core-crypto/.../sync/DeviceLabelCipher.kt` | done; **no production call site yet** |
+| Sealed device labels | `core-crypto/.../sync/DeviceLabelCipher.kt` | done; called by `app/.../sync/ArkDeviceLabelSealer`, which is what `:core-sync-net` seals enrolment labels through |
 | Protocol constants | `core-crypto/.../sync/SyncProtocol.kt` | done |
 | QR pairing, ECDH, SAS, `ServerHint` | `feature-pairing/` | done |
-| Device identity key (P-256, Keystore, `SHA256withECDSA`) | `feature-pairing/.../identity/DeviceIdentityKey.kt` | done, **`sign()` has no caller yet** |
-| The server | `server/` | done, 114 tests |
+| Device identity key (P-256, Keystore, `SHA256withECDSA`) | `feature-pairing/.../identity/DeviceIdentityKey.kt` | done; `sign()` is reached by `app/.../sync/KeystoreDeviceSigner` |
+| The sync transport | `core-sync-net/` | done; `SyncApi`, `SyncHttpClient`, OkHttp, `SyncServerContractTest` against the real server |
+| The server | `server/` | done, 123 tests |
 
 ### Not built — Phase 3 must either wait for it or build it
 
@@ -38,21 +39,22 @@ built in isolation, and three of the four things it depends on are not finished.
    `e2e-sync-open-questions.md` §4 and is restated as §2 below because this plan's column names have
    to match it or nothing lines up. Tombstones, folder timestamps and `exportSchema = true` *did*
    ship with Trash (`MIGRATION_5_6`); the sync half did not.
-2. **ARK storage.** `AccountRootKey.generateArk()` has no call site, `SecureUnlockManager` has no
-   `currentArk()`, and no `ark_ct`/`ark_iv` is written to `secret_shared_prefs`. Without this there
-   is no `K_content`, no `K_id` and no `accountId`, so **nothing in Phase 3 can run**. It is a small
-   piece of work — one wrap under `HKDF(dbPassphrase, ".../arkwrap")`, one accessor — but it is a
-   hard prerequisite and it belongs to Phase 0/1, not here.
+2. ~~**ARK storage.**~~ **Built since.** `SecureUnlockManager` now owns `ensureArk()`,
+   `currentArk()` and `adoptArk()`, wrapping the key under `HKDF(dbPassphrase, ".../arkwrap")` into
+   `ark_ct`/`ark_iv`, with generation confined to the single call site `ensureArk()` guards. That was
+   the hard prerequisite; `K_content` and `K_id` still have no consumer, because the merge engine
+   that would use them is the part of this plan still unwritten.
 3. **An app-scoped `CoroutineScope`.** The only `CoroutineScope(` in the repository is
    `rememberCoroutineScope()` in `AuthScreen.kt`. Everything else is `viewModelScope`, which is
    cancelled by navigation — mid-push. §7.
-4. **Any HTTP client at all.** The app declares zero permissions and has no network code.
-   `INTERNET` has to be added, along with a client dependency and a decision about certificate
-   pinning against `ServerHint.spkiPinSha256`.
+4. ~~**Any HTTP client at all.**~~ **Built since,** as `:core-sync-net`: OkHttp, `INTERNET`
+   declared in that module's own manifest, and `CertificatePinner` wired to
+   `ServerHint.spkiPinSha256`. What is still missing above it is a `ServerEndpoint` — nothing in the
+   app can yet supply a server URL, so no `SyncApi` is bound.
 
-**If Phase 3 starts before (1) and (2) land, it will start by building them badly.** The
-recommendation is to ship them as their own PR, with the migration test, before any network code
-exists.
+**If Phase 3 starts before (1) lands, it will start by building it badly.** (2) and (4) shipped as
+their own PRs, which is the recommendation this paragraph originally made; (1), the schema debt, is
+the one that is still outstanding and it is still the thing to do first.
 
 ---
 
@@ -88,14 +90,26 @@ core-sync/
 | `SyncRecord` | `core-sync` | `(recType, uuid, rowHlc, fieldClocks, payload)` — the merge's unit |
 | `Merge` | `core-sync` | **pure**: `merge(local: SyncRecord?, remote: SyncRecord): MergeResult` |
 | `MergeResult` | `core-sync` | `Applied(record)`, `NoChange`, `ConflictCopy(winner, loser)`, `Rejected(reason)` |
-| `SyncApi` | `core-sync` | interface over the endpoints the client uses; `SyncError` for every failure |
-| `KtorSyncApi` | `core-data` | the implementation; owns the token, the `Retry-After` back-off and the SPKI pin |
+| `SyncApi` | `core-sync` | interface over the endpoints the client uses; `SyncError` for every failure — **shipped, in `:core-sync-net`; see the note below** |
+| `KtorSyncApi` | `core-data` | the implementation; owns the token, the `Retry-After` back-off and the SPKI pin — **shipped as `SyncHttpClient` in `:core-sync-net`, on OkHttp** |
 | `RecordCodec` | `core-data` | seal/open, and the **only** place that recomputes the blinded ID against the opened payload (§4) |
 | `SyncCursorDao` / `SyncStateEntity` | `core-data` | the `sync_state` table |
 | `SyncQueries` | `core-data` | `dirtyNotes()`, `dirtyFolders()`, `applyRemoteNote()`, `applyRemoteFolder()` — the write path §5.6 |
 | `SyncCoordinator` | `core-data` | the loop of §3; `@Singleton`, holds the app scope, gated on unlock |
 | `SyncScheduler` | `app` | when the loop runs — unlock, foreground tick, pull-to-refresh |
 | `SyncModule` | `core-data/di` | Hilt bindings |
+
+> **The transport half of this table has since been built, and not quite where the table puts it.**
+> It is its own Android library module, `:core-sync-net`, rather than living in `core-data`: it has
+> no Room, no Hilt entry point and no Android dependency beyond the manifest's `INTERNET`
+> permission, so putting it inside the persistence module would have made it untestable for no
+> reason. `SyncApi` and `SyncHttpClient` are there, D1 was settled on OkHttp, and §3's "cache the
+> token in memory only" is implemented as written. Everything above the transport — `Merge`,
+> `RecordCodec`, the cursor, `SyncCoordinator` — is still a plan.
+>
+> Two shapes in this table moved with the wire. A record on the wire is `(blindedId, seq, envelope)`
+> and nothing else, and the device label is sealed: `SyncApi.claimAccount` takes a name, seals it
+> through a `DeviceLabelSealer` seam and sends base64url. §4 below is the authority on the envelope.
 
 ---
 

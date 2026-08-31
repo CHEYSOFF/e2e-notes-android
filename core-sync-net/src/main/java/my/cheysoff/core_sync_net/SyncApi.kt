@@ -61,8 +61,11 @@ interface SyncApi {
      * as the account's first -- and therefore vouching -- device. Naming the account at all
      * requires holding the Account Root Key, since `accountId = HKDF(ARK, ".../account")`.
      *
-     * @param deviceLabel plaintext to the operator, forever. See `server/README.md`'s honest
-     *   disclosure list: whatever is passed here is what the operator reads.
+     * @param deviceLabel the device's human-readable name. It is **sealed before it is sent**, by
+     *   the [DeviceLabelSealer][my.cheysoff.core_sync_net.auth.DeviceLabelSealer] this client was
+     *   built with, so the operator stores a fixed-size blob rather than "Vova's Pixel 7". A name
+     *   longer than the sealer accepts, or a device whose account key is not available, enrols with
+     *   no label at all -- never with a plaintext one.
      */
     suspend fun claimAccount(accountId: String, deviceLabel: String): ClaimOutcome
 
@@ -75,6 +78,8 @@ interface SyncApi {
      * is the entire point of revocation.
      *
      * @param newPublicKey the joining device's public key, SEC1 uncompressed P-256 (65 bytes).
+     * @param deviceLabel the **joining** device's name, sealed against the **joining** device's key
+     *   before it is sent. See [claimAccount].
      */
     suspend fun authorizeDevice(
         accountId: String,
@@ -218,12 +223,20 @@ class EnrolledDevice(val deviceId: String, val createdAt: Long)
  * One row of `GET /v1/devices`.
  *
  * [publicKey] is a SEC1 uncompressed P-256 point, so a UI can render a fingerprint the user can
- * compare across devices. [label] is whatever some device sent at enrolment and is plaintext to the
- * operator.
+ * compare across devices.
  */
 class RemoteDevice(
     val deviceId: String,
-    val label: String,
+    /**
+     * The device's name, opened from the sealed blob the server stores, or **null** when this
+     * device cannot open it.
+     *
+     * Null is an ordinary case, not an error: the row may have been enrolled with no name, sealed
+     * under a different account's key, or substituted in transit -- see `DeviceLabelCipher.open`.
+     * Render such a row as unnamed and let the user identify it by [publicKey]; **do not hide it**,
+     * because a device the user cannot see is a device the user cannot revoke.
+     */
+    val label: String?,
     val publicKey: ByteArray,
     val createdAt: Long,
     /** Null while the device is active. */
@@ -235,16 +248,15 @@ class RemoteDevice(
 }
 
 /**
- * One version of one record, exactly as the server holds it.
+ * One version of one record, exactly as the server holds it: a handle, a sequence number and a
+ * sealed blob.
  *
- * [envelope] is opaque here and must stay that way. [hlc] and [recType] are readable by the server
- * and by anyone who reads its database; they are carried as strings and are not interpreted at this
- * layer either.
+ * That is the whole of it, and the shortness is the point. The record's type and its clock were
+ * once fields here; the server never read either, so they moved inside [envelope] and are now
+ * encrypted like the note itself. [envelope] is opaque at this layer and must stay that way.
  */
 class RemoteRecord(
     val blindedId: String,
-    val recType: String,
-    val hlc: String,
     /**
      * This version's per-account sequence number. **The cursor is made of these**, and of nothing
      * else -- see [Cursor].
@@ -252,13 +264,6 @@ class RemoteRecord(
     val seq: Long,
     /** The sealed ciphertext. Never opened, parsed or validated by this module. */
     val envelope: ByteArray,
-    /**
-     * When the server received this version, by the server's clock.
-     *
-     * Present because a UI can honestly say "last seen at", and for **no** other reason. It is not
-     * ordering, it is not a cursor, and nothing in this module compares two of them. See [Cursor].
-     */
-    val receivedAt: Long,
 )
 
 /** One page of `GET /v1/changes`. */
@@ -286,10 +291,11 @@ class ChangesPage(
  */
 class PushItem(
     val blindedId: String,
-    val recType: String,
-    val hlc: String,
     val baseSeq: Long,
-    /** Sealed ciphertext, produced elsewhere. This module does not look inside it. */
+    /**
+     * Sealed ciphertext, produced elsewhere. This module does not look inside it -- and the record's
+     * type and clock are now in there, so an item has no third thing to carry.
+     */
     val envelope: ByteArray,
 )
 
