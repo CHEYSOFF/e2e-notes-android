@@ -75,13 +75,10 @@ abstract class DataModule {
                 NoteDatabase.DATABASE_NAME
             )
             .openHelperFactory(factory)
-            .addMigrations(
-                NoteDatabase.MIGRATION_1_2,
-                NoteDatabase.MIGRATION_2_3,
-                NoteDatabase.MIGRATION_3_4,
-                NoteDatabase.MIGRATION_4_5,
-                NoteDatabase.MIGRATION_5_6,
-            )
+            // Spread the canonical list rather than naming each migration here: a chain written
+            // out twice is a chain that can disagree with itself, and the half that goes stale is
+            // whichever one nobody is looking at.
+            .addMigrations(*NoteDatabase.ALL_MIGRATIONS)
             .build()
         }
 

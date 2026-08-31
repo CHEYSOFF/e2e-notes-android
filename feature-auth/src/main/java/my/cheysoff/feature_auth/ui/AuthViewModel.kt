@@ -20,9 +20,14 @@ import my.cheysoff.core_crypto.SecureUnlockManager
 import my.cheysoff.core_crypto.UnlockResult
 import my.cheysoff.core_crypto.domain.AuthRepository
 import my.cheysoff.core_crypto.domain.BiometricAuthenticationStatus
+import my.cheysoff.feature_auth.model.AbandonEntry
+import my.cheysoff.feature_auth.model.AuthInitSnapshot
+import my.cheysoff.feature_auth.model.AuthKeypad
 import my.cheysoff.feature_auth.model.AuthMode
 import my.cheysoff.feature_auth.model.AuthScreenIntent
 import my.cheysoff.feature_auth.model.AuthScreenState
+import my.cheysoff.feature_auth.model.BufferWipe
+import my.cheysoff.feature_auth.model.SubmitDecision
 import my.cheysoff.feature_auth.util.BiometricAuthManager
 import my.cheysoff.feature_auth.util.BiometricEnroller
 import javax.crypto.Cipher
@@ -100,7 +105,7 @@ class AuthViewModel @Inject constructor(
             // or restore). Read off-thread, then apply the result on Main.
             val snapshot = withContext(Dispatchers.IO) {
                 val pinSet = secureUnlockManager.isPinSet()
-                InitSnapshot(
+                AuthInitSnapshot(
                     pinSet = pinSet,
                     isMigration = if (pinSet) false else secureUnlockManager.needsMigration(),
                     biometricReady = pinSet && secureUnlockManager.isBiometricEnabled() &&
@@ -109,109 +114,62 @@ class AuthViewModel @Inject constructor(
                 )
             }
 
-            resetBuffer()
-            if (!snapshot.pinSet) {
-                _state.update {
-                    it.copy(
-                        mode = AuthMode.SET_PIN,
-                        isMigration = snapshot.isMigration,
-                        pinLength = 0,
-                        error = null,
-                        // First-run PIN entry has nothing to dismiss back to.
-                        canDismissSheet = false,
-                    )
-                }
-                return@launch
-            }
-
+            // biometricReady already implies pinSet (see the probe above), so assigning it
+            // unconditionally is the same value the returning-user branch used to assign on its
+            // own; and 0 is the only lockoutRemaining a PIN-less install can report, so the ticker
+            // below still cannot start on a first run.
             biometricLandingAvailable = snapshot.biometricReady
-            _state.update {
-                it.copy(
-                    mode = if (snapshot.biometricReady) AuthMode.BIOMETRIC else AuthMode.ENTER_PIN,
-                    pinLength = 0,
-                    error = null,
-                    canDismissSheet = false,
-                )
-            }
+            applyAbandon(AuthKeypad.onInitialize(_state.value, snapshot))
             if (snapshot.lockoutRemaining > 0) startLockoutTicker(snapshot.lockoutRemaining)
         }
     }
 
-    /** Result of the off-thread startup probe in [initialize]. */
-    private data class InitSnapshot(
-        val pinSet: Boolean,
-        val isMigration: Boolean,
-        val biometricReady: Boolean,
-        val lockoutRemaining: Long,
-    )
+    private fun onUsePinInstead() = applyAbandon(AuthKeypad.onUsePinInstead(_state.value))
 
-    private fun onUsePinInstead() {
-        resetBuffer()
-        _state.update {
-            it.copy(mode = AuthMode.ENTER_PIN, pinLength = 0, error = null, canDismissSheet = true)
-        }
-    }
-
+    /**
+     * Whether the sheet may be dismissed — and where to — is [AuthKeypad.onDismiss]'s decision,
+     * which shares its in-flight guard with the digit and backspace paths instead of restating it.
+     * That guard is the one that matters here: while a PIN operation is in flight, pinBuffer has
+     * been handed to setupPin/unlockWithPin on a background thread and PBEKeySpec has not
+     * necessarily cloned it yet; wiping it mid-derivation would score a correct PIN as a failure,
+     * or (in CONFIRM_PIN) persist a wrap derived from a half-zeroed PIN, which locks the user out
+     * of their database forever.
+     */
     private fun onDismissSheet() {
-        // MUST match the isLoading guard in onDigit/onBackspace. While a PIN operation is in
-        // flight, pinBuffer has been handed to setupPin/unlockWithPin on a background thread and
-        // PBEKeySpec has not necessarily cloned it yet; resetBuffer() here would zero the PIN
-        // mid-derivation — scoring a correct PIN as a failure, or (in CONFIRM_PIN) persisting a
-        // wrap derived from a half-zeroed PIN, which locks the user out of their database forever.
-        if (_state.value.isLoading) return
-
-        when (_state.value.mode) {
-            AuthMode.ENTER_PIN -> if (biometricLandingAvailable) {
-                resetBuffer()
-                _state.update {
-                    it.copy(mode = AuthMode.BIOMETRIC, pinLength = 0, error = null, canDismissSheet = false)
-                }
-            }
-
-            AuthMode.CONFIRM_PIN -> {
-                resetBuffer()
-                firstPin?.fill(NUL); firstPin = null
-                _state.update {
-                    it.copy(mode = AuthMode.SET_PIN, pinLength = 0, error = null, canDismissSheet = false)
-                }
-            }
-
-            else -> Unit
-        }
+        applyAbandon(AuthKeypad.onDismiss(_state.value, biometricLandingAvailable) ?: return)
     }
 
     private fun onDigit(c: Char) {
-        val s = _state.value
-        if (s.isLoading || s.lockoutSecondsRemaining > 0) return
-        if (pinCount >= pinLength) return
-        pinBuffer[pinCount++] = c
-        _state.update { it.copy(pinLength = pinCount, error = null) }
-        if (pinCount == pinLength) submit()
+        // Decided against the buffer's own count, not the dots': the two diverge during the
+        // "Checking..." window, and the buffer's count is the one that must bound the write.
+        val accepted = AuthKeypad.onDigit(_state.value, pinCount) ?: return
+        pinBuffer[accepted.writeIndex] = c
+        pinCount = accepted.writeIndex + 1
+        _state.value = accepted.state
+        if (accepted.submit) submit()
     }
 
     private fun onBackspace() {
-        val s = _state.value
-        if (s.isLoading || s.lockoutSecondsRemaining > 0) return
-        if (pinCount == 0) return
-        pinCount--
-        pinBuffer[pinCount] = NUL
-        _state.update { it.copy(pinLength = pinCount) }
+        val accepted = AuthKeypad.onBackspace(_state.value, pinCount) ?: return
+        pinBuffer[accepted.clearIndex] = NUL
+        pinCount = accepted.clearIndex
+        _state.value = accepted.state
     }
 
     private fun submit() {
-        when (_state.value.mode) {
-            AuthMode.SET_PIN -> {
+        when (val decision = AuthKeypad.onSubmit(_state.value)) {
+            is SubmitDecision.HoldForConfirm -> {
+                // The confirm step gets its own copy, taken BEFORE the buffer is wiped, so the
+                // comparison later reads a snapshot rather than the live UI-owned array.
                 firstPin?.fill(NUL)
                 firstPin = pinBuffer.copyOf(pinCount)
                 resetBuffer()
-                _state.update {
-                    it.copy(mode = AuthMode.CONFIRM_PIN, pinLength = 0, error = null, canDismissSheet = true)
-                }
+                _state.value = decision.state
             }
 
-            AuthMode.CONFIRM_PIN -> confirmPin()
-            AuthMode.ENTER_PIN -> enterPin()
-            else -> Unit
+            SubmitDecision.ConfirmPin -> confirmPin()
+            SubmitDecision.EnterPin -> enterPin()
+            SubmitDecision.None -> Unit
         }
     }
 
@@ -221,20 +179,11 @@ class AuthViewModel @Inject constructor(
             (0 until pinCount).all { first[it] == pinBuffer[it] }
 
         if (!matches) {
-            firstPin?.fill(NUL); firstPin = null
-            resetBuffer()
-            _state.update {
-                it.copy(
-                    mode = AuthMode.SET_PIN,
-                    pinLength = 0,
-                    error = "PINs didn't match. Try again.",
-                    canDismissSheet = false,
-                )
-            }
+            applyAbandon(AuthKeypad.onConfirmMismatch(_state.value))
             return
         }
 
-        _state.update { it.copy(isLoading = true, error = null) }
+        _state.value = AuthKeypad.onVerificationStarted(_state.value)
         // Hand the KDF its OWN copy and release the UI buffer up front. pinBuffer is UI-owned and
         // could be zeroed by a dismiss or an activity recreation while the derivation is still
         // running on a background thread; deriving from a snapshot makes that harmless instead of
@@ -257,7 +206,7 @@ class AuthViewModel @Inject constructor(
     }
 
     private fun enterPin() {
-        _state.update { it.copy(isLoading = true, error = null) }
+        _state.value = AuthKeypad.onVerificationStarted(_state.value)
         // Same snapshot discipline as confirmPin: the KDF must not read the UI-owned buffer.
         val unlockCopy = pinBuffer.copyOf(pinCount)
         resetBuffer()
@@ -373,6 +322,25 @@ class AuthViewModel @Inject constructor(
             }
             _state.update { it.copy(lockoutSecondsRemaining = 0, error = null) }
         }
+    }
+
+    /**
+     * Carry out an [AbandonEntry]: zero the secret buffers it names, THEN publish its state.
+     *
+     * The order is the point. Every state an [AbandonEntry] carries reports `pinLength = 0`, and
+     * that claim has to be true of the actual buffer before anything can observe it. Routing every
+     * exit path through this one function is also what keeps the wipes uniform: [BufferWipe] has
+     * no "wipe nothing" member, so a transition cannot be added that quietly skips them.
+     */
+    private fun applyAbandon(outcome: AbandonEntry) {
+        when (outcome.wipe) {
+            BufferWipe.PIN -> resetBuffer()
+            BufferWipe.PIN_AND_FIRST -> {
+                resetBuffer()
+                firstPin?.fill(NUL); firstPin = null
+            }
+        }
+        _state.value = outcome.state
     }
 
     private fun resetBuffer() {
