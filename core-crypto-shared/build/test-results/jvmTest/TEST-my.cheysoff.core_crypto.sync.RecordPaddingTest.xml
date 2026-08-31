@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="RecordPaddingTest[jvm]" tests="19" skipped="0" failures="0" errors="0" timestamp="2026-08-31T22:04:35.313Z" hostname="CHEYSOFF" time="0.007">
+  <properties/>
+  <testcase name="crossing a bucket boundary costs exactly one more bucket[jvm]" classname="my.cheysoff.core_crypto.sync.RecordPaddingTest" time="0.0"/>
+  <testcase name="every payload in the first bucket pads to the same length[jvm]" classname="my.cheysoff.core_crypto.sync.RecordPaddingTest" time="0.0"/>
+  <testcase name="empty content round-trips to an empty array[jvm]" classname="my.cheysoff.core_crypto.sync.RecordPaddingTest" time="0.0"/>
+  <testcase name="content one byte over a bucket round-trips[jvm]" classname="my.cheysoff.core_crypto.sync.RecordPaddingTest" time="0.001"/>
+  <testcase name="the bucket is large enough to hide a whole short note[jvm]" classname="my.cheysoff.core_crypto.sync.RecordPaddingTest" time="0.001"/>
+  <testcase name="padded size is always a positive multiple of the bucket size[jvm]" classname="my.cheysoff.core_crypto.sync.RecordPaddingTest" time="0.001"/>
+  <testcase name="content that is entirely zero bytes round-trips at full length[jvm]" classname="my.cheysoff.core_crypto.sync.RecordPaddingTest" time="0.0"/>
+  <testcase name="pad does not modify its input[jvm]" classname="my.cheysoff.core_crypto.sync.RecordPaddingTest" time="0.0"/>
+  <testcase name="unpad returns null for a block shorter than the length prefix[jvm]" classname="my.cheysoff.core_crypto.sync.RecordPaddingTest" time="0.0"/>
+  <testcase name="a single byte round-trips[jvm]" classname="my.cheysoff.core_crypto.sync.RecordPaddingTest" time="0.0"/>
+  <testcase name="content exactly filling a bucket round-trips[jvm]" classname="my.cheysoff.core_crypto.sync.RecordPaddingTest" time="0.001"/>
+  <testcase name="a realistic note body round-trips byte for byte[jvm]" classname="my.cheysoff.core_crypto.sync.RecordPaddingTest" time="0.0"/>
+  <testcase name="content one byte under a bucket round-trips[jvm]" classname="my.cheysoff.core_crypto.sync.RecordPaddingTest" time="0.0"/>
+  <testcase name="content whose own trailing bytes are zero round-trips[jvm]" classname="my.cheysoff.core_crypto.sync.RecordPaddingTest" time="0.0"/>
+  <testcase name="unpad returns null when the declared length exceeds the block[jvm]" classname="my.cheysoff.core_crypto.sync.RecordPaddingTest" time="0.0"/>
+  <testcase name="unpad returns null for a negative declared length[jvm]" classname="my.cheysoff.core_crypto.sync.RecordPaddingTest" time="0.001"/>
+  <testcase name="content exactly two buckets round-trips[jvm]" classname="my.cheysoff.core_crypto.sync.RecordPaddingTest" time="0.001"/>
+  <testcase name="the length prefix is counted so a full-bucket payload does not fit one bucket[jvm]" classname="my.cheysoff.core_crypto.sync.RecordPaddingTest" time="0.0"/>
+  <testcase name="unpad accepts a block whose declared length exactly fills it[jvm]" classname="my.cheysoff.core_crypto.sync.RecordPaddingTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

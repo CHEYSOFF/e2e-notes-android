@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="HkdfTest[jvm]" tests="16" skipped="0" failures="0" errors="0" timestamp="2026-08-31T22:04:35.153Z" hostname="CHEYSOFF" time="0.011">
+  <properties/>
+  <testcase name="RFC 5869 A1 full derive produces the published OKM[jvm]" classname="my.cheysoff.core_crypto.sync.HkdfTest" time="0.001"/>
+  <testcase name="RFC 5869 A3 expand with empty info produces the published OKM[jvm]" classname="my.cheysoff.core_crypto.sync.HkdfTest" time="0.0"/>
+  <testcase name="expand rejects a zero length[jvm]" classname="my.cheysoff.core_crypto.sync.HkdfTest" time="0.001"/>
+  <testcase name="output is a prefix-consistent stream so a shorter length is a prefix of a longer one[jvm]" classname="my.cheysoff.core_crypto.sync.HkdfTest" time="0.001"/>
+  <testcase name="a null salt is treated exactly like an empty salt[jvm]" classname="my.cheysoff.core_crypto.sync.HkdfTest" time="0.0"/>
+  <testcase name="RFC 5869 A1 extract produces the published PRK[jvm]" classname="my.cheysoff.core_crypto.sync.HkdfTest" time="0.001"/>
+  <testcase name="expand rejects a length above the RFC 5869 maximum[jvm]" classname="my.cheysoff.core_crypto.sync.HkdfTest" time="0.001"/>
+  <testcase name="RFC 5869 A3 extract with an empty salt produces the published PRK[jvm]" classname="my.cheysoff.core_crypto.sync.HkdfTest" time="0.0"/>
+  <testcase name="RFC 5869 A2 full derive produces the published OKM[jvm]" classname="my.cheysoff.core_crypto.sync.HkdfTest" time="0.001"/>
+  <testcase name="expand accepts exactly the RFC 5869 maximum length[jvm]" classname="my.cheysoff.core_crypto.sync.HkdfTest" time="0.001"/>
+  <testcase name="RFC 5869 A2 expand produces the published OKM across three blocks[jvm]" classname="my.cheysoff.core_crypto.sync.HkdfTest" time="0.001"/>
+  <testcase name="an explicit all-zero salt of HashLen bytes matches the empty salt[jvm]" classname="my.cheysoff.core_crypto.sync.HkdfTest" time="0.001"/>
+  <testcase name="RFC 5869 A3 full derive produces the published OKM[jvm]" classname="my.cheysoff.core_crypto.sync.HkdfTest" time="0.0"/>
+  <testcase name="RFC 5869 A2 extract produces the published PRK[jvm]" classname="my.cheysoff.core_crypto.sync.HkdfTest" time="0.0"/>
+  <testcase name="RFC 5869 A1 expand produces the published OKM[jvm]" classname="my.cheysoff.core_crypto.sync.HkdfTest" time="0.0"/>
+  <testcase name="changing only info changes the output[jvm]" classname="my.cheysoff.core_crypto.sync.HkdfTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

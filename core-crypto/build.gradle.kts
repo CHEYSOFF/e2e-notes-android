@@ -51,6 +51,11 @@ android {
 }
 
 dependencies {
+    // `api`, not `implementation`: the sync primitives moved to this module keep their original
+    // package names, so every existing consumer of :core-crypto still imports
+    // `my.cheysoff.core_crypto.sync.*` and needs them on its compile classpath. Making the split
+    // invisible to consumers is the whole point -- nothing else in the app changed.
+    api(project(":core-crypto-shared"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)

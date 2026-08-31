@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="AccountRootKeyTest[jvm]" tests="11" skipped="0" failures="0" errors="0" timestamp="2026-08-31T22:04:35.019Z" hostname="CHEYSOFF" time="0.028">
+  <properties/>
+  <testcase name="generateArk returns different bytes every call[jvm]" classname="my.cheysoff.core_crypto.sync.AccountRootKeyTest" time="0.002"/>
+  <testcase name="generateArk returns 32 bytes[jvm]" classname="my.cheysoff.core_crypto.sync.AccountRootKeyTest" time="0.0"/>
+  <testcase name="derive does not modify the ARK it was given[jvm]" classname="my.cheysoff.core_crypto.sync.AccountRootKeyTest" time="0.006"/>
+  <testcase name="derive rejects a short ARK[jvm]" classname="my.cheysoff.core_crypto.sync.AccountRootKeyTest" time="0.006"/>
+  <testcase name="the three derived values are different from each other[jvm]" classname="my.cheysoff.core_crypto.sync.AccountRootKeyTest" time="0.003"/>
+  <testcase name="two generated ARKs derive completely unrelated account identities[jvm]" classname="my.cheysoff.core_crypto.sync.AccountRootKeyTest" time="0.0"/>
+  <testcase name="destroy zeroes the secret keys and leaves the public accountId intact[jvm]" classname="my.cheysoff.core_crypto.sync.AccountRootKeyTest" time="0.001"/>
+  <testcase name="a one-bit change in the ARK changes all three derived values[jvm]" classname="my.cheysoff.core_crypto.sync.AccountRootKeyTest" time="0.003"/>
+  <testcase name="derive returns the documented lengths[jvm]" classname="my.cheysoff.core_crypto.sync.AccountRootKeyTest" time="0.001"/>
+  <testcase name="derive is deterministic for the same ARK[jvm]" classname="my.cheysoff.core_crypto.sync.AccountRootKeyTest" time="0.003"/>
+  <testcase name="derive rejects a long ARK[jvm]" classname="my.cheysoff.core_crypto.sync.AccountRootKeyTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

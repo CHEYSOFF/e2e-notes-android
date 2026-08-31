@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="HlcNodeTest[jvm]" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-08-31T22:04:33.950Z" hostname="CHEYSOFF" time="0.064">
+  <properties/>
+  <testcase name="an empty device id is rejected[jvm]" classname="my.cheysoff.core_crypto.HlcNodeTest" time="0.002"/>
+  <testcase name="the ARK is not modified by the derivation[jvm]" classname="my.cheysoff.core_crypto.HlcNodeTest" time="0.023"/>
+  <testcase name="two devices on one account get different nodes[jvm]" classname="my.cheysoff.core_crypto.HlcNodeTest" time="0.001"/>
+  <testcase name="the derivation is HKDF over the ARK salted with the device id[jvm]" classname="my.cheysoff.core_crypto.HlcNodeTest" time="0.009"/>
+  <testcase name="the node does not contain the device id, in any form[jvm]" classname="my.cheysoff.core_crypto.HlcNodeTest" time="0.013"/>
+  <testcase name="one device on two accounts gets unrelated nodes[jvm]" classname="my.cheysoff.core_crypto.HlcNodeTest" time="0.002"/>
+  <testcase name="leading zero bytes are not dropped[jvm]" classname="my.cheysoff.core_crypto.HlcNodeTest" time="0.002"/>
+  <testcase name="the info string is versioned and namespaced like the rest of the protocol[jvm]" classname="my.cheysoff.core_crypto.HlcNodeTest" time="0.0"/>
+  <testcase name="the same account key and device always give the same node[jvm]" classname="my.cheysoff.core_crypto.HlcNodeTest" time="0.001"/>
+  <testcase name="the node is lowercase hex of the documented length[jvm]" classname="my.cheysoff.core_crypto.HlcNodeTest" time="0.006"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

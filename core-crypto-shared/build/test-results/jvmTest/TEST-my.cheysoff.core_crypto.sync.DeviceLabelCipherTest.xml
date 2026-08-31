@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="DeviceLabelCipherTest[jvm]" tests="22" skipped="0" failures="0" errors="0" timestamp="2026-08-31T22:04:35.120Z" hostname="CHEYSOFF" time="0.029">
+  <properties/>
+  <testcase name="a label does not open under a different ARK[jvm]" classname="my.cheysoff.core_crypto.sync.DeviceLabelCipherTest" time="0.002"/>
+  <testcase name="the longest label that fits round-trips[jvm]" classname="my.cheysoff.core_crypto.sync.DeviceLabelCipherTest" time="0.001"/>
+  <testcase name="an unknown version byte is rejected[jvm]" classname="my.cheysoff.core_crypto.sync.DeviceLabelCipherTest" time="0.001"/>
+  <testcase name="a multi-byte label is measured in bytes and not in characters[jvm]" classname="my.cheysoff.core_crypto.sync.DeviceLabelCipherTest" time="0.004"/>
+  <testcase name="sealing a label too long to fit is refused rather than truncated[jvm]" classname="my.cheysoff.core_crypto.sync.DeviceLabelCipherTest" time="0.0"/>
+  <testcase name="associated data is exactly the version byte and the length-prefixed public key[jvm]" classname="my.cheysoff.core_crypto.sync.DeviceLabelCipherTest" time="0.001"/>
+  <testcase name="a second device deriving from the same ARK opens the first device's label[jvm]" classname="my.cheysoff.core_crypto.sync.DeviceLabelCipherTest" time="0.001"/>
+  <testcase name="a flipped tag bit fails to open[jvm]" classname="my.cheysoff.core_crypto.sync.DeviceLabelCipherTest" time="0.0"/>
+  <testcase name="an empty label round-trips[jvm]" classname="my.cheysoff.core_crypto.sync.DeviceLabelCipherTest" time="0.001"/>
+  <testcase name="every sealed label is the same length whatever the name[jvm]" classname="my.cheysoff.core_crypto.sync.DeviceLabelCipherTest" time="0.007"/>
+  <testcase name="a flipped ciphertext bit fails to open[jvm]" classname="my.cheysoff.core_crypto.sync.DeviceLabelCipherTest" time="0.001"/>
+  <testcase name="an emoji label round-trips[jvm]" classname="my.cheysoff.core_crypto.sync.DeviceLabelCipherTest" time="0.0"/>
+  <testcase name="associated data changes with the public key[jvm]" classname="my.cheysoff.core_crypto.sync.DeviceLabelCipherTest" time="0.001"/>
+  <testcase name="an ARK of the wrong size is refused[jvm]" classname="my.cheysoff.core_crypto.sync.DeviceLabelCipherTest" time="0.0"/>
+  <testcase name="a blob of the wrong length is rejected[jvm]" classname="my.cheysoff.core_crypto.sync.DeviceLabelCipherTest" time="0.001"/>
+  <testcase name="a flipped nonce bit fails to open[jvm]" classname="my.cheysoff.core_crypto.sync.DeviceLabelCipherTest" time="0.001"/>
+  <testcase name="the label key is domain-separated from the record keys[jvm]" classname="my.cheysoff.core_crypto.sync.DeviceLabelCipherTest" time="0.001"/>
+  <testcase name="a label of non-ASCII characters round-trips[jvm]" classname="my.cheysoff.core_crypto.sync.DeviceLabelCipherTest" time="0.001"/>
+  <testcase name="a label sealed for one device does not open for another[jvm]" classname="my.cheysoff.core_crypto.sync.DeviceLabelCipherTest" time="0.0"/>
+  <testcase name="two seals of the same label produce different blobs[jvm]" classname="my.cheysoff.core_crypto.sync.DeviceLabelCipherTest" time="0.003"/>
+  <testcase name="seal then open returns the original label[jvm]" classname="my.cheysoff.core_crypto.sync.DeviceLabelCipherTest" time="0.0"/>
+  <testcase name="the sealed blob does not contain the label[jvm]" classname="my.cheysoff.core_crypto.sync.DeviceLabelCipherTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

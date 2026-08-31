@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="Base64UrlTest[jvm]" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-08-31T22:04:35.095Z" hostname="CHEYSOFF" time="0.009">
+  <properties/>
+  <testcase name="every one of the 64 alphabet symbols is emitted in the right position[jvm]" classname="my.cheysoff.core_crypto.sync.Base64UrlTest" time="0.007"/>
+  <testcase name="a multi-group input round-trips against a known base64 value[jvm]" classname="my.cheysoff.core_crypto.sync.Base64UrlTest" time="0.0"/>
+  <testcase name="the URL-safe alphabet is used for the last two symbols[jvm]" classname="my.cheysoff.core_crypto.sync.Base64UrlTest" time="0.0"/>
+  <testcase name="a 16-byte input encodes to 22 characters[jvm]" classname="my.cheysoff.core_crypto.sync.Base64UrlTest" time="0.001"/>
+  <testcase name="RFC 4648 vectors encode without padding[jvm]" classname="my.cheysoff.core_crypto.sync.Base64UrlTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
