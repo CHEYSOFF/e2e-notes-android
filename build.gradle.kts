@@ -428,7 +428,15 @@ tasks.register("verify") {
             "instrumented suites run on an attached device."
 
     dependsOn(subprojects.map { "${it.path}:test" })
-    dependsOn(subprojects.map { "${it.path}:assembleDebugAndroidTest" })
+    // Resolved lazily, and by lookup rather than by name, because `assembleDebugAndroidTest` only
+    // exists in modules that apply an Android plugin. :desktop is Kotlin/JVM (Compose Desktop),
+    // so naming the task unconditionally would fail the whole `verify` graph with "task not
+    // found" -- turning the pre-merge gate into something nobody can run. A `provider {}` defers
+    // the lookup until after every subproject has been configured, so a module that DOES have
+    // instrumented tests is still picked up automatically, which is the property this list had.
+    dependsOn(provider {
+        subprojects.mapNotNull { it.tasks.findByName("assembleDebugAndroidTest") }
+    })
 
     if (verifyRequested) {
         if (verifyDevices.isNotEmpty()) {
