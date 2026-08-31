@@ -182,6 +182,46 @@ class SecureUnlockManager @Inject constructor(
     /** True once a PIN has been set up (a PIN-wrapped passphrase exists). */
     fun isPinSet(): Boolean = prefs.contains(KEY_PIN_CT)
 
+    /**
+     * This device's local identifier, generated on first use and stable for the life of the
+     * install.
+     *
+     * ## Why it lives here and not in the database
+     *
+     * It has to be readable while the app is **locked**. `DataModule.provideNoteDatabase` throws
+     * when `currentPassphrase()` is null, so while locked there is no database to read a device id
+     * out of — and the sync engine needs one before it has unlocked anything, to run the session
+     * handshake. `secret_shared_prefs` is opened under a Keystore master key rather than the PIN,
+     * so it is available at that moment. That is the whole reason for the split, and it is why
+     * this is the one sync value that is not a column.
+     *
+     * ## What it is not
+     *
+     * - **Not the server's `deviceId`.** That one is server-assigned during enrolment and is only
+     *   meaningful to the server. Keep both; conflating them is design decision D4's trap.
+     * - **Not hardware-derived.** 128 bits from [SecureRandom], nothing else. Not
+     *   `Settings.Secure.ANDROID_ID`, not the build fingerprint, not the model. A reinstall gets a
+     *   new one, which is correct: it is an identifier for this *install*.
+     * - **Not the HLC node.** It is the *salt* the node is derived from ([HlcNode]) and, unlike
+     *   the node, it is not published with every record. Using it directly as a node would hand
+     *   the operator a per-record log of which device made every edit.
+     *
+     * Generated lazily rather than in [setupPin] for the same reason [ensureArk] is lazy: every
+     * existing install has already run `setupPin`, so a value minted there would never reach them.
+     * Written with `commit` so the id survives a crash on the very next line — two different ids
+     * for one install would fork the node pseudonym and, worse, could look like two enrolments.
+     */
+    fun deviceId(): String {
+        prefs.getString(KEY_DEVICE_ID, null)?.let { if (it.isNotEmpty()) return it }
+        val bytes = ByteArray(DEVICE_ID_BYTES).also { SecureRandom().nextBytes(it) }
+        // Hex, not Base64: this string is used as HKDF salt and compared for equality, and the
+        // Base64 helper in this file emits a trailing newline (Base64.DEFAULT), which has caused
+        // enough trouble elsewhere to be worth avoiding in a value that is never decoded back.
+        val id = bytes.joinToString("") { b -> "%02x".format(b.toInt() and 0xFF) }
+        prefs.edit(commit = true) { putString(KEY_DEVICE_ID, id) }
+        return id
+    }
+
     /** True when a legacy raw passphrase is present and no PIN has been set up yet. */
     fun needsMigration(): Boolean = prefs.contains(KEY_LEGACY_PASSPHRASE) && !isPinSet()
 
@@ -358,7 +398,27 @@ class SecureUnlockManager @Inject constructor(
     private fun setInMemArk(ark: ByteArray?) {
         inMemArk?.fill(0)
         inMemArk = ark
+        // Recomputed here rather than on every read because it is read on EVERY database write
+        // (the HLC's node component) and the inputs change in exactly one place — this one. The
+        // derivation is two HMACs, so this is a convenience rather than a necessity, but caching
+        // it also means the ARK is not repeatedly copied out of the field it lives in.
+        hlcNode = ark?.let { HlcNode.derive(it, deviceId()) } ?: ""
     }
+
+    /**
+     * The node component of this device's hybrid logical clock, or `""` when there is no account
+     * key to derive one from (this device is locked, or has never paired).
+     *
+     * A **per-account pseudonym**, not a device identifier, because it travels to the server in
+     * plaintext with every record. [HlcNode] documents the derivation and, more importantly, why
+     * the obvious alternatives are all wrong; read it before changing anything about this value.
+     *
+     * `""` is a legitimate reading, not an error: see [HlcNode] for why a device without an
+     * account deliberately publishes nothing here rather than a local fallback.
+     */
+    @Volatile
+    var hlcNode: String = ""
+        private set
 
     /** A copy of the unlocked passphrase, or null if locked. Caller owns/zeroes the copy. */
     fun currentPassphrase(): ByteArray? = inMem?.copyOf()
@@ -523,6 +583,16 @@ class SecureUnlockManager @Inject constructor(
          */
         const val KEY_ARK_IV = "ark_iv"
         const val KEY_ARK_CT = "ark_ct"
+
+        /**
+         * This install's local device id. Absent until [deviceId] is first called, and never
+         * rewritten afterwards — a second value would change the HLC node pseudonym derived from
+         * it and split one device's history in two.
+         */
+        const val KEY_DEVICE_ID = "device_id"
+
+        /** 128 bits of randomness, the same width as the server-visible `accountId`. */
+        const val DEVICE_ID_BYTES = 16
 
         const val KEY_LEGACY_PASSPHRASE = "db_passphrase"
     }
