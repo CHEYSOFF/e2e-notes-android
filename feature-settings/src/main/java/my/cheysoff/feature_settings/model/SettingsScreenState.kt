@@ -38,6 +38,54 @@ data class SettingsScreenState(
      */
     val biometricNotice: String? = null,
 
+    // --- Sync ---
+
+    /**
+     * Whether this device has completed a pairing, or null until the (off-main-thread) Keystore
+     * read has answered. Null renders as "Checking…" rather than as "not paired" — see
+     * [syncStatus].
+     */
+    val paired: Boolean? = null,
+
+    /**
+     * The **persisted** sync server address, or null when none is set.
+     *
+     * Mirrored from the repository, exactly as [sortOrder] is: it changes only when a write
+     * succeeded, so the status line can never describe an address that was not actually stored.
+     */
+    val serverUrl: String? = null,
+
+    /**
+     * Whether [serverUrl] still passes validation. False only for a value the current rule would
+     * refuse, which the screen itself will not write — see `SyncStatus.SERVER_UNUSABLE`.
+     */
+    val serverUrlUsable: Boolean = true,
+
+    /** What is in the text field. A draft: it is not stored until Save is tapped. */
+    val serverUrlDraft: String = "",
+
+    /**
+     * True once the field has been edited and not yet saved or cleared. While it is true, an
+     * incoming repository emission leaves the field alone rather than overwriting what is being
+     * typed.
+     */
+    val serverUrlDirty: Boolean = false,
+
+    /** Why the last Save was refused, or null. Cleared on the next keystroke. */
+    val serverUrlError: String? = null,
+
+    /** True while the "Check server" round trip is in flight. */
+    val serverCheckBusy: Boolean = false,
+
+    /**
+     * Whether the most recent completed check failed to reach the server. Reset whenever the
+     * stored address changes, because a failure describes one address.
+     */
+    val lastCheckFailed: Boolean = false,
+
+    /** One-line outcome of the last check, shown beneath the card. Null before any check. */
+    val serverCheckNotice: String? = null,
+
     // --- About ---
 
     /** e.g. "1.0 (1)". Empty only in a preview/default state. */
