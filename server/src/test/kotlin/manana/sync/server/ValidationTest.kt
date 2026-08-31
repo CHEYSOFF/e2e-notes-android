@@ -1,5 +1,6 @@
 package manana.sync.server
 
+import io.ktor.server.testing.ApplicationTestBuilder
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -42,7 +43,7 @@ class ValidationTest {
         val me = enrol(harness)
         val body = JSON_LENIENT.encodeToString(
             UpsertRequest(
-                listOf(UpsertRequestItem(blindedId(1), "note", "1-0-n", 0, "not base64!!! @@@"))
+                listOf(UpsertRequestItem(blindedId(1), 0, "not base64!!! @@@"))
             )
         )
         val response = client.postJson("/v1/records", body, me.token)
@@ -125,29 +126,6 @@ class ValidationTest {
     }
 
     @Test
-    fun anEmptyOrOverlongRecTypeIsRejected() = serverTest { harness ->
-        val me = enrol(harness)
-        assertEquals(
-            400,
-            push(me.token, upsertItem(blindedId(1), envelope, 0, recType = "")).status.value,
-        )
-        assertEquals(
-            400,
-            push(me.token, upsertItem(blindedId(1), envelope, 0, recType = "n".repeat(33))).status.value,
-        )
-    }
-
-    @Test
-    fun anEmptyOrOverlongHlcIsRejected() = serverTest { harness ->
-        val me = enrol(harness)
-        assertEquals(400, push(me.token, upsertItem(blindedId(1), envelope, 0, hlc = "")).status.value)
-        assertEquals(
-            400,
-            push(me.token, upsertItem(blindedId(1), envelope, 0, hlc = "h".repeat(129))).status.value,
-        )
-    }
-
-    @Test
     fun aNegativeBaseSeqIsRejected() = serverTest { harness ->
         val me = enrol(harness)
         val response = push(me.token, upsertItem(blindedId(1), envelope, baseSeq = -1))
@@ -156,23 +134,41 @@ class ValidationTest {
     }
 
     @Test
-    fun anOverlongDeviceLabelIsRejected() = serverTest { harness ->
-        val accountId = randomAccountId()
-        val device = TestDevice()
-        val ts = harness.clock.now
-        val body = JSON_LENIENT.encodeToString(
-            ClaimRequest(
-                accountId,
-                device.publicKeyB64,
-                "L".repeat(65),
-                ts,
-                device.sign(SignedMessage.claim(accountId, device.publicKeyB64, ts)),
-            )
-        )
-        val response = client.postJson("/v1/account", body)
+    fun anOversizedSealedLabelIsRejected() = serverTest { harness ->
+        // 700 base64url characters decode to 525 bytes, past the 512-byte cap. The `devices` table
+        // is not storage.
+        val response = claimWithSealedLabel(harness, "A".repeat(700))
         assertEquals(400, response.status.value)
         assertEquals("invalid_label", response.errorCode())
     }
+
+    @Test
+    fun aSealedLabelOutsideTheBase64UrlAlphabetIsRejected() = serverTest { harness ->
+        val response = claimWithSealedLabel(harness, "not base64!!")
+        assertEquals(400, response.status.value)
+        assertEquals("invalid_label", response.errorCode())
+    }
+
+    private suspend fun ApplicationTestBuilder.claimWithSealedLabel(
+        harness: Harness,
+        sealedLabel: String,
+    ) = client.postJson(
+        "/v1/account",
+        run {
+            val accountId = randomAccountId()
+            val device = TestDevice()
+            val ts = harness.clock.now
+            JSON_LENIENT.encodeToString(
+                ClaimRequest(
+                    accountId,
+                    device.publicKeyB64,
+                    sealedLabel,
+                    ts,
+                    device.sign(SignedMessage.claim(accountId, device.publicKeyB64, ts)),
+                )
+            )
+        },
+    )
 
     /**
      * An unknown `accountId` on an authenticated path cannot even be expressed -- the only way to

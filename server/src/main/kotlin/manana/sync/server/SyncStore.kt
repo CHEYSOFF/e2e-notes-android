@@ -6,21 +6,34 @@ import java.sql.ResultSet
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
-/** One stored version of one record. [envelope] is opaque ciphertext and is never interpreted. */
+/**
+ * One stored version of one record: the handle it is filed under, the sequence number this server
+ * gave it, and opaque ciphertext that is never interpreted.
+ *
+ * Those three fields are the whole of it, and that is the privacy property rather than an
+ * accident. A record's type and its hybrid logical clock used to sit here as well; the server
+ * length-checked them, stored them and echoed them back without ever reading either, so they moved
+ * inside the envelope where they are encrypted. **Do not add a field to this class that the server
+ * does not itself read** -- anything the server merely carries belongs in the ciphertext.
+ */
 class RecordVersion(
     val blindedId: String,
-    val recType: String,
-    val hlc: String,
     val seq: Long,
     val envelope: ByteArray,
-    val receivedAt: Long,
 )
 
-/** An enrolled device. The server holds its public key and nothing else about it. */
+/**
+ * An enrolled device: its public key, and a sealed blob the client calls its label.
+ *
+ * [sealedLabel] is AES-GCM ciphertext produced by `core-crypto/.../sync/DeviceLabelCipher`, and
+ * every one of them is the same length whatever the name inside, so it tells this server neither
+ * what the device is called nor how long the name is. It is stored and returned; it is never
+ * matched, ordered or parsed. Empty means the client sent no label.
+ */
 class DeviceRow(
     val deviceId: String,
     val publicKey: ByteArray,
-    val label: String,
+    val sealedLabel: ByteArray,
     val createdAt: Long,
     val revokedAt: Long?,
 )
@@ -31,8 +44,6 @@ class SessionRow(val accountId: String, val deviceId: String)
 /** One item of a `POST /v1/records` batch, after validation. */
 class UpsertItem(
     val blindedId: String,
-    val recType: String,
-    val hlc: String,
     val baseSeq: Long,
     val envelope: ByteArray,
 )
@@ -110,12 +121,12 @@ class SyncStore(
             """,
             """
             CREATE TABLE IF NOT EXISTS devices (
-                account_id TEXT    NOT NULL,
-                device_id  TEXT    NOT NULL,
-                public_key BLOB    NOT NULL,
-                label      TEXT    NOT NULL,
-                created_at INTEGER NOT NULL,
-                revoked_at INTEGER,
+                account_id   TEXT    NOT NULL,
+                device_id    TEXT    NOT NULL,
+                public_key   BLOB    NOT NULL,
+                sealed_label BLOB    NOT NULL,
+                created_at   INTEGER NOT NULL,
+                revoked_at   INTEGER,
                 PRIMARY KEY (account_id, device_id),
                 FOREIGN KEY (account_id) REFERENCES accounts(account_id)
             )
@@ -126,10 +137,7 @@ class SyncStore(
                 account_id  TEXT    NOT NULL,
                 blinded_id  TEXT    NOT NULL,
                 seq         INTEGER NOT NULL,
-                rec_type    TEXT    NOT NULL,
-                hlc         TEXT    NOT NULL,
                 envelope    BLOB    NOT NULL,
-                received_at INTEGER NOT NULL,
                 PRIMARY KEY (account_id, blinded_id, seq),
                 FOREIGN KEY (account_id) REFERENCES accounts(account_id)
             )
@@ -192,14 +200,14 @@ class SyncStore(
      * attacker cannot claim an account whose name they cannot compute, and computing it requires
      * the ARK, which never leaves a paired device.
      */
-    fun claimAccount(accountId: String, publicKey: ByteArray, label: String): String? = tx {
+    fun claimAccount(accountId: String, publicKey: ByteArray, sealedLabel: ByteArray): String? = tx {
         if (query("SELECT 1 FROM accounts WHERE account_id = ?", accountId) { it.next() }) return@tx null
         val now = clock.nowMillis()
         update(
             "INSERT INTO accounts(account_id, created_at, last_seq) VALUES (?, ?, 0)",
             accountId, now,
         )
-        insertDevice(accountId, publicKey, label, now)
+        insertDevice(accountId, publicKey, sealedLabel, now)
     }
 
     /**
@@ -207,32 +215,32 @@ class SyncStore(
      * key is already enrolled (including if it is enrolled but revoked -- a revoked key must not
      * come back through the front door).
      */
-    fun enrolDevice(accountId: String, publicKey: ByteArray, label: String): String? = tx {
+    fun enrolDevice(accountId: String, publicKey: ByteArray, sealedLabel: ByteArray): String? = tx {
         val alreadyPresent = query(
             "SELECT 1 FROM devices WHERE account_id = ? AND public_key = ?", accountId, publicKey,
         ) { it.next() }
         if (alreadyPresent) return@tx null
-        insertDevice(accountId, publicKey, label, clock.nowMillis())
+        insertDevice(accountId, publicKey, sealedLabel, clock.nowMillis())
     }
 
     private fun insertDevice(
         accountId: String,
         publicKey: ByteArray,
-        label: String,
+        sealedLabel: ByteArray,
         now: Long,
     ): String {
         val deviceId = Ids.random(16)
         update(
-            "INSERT INTO devices(account_id, device_id, public_key, label, created_at, revoked_at) " +
+            "INSERT INTO devices(account_id, device_id, public_key, sealed_label, created_at, revoked_at) " +
                 "VALUES (?, ?, ?, ?, ?, NULL)",
-            accountId, deviceId, publicKey, label, now,
+            accountId, deviceId, publicKey, sealedLabel, now,
         )
         return deviceId
     }
 
     fun device(accountId: String, deviceId: String): DeviceRow? = tx {
         query(
-            "SELECT device_id, public_key, label, created_at, revoked_at FROM devices " +
+            "SELECT device_id, public_key, sealed_label, created_at, revoked_at FROM devices " +
                 "WHERE account_id = ? AND device_id = ?",
             accountId, deviceId,
         ) { if (it.next()) readDevice(it) else null }
@@ -240,7 +248,7 @@ class SyncStore(
 
     fun listDevices(accountId: String): List<DeviceRow> = tx {
         query(
-            "SELECT device_id, public_key, label, created_at, revoked_at FROM devices " +
+            "SELECT device_id, public_key, sealed_label, created_at, revoked_at FROM devices " +
                 "WHERE account_id = ? ORDER BY created_at ASC, device_id ASC",
             accountId,
         ) { rs -> buildList { while (rs.next()) add(readDevice(rs)) } }
@@ -270,7 +278,7 @@ class SyncStore(
     private fun readDevice(rs: ResultSet) = DeviceRow(
         deviceId = rs.getString(1),
         publicKey = rs.getBytes(2),
-        label = rs.getString(3),
+        sealedLabel = rs.getBytes(3),
         createdAt = rs.getLong(4),
         revokedAt = rs.getLong(5).takeUnless { rs.wasNull() },
     )
@@ -375,7 +383,6 @@ class SyncStore(
      * the client resend work that was never in conflict. Applied items are numbered in list order.
      */
     fun upsertBatch(accountId: String, items: List<UpsertItem>): List<UpsertOutcome> = tx {
-        val now = clock.nowMillis()
         var seq = query("SELECT last_seq FROM accounts WHERE account_id = ?", accountId) {
             if (it.next()) it.getLong(1) else 0L
         }
@@ -387,9 +394,8 @@ class SyncStore(
             } else {
                 seq += 1
                 update(
-                    "INSERT INTO records(account_id, blinded_id, seq, rec_type, hlc, envelope, received_at) " +
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    accountId, item.blindedId, seq, item.recType, item.hlc, item.envelope, now,
+                    "INSERT INTO records(account_id, blinded_id, seq, envelope) VALUES (?, ?, ?, ?)",
+                    accountId, item.blindedId, seq, item.envelope,
                 )
                 pruneHistory(accountId, item.blindedId)
                 UpsertOutcome.Ok(item.blindedId, seq)
@@ -410,7 +416,7 @@ class SyncStore(
      */
     fun changesSince(accountId: String, since: Long, limit: Int): List<RecordVersion> = tx {
         query(
-            "SELECT blinded_id, rec_type, hlc, seq, envelope, received_at FROM records r " +
+            "SELECT blinded_id, seq, envelope FROM records r " +
                 "WHERE r.account_id = ? AND r.seq > ? AND r.seq = (" +
                 "  SELECT MAX(r2.seq) FROM records r2 " +
                 "  WHERE r2.account_id = r.account_id AND r2.blinded_id = r.blinded_id) " +
@@ -422,14 +428,14 @@ class SyncStore(
     /** The most recent [limit] versions of one record, newest first. */
     fun history(accountId: String, blindedId: String, limit: Int): List<RecordVersion> = tx {
         query(
-            "SELECT blinded_id, rec_type, hlc, seq, envelope, received_at FROM records " +
+            "SELECT blinded_id, seq, envelope FROM records " +
                 "WHERE account_id = ? AND blinded_id = ? ORDER BY seq DESC LIMIT ?",
             accountId, blindedId, limit,
         ) { rs -> buildList { while (rs.next()) add(readRecord(rs)) } }
     }
 
     private fun headVersion(accountId: String, blindedId: String): RecordVersion? = query(
-        "SELECT blinded_id, rec_type, hlc, seq, envelope, received_at FROM records " +
+        "SELECT blinded_id, seq, envelope FROM records " +
             "WHERE account_id = ? AND blinded_id = ? ORDER BY seq DESC LIMIT 1",
         accountId, blindedId,
     ) { if (it.next()) readRecord(it) else null }
@@ -453,16 +459,13 @@ class SyncStore(
 
     private fun readRecord(rs: ResultSet) = RecordVersion(
         blindedId = rs.getString(1),
-        recType = rs.getString(2),
-        hlc = rs.getString(3),
-        seq = rs.getLong(4),
-        envelope = rs.getBytes(5),
-        receivedAt = rs.getLong(6),
+        seq = rs.getLong(2),
+        envelope = rs.getBytes(3),
     )
 
     // ---------------------------------------------------------------------------------------
     // Tiny JDBC helpers. Every statement here is parameterised; no SQL is ever built by
-    // concatenating a value, which is what keeps a blinded ID or a device label from being able to
+    // concatenating a value, which is what keeps a blinded ID or a bearer token from being able to
     // mean anything to the database.
     // ---------------------------------------------------------------------------------------
 

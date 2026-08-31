@@ -3,6 +3,7 @@ package my.cheysoff.core_sync_net
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import my.cheysoff.core_crypto.sync.SyncProtocol
+import my.cheysoff.core_sync_net.auth.DeviceLabelSealer
 import my.cheysoff.core_sync_net.auth.DeviceSigner
 import my.cheysoff.core_sync_net.auth.SignedMessage
 import my.cheysoff.core_sync_net.http.Delayer
@@ -24,24 +25,28 @@ import my.cheysoff.core_sync_net.wire.SyncWire
  *
  * ## What this class owns
  *
- * Four things, and nothing else:
+ * Five things, and nothing else:
  *
  * 1. **Signing.** Every enrolment and every session handshake is a `SHA256withECDSA` signature over
  *    [SignedMessage]'s canonical bytes, made with the device's AndroidKeyStore P-256 key through
  *    [DeviceSigner]. There is no other authentication in this protocol.
- * 2. **The bearer token.** Obtained by the two-round-trip challenge handshake, cached in memory for
+ * 2. **The device label**, sealed on the way out and opened on the way back through
+ *    [DeviceLabelSealer]. Neither the account key nor a plaintext name is held here; see that
+ *    interface for why the one piece of encryption in this class is behind a seam.
+ * 3. **The bearer token.** Obtained by the two-round-trip challenge handshake, cached in memory for
  *    its ~24 hour life, and **never written to disk**. Persisting it would mean a bearer credential
  *    in `secret_shared_prefs`, which is a bearer credential in an Auto Backup discussion, to save
  *    one round trip and one ECDSA operation a day.
- * 3. **`429` back-off.** `Retry-After`, honoured, with jitter added on top. See
+ * 4. **`429` back-off.** `Retry-After`, honoured, with jitter added on top. See
  *    [RetryPolicy][my.cheysoff.core_sync_net.http.RetryPolicy] for why the jitter is not optional.
- * 4. **Turning HTTP statuses into [SyncException]s** -- and, for the two cases that are not
+ * 5. **Turning HTTP statuses into [SyncException]s** -- and, for the two cases that are not
  *    failures, into ordinary return values.
  *
  * ## What it does not own
  *
  * It does not persist a cursor, track which rows are dirty, decide when to sync, retry across
- * passes, or resolve a conflict. It never opens an envelope. Those belong to the merge engine and
+ * passes, or resolve a conflict. It never opens an envelope -- the label seam is the only crypto it
+ * reaches, and it reaches it through an interface. Those belong to the merge engine and
  * the coordinator above it, and the boundary is deliberate: this class can be tested exhaustively
  * against a fake [HttpTransport] precisely because it holds no state that outlives a call except
  * one token.
@@ -58,6 +63,15 @@ class SyncHttpClient(
     private val endpoint: ServerEndpoint,
     private val transport: HttpTransport,
     private val signer: DeviceSigner,
+    /**
+     * Seals the device label on enrolment and opens it in a device listing.
+     *
+     * Deliberately not defaulted. A default would be
+     * [DeviceLabelSealer.NONE][DeviceLabelSealer.Companion.NONE], and a caller who got that by
+     * omission would enrol an unnamed device and never find out until somebody tried to revoke the
+     * right phone from a list of identical rows.
+     */
+    private val labelSealer: DeviceLabelSealer,
     /**
      * The device's wall clock, in epoch milliseconds.
      *
@@ -116,7 +130,13 @@ class SyncHttpClient(
             HttpRequest(
                 HttpMethod.POST,
                 endpoint.resolve(ROUTE_ACCOUNT),
-                body = SyncWire.claimRequest(accountId, publicKeyB64, deviceLabel, ts, signature),
+                body = SyncWire.claimRequest(
+                    accountId = accountId,
+                    publicKeyB64 = publicKeyB64,
+                    sealedLabelB64 = sealLabel(publicKeyB64, deviceLabel),
+                    ts = ts,
+                    signatureB64 = signature,
+                ),
             ),
             ROUTE_ACCOUNT,
         )
@@ -153,7 +173,10 @@ class SyncHttpClient(
                 body = SyncWire.authorizeRequest(
                     accountId = accountId,
                     newPublicKeyB64 = newPublicKeyB64,
-                    deviceLabel = deviceLabel,
+                    // Sealed against the JOINING device's key, because that device is the one whose
+                    // row the label lands on and whose key a reader will pair it with. Sealing
+                    // against this voucher's key would produce a label nothing can ever open.
+                    sealedLabelB64 = sealLabel(newPublicKeyB64, deviceLabel),
                     ts = ts,
                     voucherDeviceId = voucherDeviceId,
                     signatureB64 = signature,
@@ -162,6 +185,21 @@ class SyncHttpClient(
             ROUTE_AUTHORIZE,
         )
         return SyncWire.decodeAuthorize(requireSuccess(response))
+    }
+
+    /**
+     * The sealed device label as it goes on the wire: base64url, or `""` for no label.
+     *
+     * `""` is what the server reads as "this device sent no name", and it is what a client that
+     * cannot seal must send. **There is no plaintext branch here and there must never be one** --
+     * the whole point of the seal is that the operator cannot read the name, and a fallback that
+     * quietly sends it in the clear when the ARK happens to be missing would defeat that on exactly
+     * the runs nobody watches.
+     */
+    private fun sealLabel(devicePublicKeyB64: String, label: String): String {
+        if (label.isEmpty()) return ""
+        val sealed = labelSealer.seal(devicePublicKeyB64, label) ?: return ""
+        return Base64Codec.encodeUrl(sealed)
     }
 
     // ------------------------------------------------------------------------------------------
@@ -173,8 +211,9 @@ class SyncHttpClient(
             credentials,
             ROUTE_DEVICES,
         ) { HttpRequest(HttpMethod.GET, endpoint.resolve(ROUTE_DEVICES)) }
-        return SyncWire.decodeDevices(requireSuccess(response))
+        return SyncWire.decodeDevices(requireSuccess(response), labelSealer::open)
     }
+
 
     override suspend fun revokeDevice(credentials: DeviceCredentials, deviceId: String) {
         requireSafePathSegment(deviceId, "device id")
@@ -511,11 +550,13 @@ class SyncHttpClient(
         fun create(
             endpoint: ServerEndpoint,
             signer: DeviceSigner,
+            labelSealer: DeviceLabelSealer,
             log: TransportLog = TransportLog.NONE,
         ): SyncHttpClient = SyncHttpClient(
             endpoint = endpoint,
             transport = OkHttpTransport.create(endpoint),
             signer = signer,
+            labelSealer = labelSealer,
             log = log,
         )
 

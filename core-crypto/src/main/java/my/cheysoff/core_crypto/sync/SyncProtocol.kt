@@ -33,6 +33,15 @@ object SyncProtocol {
     const val INFO_ACCOUNT = "manana/sync/v1/account"
 
     /**
+     * `info` for `K_label`, the key a device's human-readable name is sealed under.
+     *
+     * The name is the user's own text ("Vova's Pixel 7") and the server has no use for it: it
+     * never matches on it, orders by it, or shows it to anybody. Sealing it keeps the device list
+     * readable on the user's own devices and opaque everywhere else. See [DeviceLabelCipher].
+     */
+    const val INFO_DEVICE_LABEL = "manana/sync/v1/devicelabel"
+
+    /**
      * `info` for `K_arkwrap`, the key the ARK is stored under on this device.
      *
      * The odd one out: every other string here is applied to the ARK, this one is applied to the
@@ -77,11 +86,50 @@ object SyncProtocol {
 
     /**
      * Plaintext is padded up to a multiple of this many bytes before sealing, so that ciphertext
-     * length reveals only a bucket index rather than a byte count. A one-line shopping list and a
-     * one-line diary entry are then indistinguishable to the server, and so are all the notes in
-     * between two bucket boundaries.
+     * length reveals only a bucket index rather than a byte count. Every note that falls between
+     * two bucket boundaries is exactly the same size on the wire.
+     *
+     * ### Why 4 KiB, and not the 256 bytes this started at
+     *
+     * A bucket only hides notes that *share* it, and the serialised record payload is not small
+     * before the user has typed anything. It carries a per-field clock map: with the eleven note
+     * fields of the Phase 3 plan and an HLC that serialises to roughly thirty characters, the
+     * field names and clocks alone come to several hundred bytes of JSON. At a 256-byte bucket
+     * that fixed floor already occupies three or four buckets, and the note then grows a visible
+     * bucket for every quarter-kilobyte typed -- so the scheme resolved note length to within 256
+     * bytes, which for the short notes that make up most of a notes app is most of the note.
+     *
+     * At 4 KiB, an empty note and a note of roughly three thousand characters are the same size on
+     * the wire, and that range covers the great majority of what anyone writes. What it costs is
+     * that a short note occupies 4 KiB on the server rather than about 1 KiB, and a full
+     * re-baseline of a thousand notes moves about 4 MB rather than 1 MB. For one person's notes on
+     * a small VPS that is a cheap trade for the difference between an operator reading a note's
+     * length and reading only whether it is long.
+     *
+     * It does **not** hide everything, and `server/README.md` says so: a note past the first
+     * bucket still reveals its length to within 4 KiB, and a note that crosses a boundary between
+     * two versions still shows the operator that it grew. Neither residue is fixable by a larger
+     * constant -- only by a bucket that grows with the note, which swaps a bounded absolute leak
+     * for a bounded relative one and can double the stored size of a large note.
      */
-    const val PADDING_BUCKET_BYTES = 256
+    const val PADDING_BUCKET_BYTES = 4096
+
+    /**
+     * Size of the padded device-label plaintext, in bytes. A **constant**, not a bucket multiple.
+     *
+     * Every sealed label is therefore exactly the same length, so the blob leaks nothing about the
+     * name at all -- not even how long it is. There is one label per device rather than one per
+     * note, so paying a fixed 128 bytes costs nothing worth measuring. The two-byte length prefix
+     * inside leaves 126 bytes for UTF-8 text: 126 ASCII characters, or 42 of any script whose
+     * characters cost three bytes.
+     */
+    const val DEVICE_LABEL_PLAINTEXT_BYTES = 128
+
+    /**
+     * Sealed-label format version, the first byte of the blob and of its associated data. Separate
+     * from [ENVELOPE_VERSION] because the two formats are free to change independently.
+     */
+    const val DEVICE_LABEL_VERSION: Byte = 1
 
     // -----------------------------------------------------------------------------------------
     // Record envelope

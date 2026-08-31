@@ -111,11 +111,12 @@ class CursorTest {
     /**
      * The cursor must not be a timestamp.
      *
-     * The clock is frozen for the whole test, so every record is stored with an identical
-     * `receivedAt`. A timestamp cursor would make all five records indistinguishable in ordering:
-     * a client that received the first and set `since` to its timestamp would then either miss the
-     * other four (with a strict `>`) or re-fetch everything forever (with `>=`). `seq` keeps them
-     * strictly ordered anyway.
+     * The clock is frozen for the whole test, so all five records are written at the same instant.
+     * A timestamp cursor would make them indistinguishable in ordering: a client that received the
+     * first and set `since` to its timestamp would then either miss the other four (with a strict
+     * `>`) or re-fetch everything forever (with `>=`). `seq` keeps them strictly ordered anyway --
+     * and, since a record no longer carries a timestamp at all, there is nothing else a cursor
+     * could be built from.
      */
     @Test
     fun theCursorIsNotATimestampSoSimultaneousWritesStillOrder() = serverTest { harness ->
@@ -125,7 +126,7 @@ class CursorTest {
 
         val pull: ChangesResponse = client.getAuth("/v1/changes?since=0", me.token).decode()
         assertEquals(5, pull.records.size)
-        assertTrue(pull.records.all { it.receivedAt == frozenAt }, "the clock did not move")
+        assertEquals(frozenAt, harness.clock.now, "the clock did not move")
         assertEquals(listOf(1L, 2L, 3L, 4L, 5L), pull.records.map { it.seq })
 
         // And an incremental pull from the middle returns exactly the tail, which is the thing a

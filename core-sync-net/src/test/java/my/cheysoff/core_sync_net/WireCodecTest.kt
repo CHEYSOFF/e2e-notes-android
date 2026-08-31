@@ -143,17 +143,20 @@ class WireCodecTest {
         assertParseFails("""{"a":01x}""")
     }
 
+    /**
+     * Every string this client writes today is base64url or a value the server issued, so nothing
+     * it sends actually needs escaping -- the device label was the last free text on the wire and
+     * it is ciphertext now. The escaping is tested anyway: "nothing needs it" is a property of
+     * today's field list rather than of the writer, and the next field that carries a name would
+     * arrive without anyone re-deriving that.
+     */
     @Test
-    fun `the writer escapes what a device label can actually contain`() {
-        val written = JsonWriter().obj {
-            field("deviceLabel", "Vova\"s \\ tablet\nline")
-        }.toString()
+    fun `the writer escapes a quote, a backslash, a newline and a control character`() {
+        val text = "a\"b \\ c\nd" + 2.toChar()
+        val written = JsonWriter().obj { field("challenge", text) }.toString()
 
         val parsed = JsonReader.parse(written) as JsonValue.Obj
-        assertEquals(
-            "Vova\"s \\ tablet\nline",
-            (parsed.fields["deviceLabel"] as JsonValue.Str).value,
-        )
+        assertEquals(text, (parsed.fields["challenge"] as JsonValue.Str).value)
     }
 
     @Test

@@ -37,12 +37,25 @@ class MutableClock(var now: Long = 1_770_000_000_000L) : Clock {
  * real client will emit; if the encoding here and the encoding there ever disagree, the disagreement
  * is a protocol bug and this class is where it should be visible.
  */
-class TestDevice(val label: String = "test-device") {
+class TestDevice(name: String = "test-device") {
     val keyPair: KeyPair = KeyPairGenerator.getInstance("EC").apply {
         initialize(ECGenParameterSpec("secp256r1"))
     }.generateKeyPair()
 
     val publicKeyB64: String = B64.encode(sec1Encode(keyPair.public as ECPublicKey))
+
+    /**
+     * Stands in for `core-crypto/.../sync/DeviceLabelCipher` output: a fixed-length blob that
+     * differs per device name and contains none of it. The server module cannot depend on the
+     * Android module, so this is a stand-in rather than the real cipher -- but it has the two
+     * properties the server is entitled to assume, which are that the blob is opaque and that its
+     * length says nothing about the name.
+     */
+    val sealedLabel: String = B64.encode(
+        java.security.MessageDigest.getInstance("SHA-256")
+            .digest(name.toByteArray())
+            .let { digest -> ByteArray(157) { digest[it % digest.size] } }
+    )
 
     fun sign(message: ByteArray): String {
         val signature = Signature.getInstance("SHA256withECDSA").run {
@@ -173,7 +186,7 @@ suspend fun ApplicationTestBuilder.claimAccount(
     val ts = harness.clock.now
     val signature = device.sign(SignedMessage.claim(accountId, device.publicKeyB64, ts))
     val body = JSON_LENIENT.encodeToString(
-        ClaimRequest(accountId, device.publicKeyB64, device.label, ts, signature)
+        ClaimRequest(accountId, device.publicKeyB64, device.sealedLabel, ts, signature)
     )
     val response = client.postJson("/v1/account", body)
     check(response.status.value == 201) { "claim failed: ${response.status} ${response.bodyAsText()}" }
@@ -191,7 +204,9 @@ suspend fun ApplicationTestBuilder.authorizeDevice(
     val ts = harness.clock.now
     val signature = voucher.sign(SignedMessage.authorize(accountId, joining.publicKeyB64, ts))
     val body = JSON_LENIENT.encodeToString(
-        AuthorizeRequest(accountId, joining.publicKeyB64, joining.label, ts, voucherDeviceId, signature)
+        AuthorizeRequest(
+            accountId, joining.publicKeyB64, joining.sealedLabel, ts, voucherDeviceId, signature,
+        )
     )
     return client.postJson("/v1/devices/authorize", body)
 }
@@ -239,14 +254,17 @@ suspend fun ApplicationTestBuilder.enrol(harness: Harness): Enrolled {
     return Enrolled(accountId, claim.deviceId, device, token)
 }
 
-/** One `POST /v1/records` item, with an envelope built from arbitrary bytes. */
+/**
+ * One `POST /v1/records` item, with an envelope built from arbitrary bytes.
+ *
+ * Three fields, because three is all the wire has: the record's type and its clock live inside the
+ * envelope now. See `MetadataTest`.
+ */
 fun upsertItem(
     blindedId: String,
     envelope: ByteArray,
     baseSeq: Long,
-    hlc: String = "1-0-node",
-    recType: String = "note",
-) = UpsertRequestItem(blindedId, recType, hlc, baseSeq, B64.encode(envelope))
+) = UpsertRequestItem(blindedId, baseSeq, B64.encode(envelope))
 
 suspend fun ApplicationTestBuilder.push(
     token: String,

@@ -21,7 +21,7 @@ Build and test it from inside `server/`:
 
 ```
 cd server
-./gradlew test          # 114 tests
+./gradlew test          # 123 tests
 ./gradlew run           # starts on 127.0.0.1:8080
 ./gradlew installDist   # build/install/manana-sync-server/bin/manana-sync-server
 ```
@@ -103,9 +103,16 @@ Every value is optional; an unparseable one stops start-up rather than silently 
 ### Backups
 
 Copy `sync.db` (and its `-wal` file, or checkpoint first by stopping the process). The file contains
-only ciphertext and metadata — see the privacy section — so it does not need to be treated as more
-sensitive than the server itself. It is **not** a backup of the user's notes in any useful sense: it
-is undecryptable without the Account Root Key, which exists only on the paired devices.
+only ciphertext and a little structural metadata — see the privacy section — so it does not need to
+be treated as more sensitive than the server itself. It is **not** a backup of the user's notes in
+any useful sense: it is undecryptable without the Account Root Key, which exists only on the paired
+devices.
+
+The file deliberately holds **no per-version timestamps**. A copy of it shows the order in which an
+account's edits arrived, because `seq` is monotonic, but not the times of day they arrived at. That
+narrows an old backup or a stolen disk to "this record was edited nine times"; it does not stop an
+operator who watches the live traffic, and it does not stop one who chooses to add their own
+logging.
 
 ---
 
@@ -181,7 +188,7 @@ right.
 
 Every failure is `{"error":"<code>","message":"<safe text>"}` with a matching HTTP status. Codes in
 use: `malformed_request`, `malformed_base64`, `invalid_account_id`, `invalid_public_key`,
-`invalid_label`, `invalid_device_id`, `invalid_blinded_id`, `invalid_rec_type`, `invalid_hlc`,
+`invalid_label`, `invalid_device_id`, `invalid_blinded_id`,
 `invalid_base_seq`, `invalid_envelope`, `invalid_cursor`, `invalid_limit`, `empty_batch`,
 `batch_too_large`, `duplicate_record_in_batch`, `payload_too_large`, `rate_limited`, `unauthorized`,
 `bad_signature`, `bad_challenge`, `stale_timestamp`, `replay_detected`, `device_revoked`,
@@ -239,12 +246,12 @@ CREATE TABLE accounts (
 );
 
 CREATE TABLE devices (
-    account_id TEXT    NOT NULL,
-    device_id  TEXT    NOT NULL,              -- server-generated, 16 random bytes base64url
-    public_key BLOB    NOT NULL,              -- SEC1 uncompressed P-256, 65 bytes. A PUBLIC key.
-    label      TEXT    NOT NULL,              -- client-supplied, plaintext, operator-visible
-    created_at INTEGER NOT NULL,
-    revoked_at INTEGER,                       -- NULL while active
+    account_id   TEXT    NOT NULL,
+    device_id    TEXT    NOT NULL,            -- server-generated, 16 random bytes base64url
+    public_key   BLOB    NOT NULL,            -- SEC1 uncompressed P-256, 65 bytes. A PUBLIC key.
+    sealed_label BLOB    NOT NULL,            -- AES-GCM ciphertext. Constant length. Never opened.
+    created_at   INTEGER NOT NULL,
+    revoked_at   INTEGER,                     -- NULL while active
     PRIMARY KEY (account_id, device_id),
     FOREIGN KEY (account_id) REFERENCES accounts(account_id)
 );
@@ -254,10 +261,7 @@ CREATE TABLE records (
     account_id  TEXT    NOT NULL,
     blinded_id  TEXT    NOT NULL,             -- HMAC(K_id, recType‖":"‖uuid)[0..16], base64url
     seq         INTEGER NOT NULL,             -- per-account monotonic; the cursor
-    rec_type    TEXT    NOT NULL,             -- opaque label, stored as sent, never interpreted
-    hlc         TEXT    NOT NULL,             -- opaque; the client binds it into its AEAD AAD
     envelope    BLOB    NOT NULL,             -- sealed ciphertext. Never parsed. Never opened.
-    received_at INTEGER NOT NULL,
     PRIMARY KEY (account_id, blinded_id, seq),
     FOREIGN KEY (account_id) REFERENCES accounts(account_id)
 );
@@ -283,6 +287,14 @@ CREATE TABLE used_signatures (
 );
 ```
 
+**`records` has four columns because four is what the server acts on**, and that is the rule the
+table is maintained under. It once carried `rec_type` and `hlc` as well: both were length-checked
+on the way in, stored, and handed back unread — never a predicate, never a comparison, never an
+input to a conflict decision. A column the server only carries is a column an operator can read for
+free, so both moved inside the envelope. `received_at` went the other way: the server stamped it
+rather than being told it, and nothing read it either, so it was dropped outright. **Do not add a
+column here that no query reads.** `MetadataTest` in the test suite is what holds that line.
+
 `records` is append-only: a new version is a new row with a new `seq`. The only rows the server ever
 deletes are housekeeping — expired challenges, expired sessions, expired replay-cache entries, and
 record versions beyond `MANANA_HISTORY_DEPTH`. Nothing deletes a record.
@@ -291,51 +303,124 @@ record versions beyond `MANANA_HISTORY_DEPTH`. Nothing deletes a record.
 
 ## What a server operator can and cannot see
 
-This is the honest list. It is not softened, and none of it can be eliminated by this server.
+This is the honest list. It is not softened. Everything on it has been checked against the code
+rather than against the design, and where a leak was removable it was removed rather than described.
+
+Two operators are worth separating, because the answers differ. **A live operator** watches requests
+arrive and can log whatever they like; nothing in this section constrains them beyond what the
+protocol itself refuses to send. **An operator with only the database** — an old backup, a stolen
+disk, a hosting provider's snapshot — sees strictly less, and several items below say so explicitly.
 
 ### Can see
 
-- **How many records the account holds**, and when each one was created.
-- **Approximate size of each record.** The client pads plaintext to 256-byte buckets before sealing,
-  so this is a bucket count rather than a byte count — but a long note is still visibly longer than a
-  short one.
-- **Which record changed, and exactly when.** `blinded_id` is stable for the life of a record, so the
-  operator sees a per-record edit history: this record was written at 08:14, 08:15 and 23:40.
-- **Edit frequency and time-of-day patterns**, for the account as a whole and per record. Over weeks
-  that is a sleep schedule and a working week.
+- **How many records the account holds**, and how many versions of each are retained -- up to
+  `MANANA_HISTORY_DEPTH`, past which the count stops growing. The account's `last_seq` still counts
+  every write it has ever accepted.
+- **Approximate size of each record.** The client pads plaintext to 4 KiB buckets before sealing, so
+  this is a bucket count rather than a byte count. A record's serialised payload spends several
+  hundred bytes on field names and per-field clocks before any text, which leaves roughly three
+  thousand characters of note body inside the first bucket: an empty note, a shopping list and a
+  page of prose are all one bucket and all identical. Past that, length is revealed to within 4 KiB,
+  and a note that crosses a boundary between two versions visibly grew.
+- **Which record changed, and in what order.** `blinded_id` is stable for the life of a record, so
+  the operator sees a per-record edit history: this record has been written nine times, and here is
+  where each write falls in the account's global order. **This is the largest remaining leak** and
+  the reasoning for not fixing it is in "Rejected" below.
+- **When each edit happened — live.** A live operator times every request and, over weeks, that is a
+  sleep schedule and a working week. The database itself holds **no per-version timestamp**, so a
+  copy of `sync.db` yields the order of edits but not their times.
+- **Which records were edited together.** A `POST /v1/records` batch groups the records a client
+  pushed in one pass, and applies them in list order. That is a co-editing signal between records —
+  "these three always change together" — and, if the client sends its dirty rows oldest-clock-first,
+  the order within the batch leaks their relative edit times. A client can blunt the second half by
+  shuffling each batch before sending it. It cannot blunt the first half without splitting batches,
+  which costs round trips and does not help much: the requests still arrive seconds apart.
+- **Which record a client asked about.** `GET /v1/records/{id}/history` names one blinded ID, so a
+  live operator sees which record a client is interested in. The path is never written to the log
+  (see below), so this does not reach an operator who only has the log file.
 - **How many devices are enrolled**, when each was added, when each was revoked, and each device's
   **public key**.
-- **Any device label a client sends**, in plaintext. The client chooses this string; if it sends
-  "Vova's Pixel 7", the operator reads "Vova's Pixel 7".
-- **`recType` for every record**, in plaintext. Today that distinguishes a note from a folder, so the
-  operator knows how many folders exist and when they change.
-- **The `hlc` string of every version**, in plaintext, because the client must read it *before*
-  decrypting. If the client puts a device identifier in the node component of its hybrid logical
-  clock — and the natural implementation does — then the operator learns **which device made each
-  edit**. A client that does not want that must use a per-account pseudonym for the node component;
-  this is called out in the Phase 3 plan.
+- **That a given `(accountId, deviceId)` pair exists.** `POST /v1/session/challenge` is
+  unauthenticated and answers `404` for an unknown pair. Both values are unguessable 128-bit
+  strings, so this reveals nothing to a caller who does not already have them.
+- **When the account was created.** `accounts.created_at`, and the creation and revocation times of
+  every device, are server-clock timestamps in the database.
 - **Whether a push conflicted**, and therefore that two devices edited the same record concurrently.
+- **The byte size of each request and response**, from the log. For a pull that is the aggregate
+  bucket count of the page, which the row sizes already give.
 - **IP addresses, connection times and TLS metadata**, at the proxy, like any HTTP service.
 
 ### Cannot see
 
 - **The content of any note**: title, body, checklist, colour, folder membership, favourite or pinned
   state, and every other field. All of it is inside the sealed envelope.
+- **Whether a record is a note or a folder.** `recType` used to travel in the clear, which told an
+  operator how many folders an account had and when each changed. It does not travel at all now: it
+  is inside the sealed payload, and it stays bound to the record because it is part of the
+  blinded-ID HMAC message (`HMAC(K_id, recType‖":"‖uuid)`).
+- **Which device made an edit.** The hybrid logical clock used to travel in the clear, and the node
+  component of the natural implementation is a device identifier. The clock is inside the envelope
+  now, so there is nothing to read — and, unlike the per-account-pseudonym mitigation the Phase 3
+  plan describes, this holds regardless of what the client chooses to put in the node field.
+- **What any device is called.** The label is sealed client-side by
+  `core-crypto/.../sync/DeviceLabelCipher` under a key derived from the Account Root Key, and padded
+  to a constant length, so the stored blob gives up neither the name nor its length. The server
+  stores it and hands it back; it has no code that could do anything else with it.
 - **Whether a write was an edit or a deletion.** There is no delete endpoint; a tombstone is an
   ordinary upsert whose flag is inside the ciphertext.
 - **The note's real UUID.** Records are filed under `HMAC(K_id, …)`, and `K_id` is derived from the
   Account Root Key, which never leaves a paired device.
 - **Anything correlating two accounts.** A different ARK gives a different `K_id`, so the same note
   on two accounts has completely unrelated blinded IDs.
+- **The times of past edits, from the database alone.** `records` has no timestamp column. This is
+  a defence against a leaked backup and nothing else: a live operator sees arrival times regardless.
 - **Any key that would let the operator write.** The `devices` table holds public keys only. A full
   compromise of this server — database, process memory, everything — yields **no ability to forge a
   write, enrol a device or impersonate one**, because there is no private key anywhere in it. It
-  does yield the ability to *withhold* data, to serve an old version (which the client detects by
-  binding `hlc` into its AEAD associated data), and to delete the store outright.
+  does yield the ability to *withhold* data, to serve an old version, and to delete the store
+  outright. Serving an old version is **not** caught by the envelope's own authentication: a
+  replayed version is genuinely authentic, and the AEAD tag verifies. It is caught by the client
+  comparing the clock inside the decrypted payload against its own row's when that row is not
+  `dirty`, and by `409 cursor_ahead_of_server` for a whole-server rollback. See
+  `docs/design/e2e-sync-phase3-plan.md` §4.
 - **A usable session token from the database.** `sessions` stores SHA-256 digests; the token itself
   exists only in the client's memory and in the `Authorization` header of a live request. Reading
   the database therefore does not let the operator resume a session — though an operator who
   controls the process can of course read live headers.
+
+### Rejected, with reasons
+
+Not every leak above is unfixable in principle. These are the fixes that were considered against
+this design and turned down, so that nobody has to rediscover why.
+
+- **Rotating `blinded_id` per version**, to destroy the per-record edit history. This is the one
+  change that would fix the largest remaining leak, and it breaks the server. The identifier is the
+  *only* thing linking a new version to the record it supersedes, so a rotating one takes
+  compare-and-set with it: every push becomes a create, `baseSeq` has nothing to compare against,
+  and two devices editing the same record concurrently produce two unrelated rows instead of a
+  `409`. Garbage collection goes too — `pruneHistory` cannot know which rows are superseded, so a
+  store with no delete endpoint grows without bound. And a pull would return every version ever
+  written, unlinked, for the client to decrypt and sort out, which is O(all history) forever rather
+  than O(new). Sending the old identifier alongside the new one restores all three and re-links the
+  chain, which is the thing rotation existed to break. A coarser variant — one identifier per record
+  per day — keeps CAS inside a day but has the same problem at every boundary, plus a daily rewrite
+  of every record that is itself a louder signal than the one it hides.
+- **Decoy writes**, to bury the real edit history in noise. Cheap to implement and expensive
+  forever: the protocol has no delete, so every decoy is permanent storage and permanent bandwidth,
+  and decoys count against `MANANA_HISTORY_DEPTH`, which means they push real recoverable versions
+  out of the history a user might actually need.
+- **Batching and jitter**, to blur edit timing. Genuinely worth doing on the client and genuinely
+  limited: batching collapses several edits into one arrival time, and jitter moves that arrival by
+  minutes. Neither hides the daily envelope of activity — the hours at which pushes ever happen —
+  because that is a property of when the user is awake, not of when any individual push fires. Only
+  constant-rate cover traffic hides it, and that is the previous bullet with a schedule attached.
+  Do not let a jitter setting be described as hiding when someone works.
+- **Widening the signed message to cover the device label.** The canonical signed message is
+  specified byte-for-byte above and implemented on both sides; the label has never been one of its
+  fields. An attacker in the middle can therefore still substitute a *different* sealed blob at
+  enrolment. They cannot substitute chosen text, because sealing needs the Account Root Key, so the
+  outcome is a device that shows as unnamed. Trading a protocol change for "unnamed" versus
+  "unnamed, and rejected" is not worth it.
 
 ### What the log file contains
 
@@ -356,7 +441,7 @@ configured to `WARN`, both because Ktor's request logging prints full paths.
 cd server && ./gradlew test
 ```
 
-114 tests. Every endpoint has happy-path and rejection coverage. The properties with a test of their
+123 tests. Every endpoint has happy-path and rejection coverage. The properties with a test of their
 own, by file:
 
 - `CursorTest` — 60 concurrent pushes get contiguous distinct seqs; a puller interleaved with eight
@@ -369,6 +454,13 @@ own, by file:
   refused; a signature over a different key does not enrol this one.
 - `SessionTest` — a replayed session request is refused; a failed attempt burns the challenge; the
   database stores only a digest of the token.
+- `MetadataTest` — a request carrying a field that was removed from the wire (`recType`, `hlc`, a
+  plaintext `deviceLabel`) is **rejected**, not tolerated; a record's key set on every path that
+  returns one is exactly `{blindedId, seq, envelope}`; no record response carries a timestamp; a
+  device row carries a sealed label and returns it byte for byte. These are the assertions that make
+  putting a removed field back a failing test rather than a silent regression, since a reintroduced
+  field would otherwise change no behaviour at all — the server would store it and echo it exactly
+  as before.
 - `OpacityTest` — a sealed sentinel appears in no response body and in no byte of the SQLite file;
   an envelope round-trips unmodified; an envelope that is not a valid seal is stored anyway, which
   is how "the server does not parse envelopes" is asserted.
@@ -388,12 +480,20 @@ full suite is green on the committed code.
 |---|---|
 | `authorizeDevice` ignores the result of `P256Verify.verify` | `DeviceTest.authorizeSignedByAKeyThatIsNotTheVoucherIsRejected`, `DeviceTest.authorizeWithASignatureOverADifferentKeyIsRejected` |
 | `SyncStore.upsertBatch` applies every item regardless of `baseSeq` | `RecordsTest.aStaleBaseSeqIsRejectedWithTheConflictingEnvelopeInline`, `RecordsTest.baseSeqZeroAgainstAnExistingRecordIsAConflict`, `RecordsTest.aBaseSeqAheadOfTheHeadIsAConflict`, `RecordsTest.aBatchAppliesTheItemsThatDidNotConflict`, `OpacityTest.noEndpointEverReturnsThePlaintextOfARecord` |
-| `changesSince` filters and orders on `received_at`, and `nextCursor` becomes a timestamp | `CursorTest.theCursorIsNotATimestampSoSimultaneousWritesStillOrder`, `CursorTest.aPullerInterleavedWithConcurrentWritersMissesNothing`, `CursorTest.anUpdateMovesARecordToTheEndOfTheCursorOrder`, `CursorTest.aCursorAheadOfTheServerIsRejected`, and 3 in `RecordsTest` |
+| `changesSince` orders on something other than `seq` (`blinded_id`) | `CursorTest.aPullerInterleavedWithConcurrentWritersMissesNothing`, `CursorTest.anUpdateMovesARecordToTheEndOfTheCursorOrder` |
 | `authorizeDevice` drops the `voucher.revokedAt != null` check | `DeviceTest.aRevokedDeviceCannotVouchForANewDevice` |
 | `claimReplaySlot` always returns true | `DeviceTest.replayingAValidAuthorizeIsRejected` |
 | `readBounded` ignores both the declared and the actual size cap | `ValidationTest.anOversizedBodyIsRejectedWithoutBeingProcessed` |
 | `RequestLog.request` is given the real request path instead of the route template | `LoggingTest.logLinesNameRouteTemplatesAndNeverRealPaths` |
+| `UpsertRequestItem` gains a `recType` field again (with a default, so nothing else needs changing) | `MetadataTest.anUpsertItemCarryingARecTypeIsRejected` |
+| `RecordDto` gains a `receivedAt` field again | `MetadataTest.aPulledRecordCarriesOnlyTheBlindedIdSeqAndEnvelope`, `MetadataTest.theConflictingVersionReturnedInlineCarriesOnlyThoseThreeFields`, `MetadataTest.aHistoryVersionCarriesOnlyThoseThreeFields`, `MetadataTest.noRecordResponseCarriesATimestamp` |
+| `listDevices` truncates the sealed label instead of returning it whole | `MetadataTest.aSealedLabelIsStoredAndReturnedByteForByte`, `MetadataTest.aDeviceEnrolledWithoutALabelIsAccepted` |
 | `sessionByTokenHash` drops the `d.revoked_at IS NULL` join condition | **Nothing failed.** See below. |
+
+The `changesSince` row used to read "filters and orders on `received_at`, and `nextCursor` becomes a
+timestamp", and it failed six tests. That mutation is **no longer expressible**: `records` has no
+timestamp column for a cursor to be built out of by mistake. It was replaced with the nearest thing
+that still compiles, and re-run.
 
 **One mutation survived, and it found a real gap.** Dropping `revoked_at IS NULL` from the session
 lookup broke nothing, because revoking a device already deletes its sessions in the same
