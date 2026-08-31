@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      The application's first and only NETWORK permission.
+
+      feature-pairing/src/main/AndroidManifest.xml says where this belongs and why it was not added
+      earlier: "INTERNET belongs to Phase 3 (the sync engine), and adding it early would retire the
+      'this app talks to nobody' property months before anything actually needs it." This is Phase 3,
+      and this is that module. The app's other permissions (CAMERA for QR pairing, and the biometric
+      pair) open no socket; until this line nothing in the app could reach the network at all.
+
+      Declared HERE, in the one module that contains network code, on the same principle CAMERA
+      follows: the permission exists because of this module and disappears with it. A build that
+      drops :core-sync-net drops the permission with it and needs no manifest edit. The manifest
+      merger lifts it into the merged application manifest, so there is no second declaration.
+
+      What it actually permits, and when:
+
+      1. Nothing happens until the user has both paired a device and configured a server URL. No
+         code in this module runs on its own: there is no scheduler here, no WorkManager, no boot
+         receiver and no Service. Every request is made by a caller that already holds a
+         ServerEndpoint the user supplied, and this build has no such caller yet.
+
+      2. The only host contacted is that URL. There is no fallback endpoint, no discovery, no update
+         check and no bundled default address, and redirects are refused so a response cannot move
+         the client to a different host.
+
+      3. There is deliberately NO analytics, crash reporting, telemetry or advertising dependency in
+         this module, and adding one here would change what this permission means.
+         core-sync-net/build.gradle.kts has exactly one third-party dependency, OkHttp, and it is a
+         transport.
+
+      4. Nothing readable leaves the device. Record bodies are sealed by core-crypto before they
+         reach this module, which treats them as opaque bytes and has no code that could open one.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+</manifest>

@@ -62,6 +62,10 @@ dependencies {
     implementation(project(":core-domain"))
     implementation(project(":core-data"))
     implementation(project(":core-crypto"))
+    // The sync transport. This is what brings the INTERNET permission into the merged manifest --
+    // the declaration itself lives in core-sync-net/src/main/AndroidManifest.xml, next to the
+    // network code, and that file explains what it is for.
+    implementation(project(":core-sync-net"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
