@@ -213,13 +213,17 @@ MITM is structurally impossible here — the only key B must authenticate is `EB
 envelope := ver(1B) ‖ nonce(12B) ‖ ciphertext ‖ tag(16B)
 key      := HKDF(K_content, "manana/rec/v1" ‖ blindedId)      per-record
 nonce    := 12 random bytes                                   NOT a counter
-AAD      := ver ‖ recType ‖ blindedId ‖ hlc
+AAD      := ver ‖ blindedId
 blindedId:= HMAC(K_id, recType‖":"‖uuid)[0..16]  base64url    raw UUID never leaves the device
 ```
 
-Payload is versioned JSON (kotlinx-serialization) with **per-field HLCs**, plus a `del` tombstone flag and padding to 256-byte buckets (kills the "shopping list vs. diary entry" size distinction).
+Payload is versioned JSON (kotlinx-serialization) with **per-field HLCs**, plus a `del` tombstone flag and padding to 4 KiB buckets (kills the "shopping list vs. diary entry" size distinction; sized so a whole short note fits one bucket).
 
-Binding `hlc` into the AAD is what lets a client reject a **server rollback** — the old blob is genuinely authentic, so AEAD alone cannot detect it. ⚠️ The `hlc` must also travel *outside* the envelope (the client reads it before decrypting), so the client **must** compare outer against inner after decryption and reject mismatches. Easy to get wrong.
+> **Correction, applied in code.** This section originally read `AAD := ver ‖ recType ‖ blindedId ‖ hlc`, and claimed that binding `hlc` into the AAD is what lets a client reject a **server rollback**. That claim was wrong, and the AAD has been narrowed accordingly.
+>
+> A rolled-back server replays the *exact tuple the client sealed*, so the tag verifies and the AAD sees nothing. What the binding actually prevented was the server *mislabelling* an envelope with another version's clock. Since `recType` and `hlc` could only be AAD components if they also travelled **outside** the envelope — a client can only rebuild the AAD from what it holds before decrypting — that binding cost a plaintext record type and a plaintext device identifier in the server's database, in exchange for stopping an attack that no longer exists once there is no outer label at all.
+>
+> Both now live inside the sealed payload. `recType` stays bound because it is part of the blinded-ID HMAC message and the client recomputes the blinded ID after opening; the clock is read out of authenticated plaintext. The rollback defence is, and always was, the client comparing the remote clock against its own row's when that row is not `dirty`, plus `409 cursor_ahead_of_server`. See `e2e-sync-phase3-plan.md` §4 and `core-crypto/.../sync/RecordEnvelope.kt`.
 
 **Random nonces, not counters:** with per-record keys each key sees ~1 message per version, so the birthday bound is a non-issue — while a counter restored from a backup would silently and catastrophically break that record.
 

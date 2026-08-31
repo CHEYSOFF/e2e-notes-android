@@ -24,7 +24,8 @@ built in isolation, and three of the four things it depends on are not finished.
 | `ARK → K_content, K_id, accountId` | `core-crypto/.../sync/AccountKeys.kt` | done; **no production call site yet** |
 | Blinded record IDs | `core-crypto/.../sync/BlindedRecordId.kt` | done |
 | Record envelope (AES-256-GCM, per-record keys, AAD) | `core-crypto/.../sync/RecordEnvelope.kt` | done |
-| 256-byte bucket padding | `core-crypto/.../sync/RecordPadding.kt` | done |
+| 4 KiB bucket padding | `core-crypto/.../sync/RecordPadding.kt` | done |
+| Sealed device labels | `core-crypto/.../sync/DeviceLabelCipher.kt` | done; **no production call site yet** |
 | Protocol constants | `core-crypto/.../sync/SyncProtocol.kt` | done |
 | QR pairing, ECDH, SAS, `ServerHint` | `feature-pairing/` | done |
 | Device identity key (P-256, Keystore, `SHA256withECDSA`) | `feature-pairing/.../identity/DeviceIdentityKey.kt` | done, **`sign()` has no caller yet** |
@@ -83,13 +84,13 @@ core-sync/
 | `Hlc(ms: Long, counter: Int, node: String)` | `core-sync` | one hybrid logical clock reading; `Comparable`, tie-broken on `node` |
 | `HlcGenerator` | `core-sync` | `next(wallMs): Hlc` and `observe(remote: Hlc)`; the only thing that mints clocks. One instance, `@Singleton` |
 | `FieldClocks` | `core-sync` | `Map<String, Hlc>` with a compact serialisation; what the `fieldHlc` column holds |
-| `NotePayload` / `FolderPayload` | `core-sync` | `@Serializable` plaintext, versioned, with the inner `hlc` copy |
+| `NotePayload` / `FolderPayload` | `core-sync` | `@Serializable` plaintext, versioned, carrying `recType`, `uuid` and the row clock |
 | `SyncRecord` | `core-sync` | `(recType, uuid, rowHlc, fieldClocks, payload)` — the merge's unit |
 | `Merge` | `core-sync` | **pure**: `merge(local: SyncRecord?, remote: SyncRecord): MergeResult` |
 | `MergeResult` | `core-sync` | `Applied(record)`, `NoChange`, `ConflictCopy(winner, loser)`, `Rejected(reason)` |
 | `SyncApi` | `core-sync` | interface over the endpoints the client uses; `SyncError` for every failure |
 | `KtorSyncApi` | `core-data` | the implementation; owns the token, the `Retry-After` back-off and the SPKI pin |
-| `RecordCodec` | `core-data` | seal/open, and the **only** place that performs the outer/inner `hlc` check (§4) |
+| `RecordCodec` | `core-data` | seal/open, and the **only** place that recomputes the blinded ID against the opened payload (§4) |
 | `SyncCursorDao` / `SyncStateEntity` | `core-data` | the `sync_state` table |
 | `SyncQueries` | `core-data` | `dirtyNotes()`, `dirtyFolders()`, `applyRemoteNote()`, `applyRemoteFolder()` — the write path §5.6 |
 | `SyncCoordinator` | `core-data` | the loop of §3; `@Singleton`, holds the app scope, gated on unlock |
@@ -104,7 +105,7 @@ core-sync/
 
 | Column | Type | Default | Why |
 |---|---|---|---|
-| `hlcMs` | `INTEGER NOT NULL` | `0` | row clock, physical part; goes in the envelope AAD |
+| `hlcMs` | `INTEGER NOT NULL` | `0` | row clock, physical part; goes inside the sealed payload |
 | `hlcCounter` | `INTEGER NOT NULL` | `0` | row clock, logical part |
 | `hlcNode` | `TEXT NOT NULL` | `''` | minting device; **the tie-breaker** |
 | `fieldHlc` | `TEXT NOT NULL` | `''` | serialised per-field clocks; `''` means "every field is at the row clock" |
@@ -171,7 +172,7 @@ past its own boundary.
 2. PUSH
    items = dirtyNotes() + dirtyFolders(), oldest row clock first, chunked to 64
    for each chunk:
-     POST /v1/records  { blindedId, recType, hlc, baseSeq = row.lastSyncedSeq, envelope }
+     POST /v1/records  { blindedId, baseSeq = row.lastSyncedSeq, envelope }
      for each per-item result:
        ok       -> lastSyncedSeq = seq, dirty = 0   (only if the row's hlc is unchanged, §3.2)
        conflict -> merge the inline `current` exactly as if it had arrived from a pull,
@@ -234,73 +235,84 @@ Three rules, each of which corresponds to a bug that is otherwise guaranteed:
 
 ---
 
-## 4. The envelope, and the outer-vs-inner `hlc` check
+## 4. The envelope, and the rollback check
 
 This is the item the architecture doc flags as "easy to get wrong" and leaves un-owned. It is owned
 here by `RecordCodec`, and it is the only place allowed to call `RecordEnvelope.open`.
 
 ### What is actually bound to what
 
-`RecordEnvelope.seal/open` take `(kContent, recType, blindedId, hlc, …)` and build the AAD from
-`ver ‖ recType ‖ blindedId ‖ hlc`, length-prefixed. So:
+`RecordEnvelope.seal/open` take `(kContent, blindedId, …)` and build the AAD from `ver ‖ blindedId`,
+length-prefixed. **Nothing about a record travels beside its envelope except the blinded ID it is
+filed under and the `seq` the server assigns it.** `recType` and `hlc` used to be arguments and AAD
+components, which forced both onto the wire — a caller can only rebuild the AAD from values it holds
+*before* decrypting — and the server, which never read either, stored them in the clear. They are
+inside the sealed payload now.
 
-- The **outer** `hlc` — the one the server stores in its `hlc` column and returns in `RecordDto.hlc`
-  — is an AEAD input. A server that alters it produces a tag failure, and `open` returns null.
-- The **inner** `hlc` — a copy inside the encrypted `NotePayload` — is *not* checked by anything in
-  `core-crypto`. `RecordEnvelope`'s own KDoc says so: *"this class authenticates the value it is
-  handed, it cannot know whether that value is the one the caller intended."*
+So there is no outer `hlc` and therefore no outer-versus-inner comparison. The architecture doc
+describes one; it no longer has anything to compare, and it must not be reintroduced as though it
+were a security control. What replaces it is stronger on both counts:
 
-**Be precise about what the inner copy buys, because the architecture doc is not.** It does **not**
-defend against a malicious server: the AAD already makes `(recType, blindedId, hlc, envelope)`
-unforgeable as a tuple. What it catches is a *client* that seals with one clock and ships another —
-which is exactly the bug a refactor of the push path introduces, and which would otherwise produce
-records that decrypt perfectly and sort wrongly, forever, on every device. Treat it as an internal
-consistency assertion, not a security control, and say that in the code.
+- The clock the client sorts and merges on comes out of **authenticated plaintext**. Previously the
+  client read the outer copy, and only an internal client-side assertion made the two agree.
+- `recType` is still bound, because it is part of the blinded-ID HMAC message
+  (`HMAC(K_id, recType ‖ ":" ‖ uuid)`) and `blindedId` both selects the per-record key and is the
+  AAD. `RecordCodec` must **recompute** `BlindedRecordId.compute(kId, payload.recType, payload.uuid)`
+  after opening and refuse the record unless it equals the blinded ID the record arrived under. That
+  restores exactly the binding the AAD used to give, and adds the record `uuid`, which the AAD never
+  covered.
 
 ### What actually defends against a rollback
 
-A server restored from a backup, or a malicious one, can replay an *older authentic* tuple. The AAD
-cannot see that. Three checks, all in `RecordCodec.open`:
+A server restored from a backup, or a malicious one, can replay an *older authentic* envelope. **The
+AAD never defended against this and could not**: a replayed version is exactly the tuple the client
+sealed, so the tag verifies. That was as true when `hlc` was in the AAD as it is now — the binding
+stopped the server *mislabelling* an envelope with another version's clock, an attack that no longer
+exists because there is no outer label to mislabel.
+
+Three checks, all in `RecordCodec.open`:
 
 ```kotlin
 fun open(remote: RecordDto, local: SyncRecord?): OpenResult {
-    val payload = RecordEnvelope.open(kContent, remote.recType, remote.blindedId, remote.hlc, bytes)
+    val payload = RecordEnvelope.open(kContent, remote.blindedId, bytes)
         ?: return OpenResult.Unopenable          // wrong key, tampering, or a foreign account
-    if (payload.hlc != remote.hlc)               // consistency, see above
-        return OpenResult.InternalInconsistency
+    if (BlindedRecordId.compute(kId, payload.recType, payload.uuid) != remote.blindedId)
+        return OpenResult.Mislabelled            // this payload is not the record it was filed as
     if (local != null && !local.dirty && payload.rowHlc < local.rowHlc)
         return OpenResult.Rollback               // the server handed back something we already superseded
     return OpenResult.Ok(payload)
 }
 ```
 
-The third check is the real one. `local.dirty` matters: if the row *is* dirty, a lower remote clock
-is the ordinary "we have a newer local edit" case and the merge handles it. If the row is clean, the
-only way its clock got ahead of the server's is that the server went backwards.
+The third check is the real rollback defence. `local.dirty` matters: if the row *is* dirty, a lower
+remote clock is the ordinary "we have a newer local edit" case and the merge handles it. If the row
+is clean, the only way its clock got ahead of the server's is that the server went backwards.
 
-`GET /v1/changes` gives a fourth, cheaper signal for the same failure: the server answers
-`409 cursor_ahead_of_server` when the client's cursor exceeds its high-water mark, which is what a
-restored-from-backup server looks like from outside. Both must halt the engine loudly (§8, F7).
+Its blind spot is worth stating: a record the client has **never seen** has no local clock to
+compare against, so an old version of a record this device does not know about is undetectable at
+the record level. `GET /v1/changes` covers the whole-server case that produces it — the server
+answers `409 cursor_ahead_of_server` when the client's cursor exceeds its high-water mark, which is
+what a restored-from-backup server looks like from outside. Both must halt the engine loudly
+(§8, F7).
 
 ### Sealing
 
 ```
-plaintext  = Json.encodeToString(NotePayload(...))        // includes the inner hlc copy
+plaintext  = Json.encodeToString(NotePayload(...))        // carries recType, uuid and the row clock
 blindedId  = BlindedRecordId.compute(kId, "note", uuid)   // raw UUID never leaves the device
-envelope   = RecordEnvelope.seal(kContent, "note", blindedId, hlc.toString(), plaintext)
+envelope   = RecordEnvelope.seal(kContent, blindedId, plaintext)
 ```
 
-`RecordEnvelope.seal` pads to 256-byte buckets itself. `recType` is `"note"` or `"folder"`; the same
-string goes into the blinded-ID HMAC message *and* the AAD *and* the wire, and the server enforces
-`1..32` characters. `hlc.toString()` is the canonical `"$ms-$counter-$node"` and the server enforces
-`1..128` characters — with a random `node` that is comfortable, but it is a real bound and the
-`Hlc` serialisation must respect it.
+`RecordEnvelope.seal` pads to 4 KiB buckets itself, which is sized so that a whole short note fits
+one bucket — see `SyncProtocol.PADDING_BUCKET_BYTES`. `recType` is `"note"` or `"folder"` and goes
+into the blinded-ID HMAC message and into the payload; it is not sent separately and the server has
+no opinion about it. The row clock goes into the payload too. Neither has a server-enforced length
+bound any more, because neither reaches the server.
 
-⚠️ **The `hlc` string is plaintext to the server**, because the client must read it before
-decrypting. If `node` is a stable device identifier, the operator learns which device made every
-edit. Use a **per-account random pseudonym** generated once and stored in `secret_shared_prefs`, not
-the server's `deviceId`, not `Settings.Secure.ANDROID_ID`, not the model name. This is stated in
-`server/README.md`'s honest-disclosure list and it is a client-side decision, not a server one.
+The `hlc` node component is no longer visible to the operator, so the per-account-pseudonym
+mitigation in D4 is no longer load-bearing for privacy. Keep a pseudonym anyway if it is already
+built — it is still the right value for a tie-breaker, and it costs nothing — but the reason to have
+one is now hygiene rather than disclosure.
 
 ---
 
@@ -312,7 +324,9 @@ the server's `deviceId`, not `Settings.Secure.ANDROID_ID`, not the model name. T
 @Serializable
 data class NotePayload(
     val v: Int = 1,                      // payload schema version
-    val hlc: String,                     // inner copy of the row clock (§4)
+    val recType: String,                 // "note". Checked against the blinded ID on open (§4).
+    val uuid: String,                    // the local record UUID. Never leaves here unsealed.
+    val hlc: String,                     // the row clock (§4)
     val fields: Map<String, String>,     // canonical field name -> value, as text
     val clocks: Map<String, String>,     // canonical field name -> that field's Hlc
     val del: Boolean = false,            // tombstone. THE ONLY DELETE THE PROTOCOL HAS.
@@ -476,7 +490,7 @@ So:
 |---|---|---|---|
 | F1 | envelope will not open | `RecordEnvelope.open` returns null | count it, skip the record, **do not advance the cursor past it**; if more than a handful, halt and surface "records from this account cannot be read" |
 | F2 | payload `v` is newer than this build | version check in `RecordCodec` | halt the engine; never round-trip a lossily decoded payload |
-| F3 | outer/inner `hlc` mismatch | §4 check | halt; this is a client bug and must be loud in a bug report, not silently repaired |
+| F3 | the opened payload's `(recType, uuid)` does not hash to the blinded ID it arrived under | §4 check | halt; a server cannot produce this without the ARK, so it is a client bug and must be loud in a bug report, not silently repaired |
 | F4 | `409` on push | per-item `status: "conflict"` | merge the inline `current`, keep `dirty`, retry next pass |
 | F5 | `429` | HTTP status | honour `Retry-After` **with jitter**; three devices without jitter form a herd against one VPS |
 | F6 | `401` mid-pass | HTTP status | re-handshake once, retry the call once, else abandon the pass |
@@ -530,11 +544,13 @@ candidates are "never purge tombstones that have been pushed" (simple, unbounded
 sync a device that has been offline longer than the retention window, and force a re-baseline"
 (bounded, needs a re-baseline path that does not exist). **Unresolved.**
 
-**D4 — HLC node identity.** Confirmed above that it must be a per-account random pseudonym in
-`secret_shared_prefs`, distinct from the server's `deviceId`, because the `hlc` string is plaintext
-to the operator. What is *not* settled is whether it should be rotated when a device is revoked —
-rotating loses the tie-breaking history, not rotating means a revoked device's edits stay
-attributable.
+**D4 — HLC node identity.** The original reason for insisting on a per-account random pseudonym was
+that the `hlc` string was plaintext to the operator. It no longer is — the clock is inside the sealed
+payload (§4) — so this is now a question about the *account's own devices* rather than about the
+server. A pseudonym is still the better default: it keeps a device identifier out of a value that
+gets copied into every payload and every conflict copy. What is *not* settled is whether it should
+be rotated when a device is revoked — rotating loses the tie-breaking history, not rotating means a
+revoked device's edits stay attributable **to the other paired devices**.
 
 **D5 — Applying a remote record to the note that is currently open.** The editor holds live state
 behind two chained 300 ms trailing debounces and `Room`'s invalidation is not ordered against the
