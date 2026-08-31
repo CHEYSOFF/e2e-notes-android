@@ -72,6 +72,16 @@ coroutines = "1.9.0"
 zxing = "3.5.3"
 camerax = "1.5.0"
 robolectric = "4.16"
+# The desktop record store. Plain SQLite over JDBC; the confidentiality of a row on desktop is the
+# record envelope's, not the file's -- see desktop/.../store/RecordStore.kt.
+sqliteJdbc = "3.53.4.0"
+# Windows DPAPI (Crypt32) for the desktop "remember me on this computer" layer. One version for
+# both `jna` and `jna-platform`: the platform bindings are compiled against the loader and the two
+# artifacts are released together, so they must not drift apart.
+jna = "5.19.1"
+# Used by :desktop through its JsonElement API only -- no `@Serializable` classes, so the
+# serialization COMPILER plugin is deliberately not applied anywhere.
+kotlinxSerialization = "1.9.0"
 
 [libraries]
 androidx-compose-material-icons-extended = { module = "androidx.compose.material:material-icons-extended", version.ref = "materialIconsExtended" }
@@ -119,6 +129,10 @@ robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
 atomicfu = { group = "org.jetbrains.kotlinx", name = "atomicfu", version.ref = "atomicfu" }
+sqlite-jdbc = { group = "org.xerial", name = "sqlite-jdbc", version.ref = "sqliteJdbc" }
+jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
+jna-platform = { group = "net.java.dev.jna", name = "jna-platform", version.ref = "jna" }
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -55,3 +55,7 @@ include(":feature-pairing")
 // The network transport for E2E sync (Phase 3). It is the only module that declares INTERNET; see
 // core-sync-net/src/main/AndroidManifest.xml for what that permission is for and when it is used.
 include(":core-sync-net")
+// The Compose Desktop app. The only module in this build with no Android plugin at all: it is
+// plain Kotlin/JVM, and it reaches the rest of the project through the two multiplatform modules
+// (:core-domain and :core-crypto-shared) rather than through any Android one.
+include(":desktop")
