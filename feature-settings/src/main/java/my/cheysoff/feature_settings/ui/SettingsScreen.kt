@@ -16,6 +16,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -37,6 +40,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,13 +49,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -69,6 +77,9 @@ import my.cheysoff.feature_settings.model.SettingsIntent
 import my.cheysoff.feature_settings.model.SettingsScreenState
 import my.cheysoff.feature_settings.model.biometricRowInteractive
 import my.cheysoff.feature_settings.model.biometricRowSubtitle
+import my.cheysoff.feature_settings.model.syncCheckAvailable
+import my.cheysoff.feature_settings.model.syncStatus
+import my.cheysoff.feature_settings.model.syncStatusLine
 
 /** Corner radius of a settings card. Between Radii.medium and Radii.large, matching a note card. */
 private val CardRadius = 20.dp
@@ -80,6 +91,17 @@ private val CardRadius = 20.dp
  * back arrows in the editor's and Trash's hand-rolled bars, which have no such inset to undo.
  */
 private val TopAppBarNavIconInset = 4.dp
+
+/**
+ * Text color for the one message on this screen that reports a refusal.
+ *
+ * The palette's [my.cheysoff.core_ui.theme.CatCrimson] is a *fill* color, chosen for equal
+ * perceived depth behind white card text; at 0xFF9C1838 on black it measures about 2.5:1, which is
+ * below the 4.5:1 WCAG AA threshold for text this size. This is that hue lifted until it clears the
+ * threshold (about 7:1 on AppBlack), which is the same relationship [IndigoTint] has to
+ * [AccentIndigo] and exists for the same reason.
+ */
+private val ErrorRose = Color(0xFFE0798C)
 
 /**
  * The Profile tab: everything the app lets you change, plus an honest account of what it does with
@@ -102,6 +124,13 @@ fun SettingsScreen(
     // that reason (see the comment on its declaration). Resolved the same way AuthScreen resolves
     // it for the unlock prompt.
     val activity = LocalContext.current as? FragmentActivity
+
+    // Re-reads the facts this screen cannot change by itself — today, whether the device has
+    // paired, which the pairing screen below can. `Unit` rather than a changing key on purpose:
+    // this is meant to fire once per entry into composition, and Navigation Compose disposes this
+    // destination while the pairing screen is up, so coming back is a fresh entry. The ViewModel
+    // is NOT recreated by that trip, which is exactly why the screen has to say so.
+    LaunchedEffect(Unit) { onIntent(SettingsIntent.ScreenEntered) }
 
     // Pinned rather than collapsing or enter-always: the bar keeps one height and never moves, so
     // the back arrow — the only way off this screen — is on screen at every scroll position.
@@ -228,6 +257,8 @@ fun SettingsScreen(
                 "Pairing is two QR codes and a camera. Nothing is uploaded, and this screen is " +
                     "the only place the app uses the camera."
             )
+
+            SyncSection(state = state, onIntent = onIntent)
 
             SectionLabel("About")
             AboutCard(version = state.appVersion)
@@ -588,12 +619,12 @@ private fun SortRow(order: NotesSortOrder, onSelect: (NotesSortOrder) -> Unit) {
  *    re-enrollment: BiometricKeystoreCipher.
  *  - the wrong-PIN backoff numbers: LockoutPolicy (5 free attempts, 30s base, x2, 5min cap).
  *  - re-lock on background: MainApplication's ProcessLifecycleOwner observer.
- *  - no networking: the project contains no HTTP client and no network code, and the merged debug
- *    manifest declares USE_BIOMETRIC, USE_FINGERPRINT, Compose's own
- *    DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION and CAMERA — and no INTERNET. CAMERA arrived with
- *    :feature-pairing, which reads a QR code off another phone's screen and opens no socket; the
- *    "Devices" section above says so, and the claim below stays true because the app still has
- *    nowhere to upload anything to.
+ *  - "no note ever leaves this phone": there is no sync engine. :core-sync-net is a transport and
+ *    nothing calls it to move a note — no push, no pull, no merge, no scheduler exists — and the
+ *    one network call the app can make is the unauthenticated GET /healthz behind the Sync
+ *    section's "Check server" button, which sends no note and no credential. This paragraph used
+ *    to say the app had no HTTP client at all; that stopped being true when :core-sync-net was
+ *    merged and brought INTERNET into the manifest with it, so it says what is true now instead.
  *
  * The key is described as "random" rather than as a specific length because an install migrated
  * from the pre-PIN key manager reuses whatever passphrase that version generated; only fresh
@@ -627,8 +658,8 @@ private fun AboutCard(version: String) {
             Spacer(Modifier.height(14.dp))
             AboutParagraph(
                 "Your notes are stored in a SQLCipher-encrypted database on this device. " +
-                    "There is no account and no server: nothing is uploaded, and there is " +
-                    "nothing to sign in to."
+                    "Syncing them to a server isn't built yet: even with a server address set, " +
+                    "no note ever leaves this phone, and there is nothing to sign in to."
             )
             AboutParagraph(
                 "The database key is random and is never stored in the clear. It is encrypted " +
@@ -682,5 +713,226 @@ private fun AboutParagraph(text: androidx.compose.ui.text.AnnotatedString) {
             lineHeight = (sw * 0.05f).sp,
         ),
         modifier = Modifier.padding(bottom = 12.dp),
+    )
+}
+
+// ── Sync ────────────────────────────────────────────────────────────────────
+
+/**
+ * Where sealed notes would be posted, once something exists to post them.
+ *
+ * Four things stacked: a status line that names the state precisely, the address field, the
+ * actions on it, and a footnote that states the scheme rule and its reason. It sits under Devices
+ * because it is the second half of one story — pairing joins an account, this points that account
+ * at a server — and the status line's first job is to say which half is still missing.
+ *
+ * ## The wording is load-bearing
+ *
+ * No string here claims a sync happened. There is no sync engine in this build: nothing pushes,
+ * pulls or merges. The best state reads "Ready — syncing isn't built yet, so nothing is uploaded",
+ * which is two true clauses rather than one reassuring one. Every line comes from [syncStatusLine]
+ * for a state [syncStatus] derived, so the copy and the branching are unit-tested together
+ * (`SyncRowTest`) instead of assembled here.
+ */
+@Composable
+private fun SyncSection(state: SettingsScreenState, onIntent: (SettingsIntent) -> Unit) {
+    val status = syncStatus(
+        paired = state.paired,
+        storedUrl = state.serverUrl,
+        storedUrlUsable = state.serverUrlUsable,
+        checking = state.serverCheckBusy,
+        lastCheckFailed = state.lastCheckFailed,
+    )
+
+    SectionLabel("Sync")
+    SettingsCard {
+        SyncStatusRow(line = syncStatusLine(status), busy = state.serverCheckBusy)
+        RowDivider()
+        ServerUrlRow(
+            draft = state.serverUrlDraft,
+            stored = state.serverUrl,
+            error = state.serverUrlError,
+            canCheck = syncCheckAvailable(status) && !state.serverCheckBusy,
+            onChange = { onIntent(SettingsIntent.ServerUrlChanged(it)) },
+            onSave = { onIntent(SettingsIntent.SaveServerUrl) },
+            onClear = { onIntent(SettingsIntent.ClearServerUrl) },
+            onCheck = { onIntent(SettingsIntent.CheckServer) },
+        )
+    }
+    state.serverCheckNotice?.let { FootNote(it) }
+    // Both halves are checkable. The rule is ServerEndpoint's, enforced by the very constructor
+    // this field validates through; the reason is that a plain-HTTP hop exposes the bearer session
+    // token, and SyncApi spends that token on pushRecords and revokeDevice — so what leaks is
+    // write access to the account, not note content, which is sealed long before it gets here.
+    FootNote(
+        "Must be https. Plain http is accepted only for localhost, because notes are encrypted " +
+            "before they are sent but the session token isn't — and that token can write to " +
+            "your account."
+    )
+}
+
+/** The state line: what is configured and what is not. Never a claim that anything synced. */
+@Composable
+private fun SyncStatusRow(line: String, busy: Boolean) {
+    val sw = LocalConfiguration.current.screenWidthDp
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 18.dp, end = 14.dp, top = 16.dp, bottom = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Sync server",
+                color = TitleGrey,
+                style = MaterialTheme.typography.bodySmall.copy(
+                    fontSize = (sw * 0.043f).sp,
+                    fontWeight = FontWeight.Medium,
+                ),
+            )
+            Spacer(Modifier.height(3.dp))
+            Text(
+                text = line,
+                color = BodyGrey,
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = (sw * 0.034f).sp,
+                    lineHeight = (sw * 0.046f).sp,
+                ),
+            )
+        }
+        if (busy) {
+            // The same slot and size as the biometric row's, so a check in flight reads as the
+            // same kind of "wait" this screen already has one of.
+            Spacer(Modifier.width(12.dp))
+            CircularProgressIndicator(
+                modifier = Modifier.size(22.dp),
+                color = IndigoTint,
+                strokeWidth = 2.dp,
+            )
+        }
+    }
+}
+
+/**
+ * The address field and the three things that can be done to it.
+ *
+ * Save appears only when the field differs from what is stored, so the row never offers to
+ * re-save the value already on screen. Clear appears only when something is stored. Check appears
+ * only when [canCheck] — a paired device and a usable stored address — which is the visible half
+ * of "no socket opens before both are true"; the ViewModel and the transport enforce the other
+ * half regardless of what this row shows.
+ */
+@Composable
+private fun ServerUrlRow(
+    draft: String,
+    stored: String?,
+    error: String?,
+    canCheck: Boolean,
+    onChange: (String) -> Unit,
+    onSave: () -> Unit,
+    onClear: () -> Unit,
+    onCheck: () -> Unit,
+) {
+    val sw = LocalConfiguration.current.screenWidthDp
+    val fieldSize = (sw * 0.038f).sp
+    Column(modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 16.dp, bottom = 16.dp)) {
+        Text(
+            text = "Server address",
+            color = TitleGrey,
+            style = MaterialTheme.typography.bodySmall.copy(
+                fontSize = (sw * 0.043f).sp,
+                fontWeight = FontWeight.Medium,
+            ),
+        )
+        Spacer(Modifier.height(10.dp))
+        // The same construction as the folder-name field: a BasicTextField on the screen's own
+        // black inside the card, rather than a Material TextField whose container, label and
+        // indicator colors are a different design language from everything else here.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(MaterialTheme.colorScheme.background)
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+        ) {
+            BasicTextField(
+                value = draft,
+                onValueChange = onChange,
+                singleLine = true,
+                textStyle = TextStyle(color = TitleGrey, fontSize = fieldSize),
+                cursorBrush = SolidColor(AccentIndigo),
+                // A Uri keyboard with autocorrect off: this is an address, and a keyboard that
+                // capitalises the first letter or "corrects" a hostname produces a URL that will
+                // not validate and a user who cannot see why.
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Uri,
+                    autoCorrectEnabled = false,
+                    imeAction = ImeAction.Done,
+                ),
+                keyboardActions = KeyboardActions(onDone = { onSave() }),
+                modifier = Modifier.fillMaxWidth(),
+                decorationBox = { inner ->
+                    if (draft.isEmpty()) {
+                        Text(
+                            text = "https://notes.example.com",
+                            color = Color(0xFF5E5E62),
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = fieldSize),
+                        )
+                    }
+                    inner()
+                },
+            )
+        }
+
+        error?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = it,
+                // The one warning color on this screen, and it is the app's own crimson lifted for
+                // legibility rather than Material's error red, which appears nowhere else here.
+                color = ErrorRose,
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = (sw * 0.033f).sp,
+                    lineHeight = (sw * 0.046f).sp,
+                ),
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Trimmed on the draft side because the check trims too: a trailing space is not a
+            // change worth offering to save.
+            if (draft.trim() != stored.orEmpty()) {
+                PillButton(label = "Save", primary = true, onClick = onSave)
+            }
+            if (stored != null) {
+                PillButton(label = "Clear", primary = false, onClick = onClear)
+            }
+            if (canCheck) {
+                PillButton(label = "Check server", primary = false, onClick = onCheck)
+            }
+        }
+    }
+}
+
+/**
+ * A small pill action, built from the same parts as the notes-order pill: the card's inner black,
+ * a circle shape, and indigo reserved for the one action that writes a setting.
+ */
+@Composable
+private fun PillButton(label: String, primary: Boolean, onClick: () -> Unit) {
+    val sw = LocalConfiguration.current.screenWidthDp
+    Text(
+        text = label,
+        color = if (primary) Color(0xFFE8E6F5) else Color(0xFF8A8A8A),
+        style = MaterialTheme.typography.bodySmall.copy(
+            fontSize = (sw * 0.036f).sp,
+            fontWeight = FontWeight.Medium,
+        ),
+        modifier = Modifier
+            .clip(CircleShape)
+            .background(if (primary) AccentIndigo else Color(0xFF1D1D22))
+            .clickable(onClickLabel = label, role = Role.Button, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 9.dp),
     )
 }
