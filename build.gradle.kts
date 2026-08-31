@@ -67,6 +67,20 @@ val coverageRequestedByTaskName = gradle.startParameter.taskNames.any {
 val coverageEnabled = coverageRequestedByProperty || coverageRequestedByTaskName
 
 subprojects {
+    // Kotlin Multiplatform names its JVM unit-test task `jvmTest`, not `test`. Every aggregate in
+    // this file -- and a bare `./gradlew test` -- asks each subproject for `test`, so without this
+    // a multiplatform module's entire unit-test suite is skipped in SILENCE: the build still says
+    // BUILD SUCCESSFUL, just having run fewer tests than the day before. That is not a
+    // hypothetical failure mode in this repo; a red migration test hid behind exactly this shape
+    // for days because it compiled and was never executed.
+    //
+    // `maybeCreate` rather than `register` because the plugin may already provide the name, and
+    // `allTests` rather than `jvmTest` so that a target added later is picked up without anyone
+    // remembering to come back here.
+    plugins.withId("org.jetbrains.kotlin.multiplatform") {
+        tasks.maybeCreate("test").dependsOn("allTests")
+    }
+
     // `plugins.withId` fires when (and only when) the module applies the plugin itself, so this
     // does not depend on the order the module build scripts are evaluated in, and it silently does
     // nothing for a module that is neither an Android app nor an Android library.
@@ -247,7 +261,18 @@ tasks.register<JacocoReport>("jacocoMergedReport") {
     // `createDebugUnitTestCoverageReport`: the only thing this task needs from them is the .exec
     // execution data, which `testDebugUnitTest` is what actually writes. Running the eight
     // per-module reports as well would just be eight extra HTML trees nobody reads.
-    dependsOn(subprojects.map { "${it.path}:testDebugUnitTest" })
+    //
+    // Matched rather than named for the same reason `verify` matches below: a multiplatform module
+    // has `jvmTest`, not `testDebugUnitTest`, and naming a task a module does not have fails the
+    // whole graph rather than that module. Note that a KMP module contributes its .exec data and
+    // its sources but NOT its classes -- `debugClassPatterns` below is an AGP layout and the
+    // built-in Kotlin compiler writes a multiplatform module's classes elsewhere -- so this makes
+    // the report run again; it does not yet make it count :core-domain or :core-sync-engine.
+    dependsOn(
+        subprojects.map { sub ->
+            sub.tasks.matching { it.name == "testDebugUnitTest" || it.name == "jvmTest" }
+        }
+    )
 
     val moduleClassDirs = subprojects.map { sub ->
         sub.fileTree(sub.layout.buildDirectory) {
@@ -414,7 +439,16 @@ tasks.register("verify") {
             "instrumented suites run on an attached device."
 
     dependsOn(subprojects.map { "${it.path}:test" })
-    dependsOn(subprojects.map { "${it.path}:assembleDebugAndroidTest" })
+    // The Android library plugin names this `assembleDebugAndroidTest`; its multiplatform
+    // counterpart names it `assembleAndroidTest`, because a KMP Android library has no build-type
+    // dimension. Naming one of them outright fails the WHOLE task graph for a module that has the
+    // other -- `verify` stopped configuring at all the moment :core-domain became multiplatform.
+    // Matching is empty-safe and picks up whichever the module actually has.
+    dependsOn(
+        subprojects.map { sub ->
+            sub.tasks.matching { it.name == "assembleDebugAndroidTest" || it.name == "assembleAndroidTest" }
+        }
+    )
 
     if (verifyRequested) {
         if (verifyDevices.isNotEmpty()) {

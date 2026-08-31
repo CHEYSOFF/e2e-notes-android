@@ -1,8 +1,11 @@
-package my.cheysoff.core_domain.sync
+package my.cheysoff.core_sync_engine
 
-import my.cheysoff.core_domain.sync.harness.Op
-import my.cheysoff.core_domain.sync.harness.Schedule
-import my.cheysoff.core_domain.sync.harness.Simulation
+import my.cheysoff.core_domain.sync.FieldClocks
+import my.cheysoff.core_domain.sync.RecordType
+import my.cheysoff.core_domain.sync.SyncValues
+import my.cheysoff.core_sync_engine.harness.Op
+import my.cheysoff.core_sync_engine.harness.Schedule
+import my.cheysoff.core_sync_engine.harness.Simulation
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
