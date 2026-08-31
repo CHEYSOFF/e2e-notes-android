@@ -67,6 +67,20 @@ val coverageRequestedByTaskName = gradle.startParameter.taskNames.any {
 val coverageEnabled = coverageRequestedByProperty || coverageRequestedByTaskName
 
 subprojects {
+    // Kotlin Multiplatform names its JVM unit-test task `jvmTest`, not `test`. Every aggregate in
+    // this file -- and a bare `./gradlew test` -- asks each subproject for `test`, so without this
+    // a multiplatform module's entire unit-test suite is skipped in SILENCE: the build still says
+    // BUILD SUCCESSFUL, just having run fewer tests than the day before. That is not a
+    // hypothetical failure mode in this repo; a red migration test hid behind exactly this shape
+    // for days because it compiled and was never executed.
+    //
+    // `maybeCreate` rather than `register` because the plugin may already provide the name, and
+    // `allTests` rather than `jvmTest` so that a target added later is picked up without anyone
+    // remembering to come back here.
+    plugins.withId("org.jetbrains.kotlin.multiplatform") {
+        tasks.maybeCreate("test").dependsOn("allTests")
+    }
+
     // `plugins.withId` fires when (and only when) the module applies the plugin itself, so this
     // does not depend on the order the module build scripts are evaluated in, and it silently does
     // nothing for a module that is neither an Android app nor an Android library.
