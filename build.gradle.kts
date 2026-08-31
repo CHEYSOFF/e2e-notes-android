@@ -261,7 +261,18 @@ tasks.register<JacocoReport>("jacocoMergedReport") {
     // `createDebugUnitTestCoverageReport`: the only thing this task needs from them is the .exec
     // execution data, which `testDebugUnitTest` is what actually writes. Running the eight
     // per-module reports as well would just be eight extra HTML trees nobody reads.
-    dependsOn(subprojects.map { "${it.path}:testDebugUnitTest" })
+    // `tasks.matching` rather than the task name as a string, because not every module HAS a
+    // `testDebugUnitTest` any more: `:core-domain` and `:core-crypto-shared` are Kotlin
+    // Multiplatform (their JVM tests are `jvmTest`) and `:desktop` is plain Kotlin/JVM (`test`).
+    // A string dependency on a missing task fails the whole build at configuration time, which is
+    // what this task did on the `kmp-desktop` branch before `:desktop` existed. A matching
+    // collection is empty for those modules instead.
+    //
+    // The consequence is that those three modules contribute no coverage data and are absent from
+    // the merged number. That is a real gap and it is NOT closed here -- closing it means wiring
+    // the JaCoCo agent into the Kotlin/JVM test tasks, which is a coverage change with its own
+    // verification. See docs/design/code-coverage.md for how to read the number that comes out.
+    dependsOn(subprojects.map { sub -> sub.tasks.matching { it.name == "testDebugUnitTest" } })
 
     val moduleClassDirs = subprojects.map { sub ->
         sub.fileTree(sub.layout.buildDirectory) {
@@ -427,8 +438,14 @@ tasks.register("verify") {
         "Pre-merge gate: JVM unit tests, every androidTest source set compiled, and the " +
             "instrumented suites run on an attached device."
 
+    // `test` exists everywhere: AGP provides it, the Kotlin/JVM plugin provides it, and the
+    // `subprojects` block above creates it for multiplatform modules.
     dependsOn(subprojects.map { "${it.path}:test" })
-    dependsOn(subprojects.map { "${it.path}:assembleDebugAndroidTest" })
+    // `assembleDebugAndroidTest` does not. It is an AGP task, and three modules are not Android
+    // modules: the two multiplatform ones and `:desktop`. Naming it as a string made this gate
+    // fail at configuration time -- it did so on `kmp-desktop` before `:desktop` was added -- so
+    // it is asked for as a matching collection, which is simply empty for a module without one.
+    dependsOn(subprojects.map { sub -> sub.tasks.matching { it.name == "assembleDebugAndroidTest" } })
 
     if (verifyRequested) {
         if (verifyDevices.isNotEmpty()) {
