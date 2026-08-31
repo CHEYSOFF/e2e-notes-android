@@ -119,6 +119,37 @@ core-sync/
 > and nothing else, and the device label is sealed: `SyncApi.claimAccount` takes a name, seals it
 > through a `DeviceLabelSealer` seam and sends base64url. §4 below is the authority on the envelope.
 
+> **[IMPLEMENTED — `SyncCoordinator` is `SyncEngine`, in a new module `:core-sync-engine`.]**
+> The table puts the coordinator in `core-data`, next to Room. It is instead its own Kotlin
+> Multiplatform module with a **pure `commonMain`**: no Android, no Room, no Hilt, no OkHttp and no
+> I/O of its own. Storage enters through `SyncStore` and the server through `SyncTransport`, both
+> defined in that module and implemented outside it.
+>
+> The reason is the same one §9 gives for keeping `Merge` pure, and it is load-bearing rather than
+> tasteful: with the coordinator inside `core-data` the N-replica harness could only reach it
+> through Room, which makes it an emulator test. As written, `Replica` in the convergence harness
+> drives the **real** `SyncEngine`, so convergence, commutativity, idempotence and determinism are
+> properties of the shipped loop rather than of a second loop written to model it. The module
+> carries the same `mingwX64` canary target `:core-domain` does.
+>
+> Two shapes moved with it:
+>
+>  - **The engine is never handed an envelope.** Opening one needs `K_content`, `K_id` and a JSON
+>    parser, none of which exist in `commonMain`, so `SyncTransport` hands back either a record or
+>    the *reason it could not* — `RecordFault.UNREADABLE`, `MISLABELLED`,
+>    `UNSUPPORTED_PAYLOAD_VERSION`, which are F1, F3 and F2 exactly. The engine owns the policy for
+>    each; §4's `RecordCodec` owns the decrypt, and is still to be written on the Android side.
+>  - **The `429` back-off is split in two, and both halves are needed.** `:core-sync-net`'s
+>    `RetryPolicy` spreads the retries of one request inside one call; the engine's `RetryPlan`
+>    spreads the *next pass*, reporting `SyncOutcome.Deferred(retryAfterMillis)` rather than
+>    sleeping. Without the first a `429` fails a request a two-second wait would have satisfied;
+>    without the second the three devices that just exhausted their in-request budget line up and
+>    do it again as a group.
+>
+> `SyncScheduler`, the app-scoped `CoroutineScope`, the unlock gate and the Hilt bindings (§7) are
+> **not** built. The engine is a suspending object with a `Mutex`; nothing yet decides when to call
+> it.
+
 ---
 
 ## 2. Schema — what Phase 0 owes, restated so this plan is self-contained
@@ -254,6 +285,27 @@ Three rules, each of which corresponds to a bug that is otherwise guaranteed:
 | after a merge commits, before `cursor` is persisted | that record is pulled and merged again next pass | merge must be **idempotent**: re-applying an already-applied remote record is `NoChange`. This is the single most important property in §5 |
 | after the server commits a push, before the `ok` is read | the row stays `dirty` with a stale `lastSyncedSeq`; the next push takes a `409` and merges its own write back | the conflicting envelope is this device's own, so the merge is a no-op |
 | mid-chunk | the applied prefix is committed, the rest is still dirty | the server applies a batch's non-conflicting items and reports per item; there is no half-applied item |
+
+> **[IMPLEMENTED, with one rule this section does not state.]** All three rows are covered by
+> `SyncEngine` holding **no state across passes** — the cursor, the dirty set and the halt all live
+> in `SyncStore` — so "resume after process death" is not a feature the engine has; it is what
+> happens when a second engine is built over the same store.
+> `SyncEngineTest.a pass interrupted by process death resumes to the same state` runs an
+> uninterrupted pass and a torn one and compares the two databases.
+>
+> The rule the plan does not state, and which the convergence harness cannot catch:
+> **the `content` baseline advances against the record that ARRIVED, never against the merged
+> result.** The merged record's content clock is `max` of the two sides', so on a merge this device
+> wins it is *this device's own unpublished body*. Recording that as the agreed ancestor marks an
+> unpublished body as published, and the next merge then discards it with no conflict copy — a body
+> the user typed, gone, with nothing anywhere saying so.
+>
+> This survived the first mutation sweep. The harness could not kill it because the harness's own
+> "no unpublished body was discarded" assertion consults the same baseline, so an inflated baseline
+> excuses itself; it needs two arrivals and a direct assertion, which is
+> `SyncEngineTest.the baseline advances against the record that arrived, not the merged result`.
+> Worth recording as a hazard for anyone writing the Room-backed `SyncStore`: the baseline is not
+> "the newest content clock this row has ever held".
 
 ---
 
@@ -549,6 +601,20 @@ So:
 | F10 | `richeditor` serialiser bump | `serializer` field differs | offline re-baseline, throttled push, no HLC bump (§5.5) |
 | F11 | ARK missing or regenerated | `ark_ct` absent while `accountId` is known | refuse to sync and say so; a second `generateArk()` forks the account into two permanently unreadable halves |
 
+> **[IMPLEMENTED: F1–F7 and F9.]** `SyncEngine` handles them as `HaltReason` (F2, F3, F7, a revoked
+> device, and F1 once past `UNREADABLE_RECORD_LIMIT` = 5), `SyncOutcome.Deferred` (F5 with jitter,
+> and every network failure) or ordinary flow (F4, F9). Each has one named test in `SyncEngineTest`.
+>
+> **F1's exact shape is worth restating**, because "count it, skip the record, do not advance the
+> cursor past it" is three requirements in one line and the third is the one that matters: the
+> engine still applies the readable records *after* the fault — re-applying them next pass is free,
+> because the merge is idempotent — but the persisted cursor freezes at the record before it and
+> paging stops. Nothing beyond a fault is ever recorded as delivered.
+>
+> **F8, F10 and F11 are not the engine's.** F8 is `HlcGenerator`'s and was already built; F10 is an
+> offline re-baseline, deliberately not a sync event; F11 needs `SecureUnlockManager` and is above
+> this layer.
+
 ---
 
 ## 9. Testing
@@ -560,6 +626,21 @@ Three tiers, in the order they pay for themselves:
    `e2e-sync-open-questions.md` §3 and it is a days-not-weeks job **once `Merge` is pure**. It
    catches non-commutative merges, non-idempotent apply, three-replica order dependence, HLC ties,
    and deletion losing to a stale field write.
+
+   > **[BUILT, and it now drives the coordinator too.]** `ConvergenceTest` and its harness live in
+   > `core-sync-engine/src/jvmTest/`, not in `core-domain` — they moved there with `SyncEngine`,
+   > because `core-domain` cannot depend on a module that depends on it. `Replica` no longer
+   > hand-rolls a pull/push/apply loop; it implements `SyncStore` and `SyncTransport` and lets the
+   > real engine drive. Two implementations of a loop whose whole job is to agree is the bug class
+   > this project keeps meeting, and the harness's copy would have been the one that never ran in
+   > production and therefore never got fixed.
+   >
+   > What the simulation still cannot reach is unchanged and is listed in
+   > `e2e-sync-open-questions.md` §3: no crypto (records cross the transport seam as plaintext, so a
+   > convergence failure is never confused with a decryption failure), no Room, no HTTP, no
+   > lifecycle. The engine's own rule tests — the cursor rules, the halts, the `429`, the batch
+   > splitting — are in `SyncEngineTest`, because a simulation over plaintext records never produces
+   > a record that will not open.
 2. **A contract test against the real server.** `server/` builds and runs standalone, so a JVM test
    in `core-sync` can start it on a random port with `MANANA_DB=:memory:` and drive the real HTTP
    surface. This is the only thing that catches a byte-level disagreement in the signed-message
