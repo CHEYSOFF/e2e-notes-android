@@ -46,7 +46,7 @@ class RateLimitTest {
             val ts = harness.clock.now
             val body = JSON_LENIENT.encodeToString(
                 ClaimRequest(
-                    accountId, device.publicKeyB64, "d", ts,
+                    accountId, device.publicKeyB64, device.sealedLabel, ts,
                     device.sign(SignedMessage.claim(accountId, device.publicKeyB64, ts)),
                 )
             )

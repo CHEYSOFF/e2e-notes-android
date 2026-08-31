@@ -30,7 +30,7 @@ class AccountTest {
             ClaimRequest(
                 accountId,
                 squatter.publicKeyB64,
-                "squatter",
+                squatter.sealedLabel,
                 ts,
                 squatter.sign(SignedMessage.claim(accountId, squatter.publicKeyB64, ts)),
             )
@@ -55,7 +55,7 @@ class AccountTest {
             ClaimRequest(
                 accountId,
                 enrolling.publicKeyB64,
-                "enrolling",
+                enrolling.sealedLabel,
                 ts,
                 other.sign(SignedMessage.claim(accountId, enrolling.publicKeyB64, ts)),
             )
@@ -75,7 +75,7 @@ class AccountTest {
             ClaimRequest(
                 accountId,
                 device.publicKeyB64,
-                "d",
+                device.sealedLabel,
                 ts,
                 device.sign(SignedMessage.claim(accountId, device.publicKeyB64, ts)),
             )
@@ -95,7 +95,7 @@ class AccountTest {
             ClaimRequest(
                 accountId,
                 device.publicKeyB64,
-                "d",
+                device.sealedLabel,
                 ts,
                 device.sign(SignedMessage.claim(accountId, device.publicKeyB64, ts)),
             )
@@ -113,7 +113,7 @@ class AccountTest {
             ClaimRequest(
                 shortId,
                 device.publicKeyB64,
-                "d",
+                device.sealedLabel,
                 ts,
                 device.sign(SignedMessage.claim(shortId, device.publicKeyB64, ts)),
             )
@@ -136,7 +136,13 @@ class AccountTest {
         val badB64 = B64.encode(bad)
         val ts = harness.clock.now
         val body = JSON_LENIENT.encodeToString(
-            ClaimRequest(accountId, badB64, "d", ts, device.sign(SignedMessage.claim(accountId, badB64, ts)))
+            ClaimRequest(
+                accountId,
+                badB64,
+                device.sealedLabel,
+                ts,
+                device.sign(SignedMessage.claim(accountId, badB64, ts)),
+            )
         )
         val response = client.postJson("/v1/account", body)
         assertEquals(400, response.status.value)
@@ -162,7 +168,7 @@ class AccountTest {
         val signature = device.sign(SignedMessage.claim(accountId, device.publicKeyB64, ts))
         val body = """
             {"accountId":"$accountId","devicePublicKey":"${device.publicKeyB64}",
-             "deviceLabel":"d","ts":$ts,"signature":"$signature","skipSignatureCheck":true}
+             "sealedLabel":"","ts":$ts,"signature":"$signature","skipSignatureCheck":true}
         """.trimIndent()
         val response = client.postJson("/v1/account", body)
         assertEquals(400, response.status.value)

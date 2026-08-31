@@ -125,6 +125,21 @@ class RecordPaddingTest {
     }
 
     @Test
+    fun `the bucket is large enough to hide a whole short note`() {
+        // The size the constant was chosen for, asserted rather than left to a comment. A record
+        // payload carries a per-field clock map before it carries any text, so several hundred
+        // bytes are spent before the user types a word; a bucket smaller than about a kilobyte
+        // therefore resolves a short note's length rather than hiding it. Three thousand
+        // characters of body text plus that overhead must still be one bucket.
+        val overheadAndBody = 3000 + 900
+
+        assertTrue(
+            "a $bucket-byte bucket cannot hold a short note whole",
+            RecordPadding.pad(content(overheadAndBody)).size == bucket,
+        )
+    }
+
+    @Test
     fun `crossing a bucket boundary costs exactly one more bucket`() {
         val inside = RecordPadding.pad(content(largestSingleBucketPayload)).size
         val over = RecordPadding.pad(content(largestSingleBucketPayload + 1)).size
@@ -152,6 +167,9 @@ class RecordPaddingTest {
     @Test
     fun `unpad returns null when the declared length exceeds the block`() {
         val padded = RecordPadding.pad(content(10))
+        // 65535, written across the two low bytes of the prefix so that this stays a declared
+        // length larger than the block whatever the bucket size happens to be.
+        padded[2] = 0xFF.toByte()
         padded[3] = 0xFF.toByte()
 
         assertNull(RecordPadding.unpad(padded))

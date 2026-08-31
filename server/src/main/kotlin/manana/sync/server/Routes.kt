@@ -284,7 +284,15 @@ private fun validBlindedId(value: String, maxChars: Int): Boolean =
         it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '-' || it == '_'
     }
 
-private fun validOpaqueLabel(value: String, maxChars: Int): Boolean = value.length <= maxChars
+/**
+ * Decodes a sealed device label, or returns null.
+ *
+ * The blob is `DeviceLabelCipher` output and means nothing here; it is checked for base64url shape
+ * and for size, and for nothing else. An empty string is a client that sent no label and decodes to
+ * an empty array, which is stored as-is.
+ */
+private fun decodeSealedLabel(value: String, maxBytes: Int): ByteArray? =
+    B64.decodeOrNull(value)?.takeIf { it.size <= maxBytes }
 
 /** True while [ts] is within the configured window of the server's own clock, in either direction. */
 private fun freshTimestamp(deps: ServerDeps, ts: Long): Boolean {
@@ -306,11 +314,8 @@ private fun claimReplaySlot(deps: ServerDeps, message: ByteArray): Boolean =
 
 private fun RecordVersion.toDto() = RecordDto(
     blindedId = blindedId,
-    recType = recType,
-    hlc = hlc,
     seq = seq,
     envelope = B64.encode(envelope),
-    receivedAt = receivedAt,
 )
 
 // -------------------------------------------------------------------------------------------
@@ -336,9 +341,8 @@ private fun claimAccount(deps: ServerDeps, body: ByteArray): Reply {
     if (!validAccountId(request.accountId)) {
         return error(BAD_REQUEST, "invalid_account_id", "accountId is not a 16-byte base64url value.")
     }
-    if (!validOpaqueLabel(request.deviceLabel, deps.config.maxLabelChars)) {
-        return error(BAD_REQUEST, "invalid_label", "deviceLabel is too long.")
-    }
+    val sealedLabel = decodeSealedLabel(request.sealedLabel, deps.config.maxSealedLabelBytes)
+        ?: return error(BAD_REQUEST, "invalid_label", "sealedLabel is not base64url, or is too long.")
     val publicKey = B64.decodeExactly(request.devicePublicKey, P256Verify.POINT_SIZE_BYTES)
         ?: return error(BAD_REQUEST, "invalid_public_key", "devicePublicKey is not a SEC1 P-256 point.")
     if (P256Verify.decodePublicKey(publicKey) == null) {
@@ -358,7 +362,7 @@ private fun claimAccount(deps: ServerDeps, body: ByteArray): Reply {
         return error(UNAUTHORIZED, "replay_detected", "This signed request has already been used.")
     }
 
-    val deviceId = deps.store.claimAccount(request.accountId, publicKey, request.deviceLabel)
+    val deviceId = deps.store.claimAccount(request.accountId, publicKey, sealedLabel)
         ?: return error(HttpStatusCode.Conflict, "account_exists", "That account is already claimed.")
 
     return Reply(
@@ -384,9 +388,8 @@ private fun authorizeDevice(deps: ServerDeps, body: ByteArray): Reply {
     if (!validAccountId(request.accountId)) {
         return error(BAD_REQUEST, "invalid_account_id", "accountId is not a 16-byte base64url value.")
     }
-    if (!validOpaqueLabel(request.deviceLabel, deps.config.maxLabelChars)) {
-        return error(BAD_REQUEST, "invalid_label", "deviceLabel is too long.")
-    }
+    val sealedLabel = decodeSealedLabel(request.sealedLabel, deps.config.maxSealedLabelBytes)
+        ?: return error(BAD_REQUEST, "invalid_label", "sealedLabel is not base64url, or is too long.")
     val newKey = B64.decodeExactly(request.newPublicKey, P256Verify.POINT_SIZE_BYTES)
         ?: return error(BAD_REQUEST, "invalid_public_key", "newPublicKey is not a SEC1 P-256 point.")
     if (P256Verify.decodePublicKey(newKey) == null) {
@@ -412,7 +415,7 @@ private fun authorizeDevice(deps: ServerDeps, body: ByteArray): Reply {
         return error(UNAUTHORIZED, "replay_detected", "This signed request has already been used.")
     }
 
-    val deviceId = deps.store.enrolDevice(request.accountId, newKey, request.deviceLabel)
+    val deviceId = deps.store.enrolDevice(request.accountId, newKey, sealedLabel)
         ?: return error(HttpStatusCode.Conflict, "device_exists", "That key is already enrolled.")
 
     return Reply(
@@ -488,12 +491,18 @@ private fun openSession(deps: ServerDeps, body: ByteArray): Reply {
     return Reply(HttpStatusCode.OK, JSON.encodeToString(SessionResponse(token, expiresAt)))
 }
 
-/** `GET /v1/devices` -- what is enrolled, including revoked entries, so a UI can show history. */
+/**
+ * `GET /v1/devices` -- what is enrolled, including revoked entries, so a UI can show history.
+ *
+ * The label comes back exactly as it was sent: a sealed blob only the account's own devices can
+ * read. Revoked rows are included on purpose -- a device the user cannot see is a device the user
+ * cannot reason about.
+ */
 private fun listDevices(deps: ServerDeps, session: SessionRow): Reply {
     val devices = deps.store.listDevices(session.accountId).map {
         DeviceDto(
             deviceId = it.deviceId,
-            label = it.label,
+            sealedLabel = B64.encode(it.sealedLabel),
             publicKey = B64.encode(it.publicKey),
             createdAt = it.createdAt,
             revokedAt = it.revokedAt,
@@ -578,6 +587,11 @@ private fun changes(deps: ServerDeps, session: SessionRow, sinceParam: String?, 
  * Envelopes are checked for size and for nothing else. **The server does not parse them and must
  * not start**: the moment it understands a byte of an envelope, it is no longer true that a
  * compromised server learns nothing.
+ *
+ * An item carries a blinded ID, a `baseSeq` and an envelope, and that is the complete list because
+ * those are the only three things this route acts on. A field the server would only store and hand
+ * back is a field that belongs inside the envelope instead; `recType` and `hlc` were exactly that
+ * and were removed.
  */
 private fun upsertRecords(deps: ServerDeps, session: SessionRow, body: ByteArray): Reply {
     val request = parse<UpsertRequest>(body) ?: return MALFORMED_BODY
@@ -599,12 +613,6 @@ private fun upsertRecords(deps: ServerDeps, session: SessionRow, body: ByteArray
         if (!validBlindedId(item.blindedId, deps.config.maxBlindedIdChars)) {
             return error(BAD_REQUEST, "invalid_blinded_id", "blindedId is missing or malformed.")
         }
-        if (item.recType.isEmpty() || item.recType.length > deps.config.maxRecTypeChars) {
-            return error(BAD_REQUEST, "invalid_rec_type", "recType is missing or too long.")
-        }
-        if (item.hlc.isEmpty() || item.hlc.length > deps.config.maxHlcChars) {
-            return error(BAD_REQUEST, "invalid_hlc", "hlc is missing or too long.")
-        }
         if (item.baseSeq < 0) {
             return error(BAD_REQUEST, "invalid_base_seq", "baseSeq must not be negative.")
         }
@@ -613,7 +621,7 @@ private fun upsertRecords(deps: ServerDeps, session: SessionRow, body: ByteArray
         if (envelope.isEmpty() || envelope.size > deps.config.maxEnvelopeBytes) {
             return error(BAD_REQUEST, "invalid_envelope", "envelope is empty or too large.")
         }
-        items += UpsertItem(item.blindedId, item.recType, item.hlc, item.baseSeq, envelope)
+        items += UpsertItem(item.blindedId, item.baseSeq, envelope)
     }
 
     val outcomes = deps.store.upsertBatch(session.accountId, items)
