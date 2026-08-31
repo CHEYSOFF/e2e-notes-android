@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="AesGcmKnownAnswerTest[jvm]" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-08-31T22:04:35.055Z" hostname="CHEYSOFF" time="0.007">
+  <properties/>
+  <testcase name="GCM test case 16 - AES-256, 60 bytes of plaintext, 20 bytes of AAD[jvm]" classname="my.cheysoff.core_crypto.sync.AesGcmKnownAnswerTest" time="0.004"/>
+  <testcase name="GCM test case 15 - AES-256, 64 bytes of plaintext, no AAD[jvm]" classname="my.cheysoff.core_crypto.sync.AesGcmKnownAnswerTest" time="0.001"/>
+  <testcase name="the AAD changes the tag without changing the ciphertext[jvm]" classname="my.cheysoff.core_crypto.sync.AesGcmKnownAnswerTest" time="0.002"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

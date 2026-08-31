@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="ArkCipherTest[jvm]" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-08-31T22:04:35.066Z" hostname="CHEYSOFF" time="0.026">
+  <properties/>
+  <testcase name="an empty iv is a null rather than a throw[jvm]" classname="my.cheysoff.core_crypto.sync.ArkCipherTest" time="0.004"/>
+  <testcase name="a modified iv does not open[jvm]" classname="my.cheysoff.core_crypto.sync.ArkCipherTest" time="0.001"/>
+  <testcase name="every wrap uses a fresh nonce[jvm]" classname="my.cheysoff.core_crypto.sync.ArkCipherTest" time="0.0"/>
+  <testcase name="the ciphertext does not contain the plaintext[jvm]" classname="my.cheysoff.core_crypto.sync.ArkCipherTest" time="0.013"/>
+  <testcase name="a modified ciphertext does not open[jvm]" classname="my.cheysoff.core_crypto.sync.ArkCipherTest" time="0.001"/>
+  <testcase name="refuses an ark that is not 32 bytes[jvm]" classname="my.cheysoff.core_crypto.sync.ArkCipherTest" time="0.001"/>
+  <testcase name="leaves the caller's arrays alone[jvm]" classname="my.cheysoff.core_crypto.sync.ArkCipherTest" time="0.001"/>
+  <testcase name="round-trips the ark under the same passphrase[jvm]" classname="my.cheysoff.core_crypto.sync.ArkCipherTest" time="0.001"/>
+  <testcase name="the stored format is HKDF of the passphrase under the arkwrap info string[jvm]" classname="my.cheysoff.core_crypto.sync.ArkCipherTest" time="0.002"/>
+  <testcase name="a different passphrase does not open the wrap[jvm]" classname="my.cheysoff.core_crypto.sync.ArkCipherTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

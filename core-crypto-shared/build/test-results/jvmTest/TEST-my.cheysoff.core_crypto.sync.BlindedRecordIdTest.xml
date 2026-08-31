@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="BlindedRecordIdTest[jvm]" tests="8" skipped="0" failures="0" errors="0" timestamp="2026-08-31T22:04:35.107Z" hostname="CHEYSOFF" time="0.008">
+  <properties/>
+  <testcase name="different uuids give different ids[jvm]" classname="my.cheysoff.core_crypto.sync.BlindedRecordIdTest" time="0.006"/>
+  <testcase name="the id is 22 unpadded base64url characters[jvm]" classname="my.cheysoff.core_crypto.sync.BlindedRecordIdTest" time="0.001"/>
+  <testcase name="an empty K_id is rejected[jvm]" classname="my.cheysoff.core_crypto.sync.BlindedRecordIdTest" time="0.0"/>
+  <testcase name="different recTypes give different ids for the same uuid[jvm]" classname="my.cheysoff.core_crypto.sync.BlindedRecordIdTest" time="0.0"/>
+  <testcase name="the id does not contain the uuid[jvm]" classname="my.cheysoff.core_crypto.sync.BlindedRecordIdTest" time="0.0"/>
+  <testcase name="a different K_id gives a different id for the same record[jvm]" classname="my.cheysoff.core_crypto.sync.BlindedRecordIdTest" time="0.0"/>
+  <testcase name="the recType separator prevents a boundary collision[jvm]" classname="my.cheysoff.core_crypto.sync.BlindedRecordIdTest" time="0.001"/>
+  <testcase name="the same inputs give the same id across calls[jvm]" classname="my.cheysoff.core_crypto.sync.BlindedRecordIdTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

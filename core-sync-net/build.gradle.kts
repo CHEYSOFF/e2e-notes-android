@@ -67,7 +67,7 @@ dependencies {
     // For `Base64Url.encode` and the protocol's size constants. This module deliberately does NOT
     // re-implement either: a second base64url encoder or a second `ACCOUNT_ID_BYTES` is exactly the
     // "two implementations that disagree" failure this project has already shipped once.
-    implementation(project(":core-crypto"))
+    implementation(project(":core-crypto-shared"))
 
     // The only new third-party dependency. See OkHttpTransport's KDoc for why OkHttp and not
     // HttpURLConnection: `CertificatePinner` is a direct match for the `spkiPinSha256` the pairing
