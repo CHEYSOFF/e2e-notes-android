@@ -79,6 +79,14 @@ core-sync/
 `core-data` and `feature-notes` depend on `core-sync`; `core-sync` depends on `core-domain` and
 `core-crypto` and on nothing else.
 
+> **[LANDED ELSEWHERE.]** The clock and merge halves of this layout are in **`core-domain`**, not a
+> new `core-sync` module: `sync/Hlc.kt`, `HlcGenerator.kt`, `FieldClocks.kt`, `SyncRecord.kt`,
+> `Merge.kt`, `MergeResult.kt`, `ConflictCopies.kt`. `e2e-sync-open-questions.md` §3 offers
+> "`core-domain` (or a new `core-sync`)" and the constraint that actually matters is purity, which
+> `core-domain` already has — it declares no Room, no Hilt and no coroutines. A ninth Gradle module
+> would have bought a namespace and cost a build script. The transport half is `:core-sync-net`, as
+> the note further down records.
+
 ### The classes, by name and job
 
 | Class | Module | Responsibility |
@@ -375,6 +383,12 @@ than record-level LWW: those metadata gestures are exactly what people do casual
 - **`updatedAt` follows `content`.** When the remote `content` wins, take the remote `updatedAt`
   too. Otherwise two devices show the same notes in a different order forever — a visible divergence
   in the one field the user actually looks at.
+  Implemented as an **effective clock**: each side offers its `updatedAt` at
+  `max(its own updatedAt clock, its own content clock)`, and the higher offer wins. That keeps the
+  rule true without breaking the two cases a blunter "the content winner decides" would break —
+  `clearFolder` bumps `updatedAt` without touching the body, and the merged record's own offer has
+  to reproduce, or the rule stops being idempotent. On a folder there is no `content` and it
+  degenerates to an ordinary field. See `Merge.mergeUpdatedAt`.
 - **`isDeleted` and `deletedAt` are one unit**, for the same reason.
 
 ### 5.4 Deletion
@@ -460,6 +474,27 @@ is worse than one appearing in Recent.
 Deduplicate: if a conflict copy for `(uuid, loserContentHlc)` already exists locally, do not write a
 second one. Two devices can otherwise each write a copy of the other's loser and the account gains
 two duplicates per conflict instead of one.
+
+> **[IMPLEMENTED 2026-08-31 — three deviations, each forced by convergence.]** `Merge` and
+> `ConflictCopies` in `core-domain/.../sync/` implement this section, with the following changes.
+> All three were found by the convergence harness (`ConvergenceTest`), not by review.
+>
+> 1. **The copy's uuid is derived, not fresh:**
+>    `UUID.nameUUIDFromBytes("manana/sync/v1/conflict-copy|<uuid>|<loserContentHlc>")`. Both devices
+>    resolving one conflict then build the *same* record, so the deduplication rule above costs
+>    nothing — the second copy to be pushed simply CASes into the first. A fresh random uuid makes
+>    the two copies un-foldable, which is the two-duplicates-per-conflict outcome this section is
+>    trying to avoid.
+> 2. **The title suffix is the constant `" (conflict copy)"`, not `"(conflict — <device label>,
+>    <dd MMM HH:mm>)"`.** A device label is per device and a formatted local time is per timezone,
+>    so putting either into a **synced** field makes the two devices' copies differ permanently in
+>    the one column the user reads. Provenance is not lost: the copy's row clock *is* the loser's
+>    content clock, so it carries the minting node and the millisecond, and a UI can render them
+>    locally without the two devices having to agree on how.
+> 3. **An empty losing body produces no copy.** The rule is "never silently discard a user's text";
+>    an empty body is not text. Without the exemption, a note that exists on two devices before
+>    either has typed into it — the blank row `createNewNote` persists, or a note first touched by
+>    a pin — gains a duplicate containing nothing.
 
 ---
 
@@ -585,3 +620,19 @@ The proposed test (`local.dirty` and the remote content clock is not one this de
 seen) is sound but conservative: it produces a conflict copy in some cases where the two edits were
 actually the same. Whether that is acceptable, or whether a per-field `lastSyncedHlc` is worth a
 column, is open.
+
+> **[STILL OPEN, but the merge is built for either answer.]** `Merge.merge` takes
+> `LocalRecord.contentBaseline: Hlc?` — the `content` clock of the last version this device and the
+> server agreed on. **Null** means no ancestor is recorded and the merge falls back to exactly the
+> conservative rule above. **Non-null** makes the test precise, and the difference is measurable:
+> `ConvergenceTest.aBaselineIsWhatStopsAPinFromCostingADuplicateNote` runs one schedule both ways
+> and shows a pin costing a duplicate note in one and nothing in the other.
+>
+> Convergence holds either way — `convergenceHoldsWithoutContentBaselines` is a separate sweep for
+> exactly that reason — so this is a **noise** decision, not a correctness one. Closing it means one
+> more column (`contentSyncedHlc`) and passing it; nothing in the merge changes.
+>
+> Worth stating plainly, because it is the reason this cannot be solved in the merge: an HLC is a
+> **total** order and therefore cannot express concurrency. "Both devices edited since their last
+> common ancestor" is not derivable from two clocks, however carefully they are compared. It needs
+> the ancestor written down, and one clock per record is the smallest form of that.
