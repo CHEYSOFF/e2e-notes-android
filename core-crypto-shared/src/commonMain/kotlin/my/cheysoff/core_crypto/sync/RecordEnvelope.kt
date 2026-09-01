@@ -1,12 +1,8 @@
 package my.cheysoff.core_crypto.sync
 
-import java.io.ByteArrayOutputStream
-import java.security.GeneralSecurityException
-import java.security.SecureRandom
-import javax.crypto.AEADBadTagException
-import javax.crypto.Cipher
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.SecretKeySpec
+import my.cheysoff.core_crypto.platform.aesGcmOpen
+import my.cheysoff.core_crypto.platform.aesGcmSeal
+import my.cheysoff.core_crypto.platform.secureRandomBytes
 
 /**
  * The record envelope — the only form in which note data is allowed to leave the device.
@@ -66,20 +62,14 @@ import javax.crypto.spec.SecretKeySpec
  *   local row's when that row is not `dirty`, and halt on `409 cursor_ahead_of_server`. See
  *   `docs/design/e2e-sync-phase3-plan.md` §4.
  *
- * Pure `javax.crypto` / `java.security` — no Android, no state beyond the RNG, unit-testable.
- * Never logs key material, plaintext, or the ARK-derived keys it is given.
+ * Common code over the AEAD primitive in `platform` — no Android, no JVM, no state, unit-testable
+ * on every target. Never logs key material, plaintext, or the ARK-derived keys it is given.
  */
 object RecordEnvelope {
-
-    private const val CIPHER_TRANSFORMATION = "AES/GCM/NoPadding"
-    private const val KEY_ALGORITHM = "AES"
-    private const val TAG_BITS = SyncProtocol.TAG_BYTES * 8
 
     /** Smallest structurally valid envelope: version + nonce + tag, with empty ciphertext. */
     private const val MIN_ENVELOPE_BYTES =
         1 + SyncProtocol.NONCE_BYTES + SyncProtocol.TAG_BYTES
-
-    private val secureRandom = SecureRandom()
 
     /**
      * Seals [payload] into an envelope for the record [blindedId].
@@ -98,14 +88,16 @@ object RecordEnvelope {
         payload: ByteArray,
     ): ByteArray {
         val padded = RecordPadding.pad(payload)
-        val nonce = ByteArray(SyncProtocol.NONCE_BYTES).also(secureRandom::nextBytes)
-        val key = perRecordKey(kContent, blindedId)
+        val nonce = secureRandomBytes(SyncProtocol.NONCE_BYTES)
+        val key = perRecordKeyBytes(kContent, blindedId)
         try {
-            val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
-            cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(TAG_BITS, nonce))
-            cipher.updateAAD(associatedData(blindedId))
-            // JCA returns ciphertext ‖ tag concatenated, which is exactly the envelope's tail.
-            val sealed = cipher.doFinal(padded)
+            // The seam returns ciphertext ‖ tag concatenated, which is exactly the envelope's tail.
+            val sealed = aesGcmSeal(
+                key = key,
+                nonce = nonce,
+                aad = associatedData(blindedId),
+                plaintext = padded,
+            )
 
             val envelope = ByteArray(1 + nonce.size + sealed.size)
             envelope[0] = SyncProtocol.ENVELOPE_VERSION
@@ -115,6 +107,9 @@ object RecordEnvelope {
         } finally {
             // `padded` holds the plaintext in the clear; drop it as soon as it is sealed.
             padded.fill(0)
+            // And so does the per-record key. `SecretKeySpec` used to keep an unwipeable copy of
+            // it; the seam takes raw bytes, so for the first time this key can actually be erased.
+            key.fill(0)
         }
     }
 
@@ -140,29 +135,23 @@ object RecordEnvelope {
 
         val nonce = envelope.copyOfRange(1, 1 + SyncProtocol.NONCE_BYTES)
         val body = envelope.copyOfRange(1 + SyncProtocol.NONCE_BYTES, envelope.size)
-        val key = perRecordKey(kContent, blindedId)
+        val key = perRecordKeyBytes(kContent, blindedId)
         var padded: ByteArray? = null
         try {
-            val cipher = Cipher.getInstance(CIPHER_TRANSFORMATION)
-            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BITS, nonce))
-            cipher.updateAAD(associatedData(blindedId))
-            padded = cipher.doFinal(body)
+            // A tag mismatch — wrong key, altered ciphertext or nonce, associated data that does
+            // not match what this record was sealed with — and every other cryptographic failure
+            // arrive here as the same null. That merging is the seam's contract and is the reason
+            // this function no longer needs to name a provider's exception types.
+            padded = aesGcmOpen(
+                key = key,
+                nonce = nonce,
+                aad = associatedData(blindedId),
+                sealed = body,
+            ) ?: return null
             return RecordPadding.unpad(padded)
-        } catch (_: AEADBadTagException) {
-            // Tag mismatch: wrong key, altered ciphertext/nonce, or associated data that does not
-            // match what this record was sealed with.
-            return null
-        } catch (_: GeneralSecurityException) {
-            // Any other crypto failure — input a provider rejects before it reaches tag
-            // verification, or a provider that reports a bad tag as something other than
-            // AEADBadTagException. No unit test reaches this branch against SunJCE, because every
-            // input this class can construct either passes the structural checks above or fails
-            // as a tag mismatch; it is here so that a different provider on a real device degrades
-            // to "cannot open this record" instead of throwing out of `open`. Same defensive
-            // shape, and the same reasoning, as `PassphraseCipher.unwrapWithPin`.
-            return null
         } finally {
             padded?.fill(0)
+            key.fill(0)
         }
     }
 
@@ -180,25 +169,13 @@ object RecordEnvelope {
      * actually wired up. Nothing outside this module may call it; it returns live key material.
      */
     internal fun perRecordKeyBytes(kContent: ByteArray, blindedId: String): ByteArray {
-        val info = (SyncProtocol.INFO_RECORD_KEY_PREFIX + blindedId).toByteArray(Charsets.UTF_8)
+        val info = (SyncProtocol.INFO_RECORD_KEY_PREFIX + blindedId).encodeToByteArray()
         return Hkdf.derive(
             ikm = kContent,
             salt = null,
             info = info,
             length = SyncProtocol.DERIVED_KEY_BYTES,
         )
-    }
-
-    private fun perRecordKey(kContent: ByteArray, blindedId: String): SecretKeySpec {
-        val keyBytes = perRecordKeyBytes(kContent, blindedId)
-        val key = SecretKeySpec(keyBytes, KEY_ALGORITHM)
-        // SecretKeySpec's constructor takes its own copy, so clearing our intermediate array here
-        // removes one copy of the key from the heap. It does NOT remove the SecretKeySpec's copy:
-        // `getEncoded()` hands back a fresh clone rather than the internal array, and
-        // `SecretKeySpec` does not implement a working `destroy()`, so the JDK offers no way to
-        // wipe it. Same trade-off, and the same limitation, as `PassphraseCipher.deriveKey`.
-        keyBytes.fill(0)
-        return key
     }
 
     /**
@@ -227,17 +204,16 @@ object RecordEnvelope {
      * unit tests can assert what seal/open cannot expose.
      */
     internal fun associatedData(blindedId: String): ByteArray {
-        val out = ByteArrayOutputStream()
-        out.write(SyncProtocol.ENVELOPE_VERSION.toInt())
-        writeLengthPrefixed(out, blindedId)
-        return out.toByteArray()
-    }
-
-    private fun writeLengthPrefixed(out: ByteArrayOutputStream, value: String) {
-        val bytes = value.toByteArray(Charsets.UTF_8)
-        require(bytes.size <= 0xFFFF) { "associated-data field is too long to length-prefix" }
-        out.write((bytes.size ushr 8) and 0xFF)
-        out.write(bytes.size and 0xFF)
-        out.write(bytes, 0, bytes.size)
+        // Was a `ByteArrayOutputStream`, which is a JVM type. The layout is unchanged and
+        // `RecordEnvelopeTest` asserts on it directly, byte for byte, precisely because seal/open
+        // cannot expose it.
+        val idBytes = blindedId.encodeToByteArray()
+        require(idBytes.size <= 0xFFFF) { "associated-data field is too long to length-prefix" }
+        val out = ByteArray(3 + idBytes.size)
+        out[0] = SyncProtocol.ENVELOPE_VERSION
+        out[1] = (idBytes.size ushr 8).toByte()
+        out[2] = idBytes.size.toByte()
+        idBytes.copyInto(out, destinationOffset = 3)
+        return out
     }
 }

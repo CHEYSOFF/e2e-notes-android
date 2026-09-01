@@ -1,10 +1,8 @@
 package my.cheysoff.core_crypto.sync
 
-import java.security.GeneralSecurityException
-import java.security.SecureRandom
-import javax.crypto.Cipher
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.SecretKeySpec
+import my.cheysoff.core_crypto.platform.aesGcmOpen
+import my.cheysoff.core_crypto.platform.aesGcmSeal
+import my.cheysoff.core_crypto.platform.secureRandomBytes
 
 /**
  * Seals a device's human-readable name so the sync server stores a blob instead of "Vova's Pixel 7".
@@ -50,14 +48,11 @@ import javax.crypto.spec.SecretKeySpec
  * signed message would be a protocol change reaching well past this file, and the outcome it would
  * buy — "unnamed" versus "unnamed, and the request rejected" — does not pay for it.
  *
- * Pure `javax.crypto` / `java.security` — no Android, no state beyond the RNG, unit-testable.
- * Never logs the ARK, the derived key, or the label.
+ * Common code over the AEAD primitive in `platform` — no Android, no JVM, no state, unit-testable
+ * on every target. Never logs the ARK, the derived key, or the label.
  */
 object DeviceLabelCipher {
 
-    private const val TRANSFORMATION = "AES/GCM/NoPadding"
-    private const val KEY_ALGORITHM = "AES"
-    private const val TAG_BITS = SyncProtocol.TAG_BYTES * 8
     private const val LENGTH_PREFIX_BYTES = 2
 
     /**
@@ -73,8 +68,6 @@ object DeviceLabelCipher {
         1 + SyncProtocol.NONCE_BYTES + SyncProtocol.DEVICE_LABEL_PLAINTEXT_BYTES +
             SyncProtocol.TAG_BYTES
 
-    private val secureRandom = SecureRandom()
-
     /**
      * Seals [label] for the device enrolling with [devicePublicKeyB64], under a key derived from
      * [ark].
@@ -86,7 +79,12 @@ object DeviceLabelCipher {
      * a caller bug, and silently storing a truncated name would be worse.
      */
     fun seal(ark: ByteArray, devicePublicKeyB64: String, label: String): ByteArray {
-        val text = label.toByteArray(Charsets.UTF_8)
+        // `encodeToByteArray()` rather than `toByteArray(Charsets.UTF_8)`; `Charsets` is a JVM
+        // type. The two differ on exactly one input: a string containing a lone surrogate, which
+        // the JVM encodes as `?` and Kotlin common encodes as U+FFFD. A label is user text, so
+        // that input is reachable by paste — but a label is sealed and opened by this same code
+        // and never compared against anything else, so the difference cannot break a device list.
+        val text = label.encodeToByteArray()
         require(text.size <= MAX_LABEL_UTF8_BYTES) {
             "device label is ${text.size} UTF-8 bytes, at most $MAX_LABEL_UTF8_BYTES fit"
         }
@@ -98,15 +96,13 @@ object DeviceLabelCipher {
 
         val key = deriveKey(ark)
         try {
-            val nonce = ByteArray(SyncProtocol.NONCE_BYTES).also(secureRandom::nextBytes)
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(
-                Cipher.ENCRYPT_MODE,
-                SecretKeySpec(key, KEY_ALGORITHM),
-                GCMParameterSpec(TAG_BITS, nonce),
+            val nonce = secureRandomBytes(SyncProtocol.NONCE_BYTES)
+            val sealed = aesGcmSeal(
+                key = key,
+                nonce = nonce,
+                aad = associatedData(devicePublicKeyB64),
+                plaintext = padded,
             )
-            cipher.updateAAD(associatedData(devicePublicKeyB64))
-            val sealed = cipher.doFinal(padded)
 
             val out = ByteArray(1 + nonce.size + sealed.size)
             out[0] = SyncProtocol.DEVICE_LABEL_VERSION
@@ -138,26 +134,21 @@ object DeviceLabelCipher {
         val key = deriveKey(ark)
         var padded: ByteArray? = null
         try {
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(
-                Cipher.DECRYPT_MODE,
-                SecretKeySpec(key, KEY_ALGORITHM),
-                GCMParameterSpec(TAG_BITS, nonce),
-            )
-            cipher.updateAAD(associatedData(devicePublicKeyB64))
-            padded = cipher.doFinal(body)
+            // Wrong ARK, a different device's key in the associated data, a modified blob, a
+            // malformed nonce — the seam answers all of them with null, which is exactly the set
+            // the two `catch` blocks here used to cover.
+            padded = aesGcmOpen(
+                key = key,
+                nonce = nonce,
+                aad = associatedData(devicePublicKeyB64),
+                sealed = body,
+            ) ?: return null
 
             val length = ((padded[0].toInt() and 0xFF) shl 8) or (padded[1].toInt() and 0xFF)
             // This block has already passed tag verification, so a length that does not fit means
             // a bug rather than an attacker — but it still must not index off the end.
             if (length > padded.size - LENGTH_PREFIX_BYTES) return null
-            return String(padded, LENGTH_PREFIX_BYTES, length, Charsets.UTF_8)
-        } catch (_: GeneralSecurityException) {
-            // Wrong ARK, a different device's key in the associated data, or a modified blob.
-            return null
-        } catch (_: IllegalArgumentException) {
-            // GCMParameterSpec rejects some malformed nonces outright. Same answer.
-            return null
+            return padded.decodeToString(LENGTH_PREFIX_BYTES, LENGTH_PREFIX_BYTES + length)
         } finally {
             key.fill(0)
             padded?.fill(0)
@@ -173,7 +164,7 @@ object DeviceLabelCipher {
      * than a live defence with only one.
      */
     internal fun associatedData(devicePublicKeyB64: String): ByteArray {
-        val bytes = devicePublicKeyB64.toByteArray(Charsets.UTF_8)
+        val bytes = devicePublicKeyB64.encodeToByteArray()
         require(bytes.size <= 0xFFFF) { "associated-data field is too long to length-prefix" }
         val out = ByteArray(3 + bytes.size)
         out[0] = SyncProtocol.DEVICE_LABEL_VERSION
@@ -190,7 +181,7 @@ object DeviceLabelCipher {
         return Hkdf.derive(
             ikm = ark,
             salt = null,
-            info = SyncProtocol.INFO_DEVICE_LABEL.toByteArray(Charsets.US_ASCII),
+            info = SyncProtocol.INFO_DEVICE_LABEL.encodeToByteArray(),
             length = SyncProtocol.DERIVED_KEY_BYTES,
         )
     }

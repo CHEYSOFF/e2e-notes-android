@@ -1,6 +1,6 @@
 package my.cheysoff.core_crypto.sync
 
-import java.security.SecureRandom
+import my.cheysoff.core_crypto.platform.secureRandomBytes
 
 /**
  * The three values derived from the Account Root Key, as one immutable bundle.
@@ -50,8 +50,6 @@ class AccountKeys(
  */
 object AccountRootKey {
 
-    private val secureRandom = SecureRandom()
-
     /**
      * Generates a fresh Account Root Key.
      *
@@ -75,7 +73,7 @@ object AccountRootKey {
      * open. `SecureUnlockManagerArkTest` is where that is held to. The caller owns the returned
      * array and should zero it once it has been wrapped.
      */
-    fun generateArk(): ByteArray = ByteArray(SyncProtocol.ARK_BYTES).also(secureRandom::nextBytes)
+    fun generateArk(): ByteArray = secureRandomBytes(SyncProtocol.ARK_BYTES)
 
     /**
      * Derives [AccountKeys] from [ark].
@@ -100,5 +98,8 @@ object AccountRootKey {
     }
 
     private fun deriveOne(ark: ByteArray, info: String, length: Int): ByteArray =
-        Hkdf.derive(ikm = ark, salt = null, info = info.toByteArray(Charsets.US_ASCII), length = length)
+        // `encodeToByteArray()` rather than `toByteArray(Charsets.US_ASCII)`: `Charsets` is a JVM
+        // type, and the info strings are the ASCII literals in `SyncProtocol`, for which UTF-8 and
+        // US-ASCII are the same bytes. Confirmed against the committed protocol vectors.
+        Hkdf.derive(ikm = ark, salt = null, info = info.encodeToByteArray(), length = length)
 }

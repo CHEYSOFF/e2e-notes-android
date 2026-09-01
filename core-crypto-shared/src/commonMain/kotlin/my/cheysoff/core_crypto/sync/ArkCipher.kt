@@ -1,10 +1,8 @@
 package my.cheysoff.core_crypto.sync
 
-import java.security.GeneralSecurityException
-import java.security.SecureRandom
-import javax.crypto.Cipher
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.SecretKeySpec
+import my.cheysoff.core_crypto.platform.aesGcmOpen
+import my.cheysoff.core_crypto.platform.aesGcmSeal
+import my.cheysoff.core_crypto.platform.secureRandomBytes
 
 /** An ARK wrapped for storage: the GCM output and the nonce it was produced under. */
 class ArkWrap(val iv: ByteArray, val ciphertext: ByteArray)
@@ -43,18 +41,13 @@ class ArkWrap(val iv: ByteArray, val ciphertext: ByteArray)
  * one file. There is no second ciphertext to confuse this one with, so an AAD would bind it to
  * nothing it is not already bound to. The 128-bit GCM tag still detects any modification.
  *
- * Pure `javax.crypto` / `java.security` — no Android types — so it is unit-tested in `src/test`
- * exactly like [my.cheysoff.core_crypto.PassphraseCipher]. Never logs key material.
+ * Common code over the AEAD primitive in `platform` — no Android types, no JVM types — so it is
+ * unit-tested exactly like [my.cheysoff.core_crypto.PassphraseCipher]. Never logs key material.
  */
 object ArkCipher {
 
-    private const val TRANSFORMATION = "AES/GCM/NoPadding"
-    private const val KEY_ALGORITHM = "AES"
     private const val IV_BYTES = 12
-    private const val TAG_BITS = 128
     private const val KEY_BYTES = 32
-
-    private val secureRandom = SecureRandom()
 
     /**
      * Wrap [ark] under a key derived from [passphrase].
@@ -67,14 +60,11 @@ object ArkCipher {
         }
         val key = deriveWrapKey(passphrase)
         try {
-            val iv = ByteArray(IV_BYTES).also(secureRandom::nextBytes)
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(
-                Cipher.ENCRYPT_MODE,
-                SecretKeySpec(key, KEY_ALGORITHM),
-                GCMParameterSpec(TAG_BITS, iv),
+            val iv = secureRandomBytes(IV_BYTES)
+            return ArkWrap(
+                iv = iv,
+                ciphertext = aesGcmSeal(key = key, nonce = iv, aad = null, plaintext = ark),
             )
-            return ArkWrap(iv = iv, ciphertext = cipher.doFinal(ark))
         } finally {
             key.fill(0)
         }
@@ -91,20 +81,10 @@ object ArkCipher {
     fun unwrap(wrap: ArkWrap, passphrase: ByteArray): ByteArray? {
         val key = deriveWrapKey(passphrase)
         return try {
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(
-                Cipher.DECRYPT_MODE,
-                SecretKeySpec(key, KEY_ALGORITHM),
-                GCMParameterSpec(TAG_BITS, wrap.iv),
-            )
-            cipher.doFinal(wrap.ciphertext)
-        } catch (_: GeneralSecurityException) {
-            // Wrong passphrase, truncated ciphertext, modified IV — all the same answer here.
-            null
-        } catch (_: IllegalArgumentException) {
-            // GCMParameterSpec rejects an empty IV outright, which a corrupted prefs entry can
-            // produce. Same answer: there is no ARK to be had.
-            null
+            // Wrong passphrase, truncated ciphertext, modified IV, an empty IV from a corrupted
+            // prefs entry — the seam answers all of them with null, which is the same set of
+            // outcomes the two `catch` blocks here used to cover.
+            aesGcmOpen(key = key, nonce = wrap.iv, aad = null, sealed = wrap.ciphertext)
         } finally {
             key.fill(0)
         }
@@ -113,7 +93,7 @@ object ArkCipher {
     private fun deriveWrapKey(passphrase: ByteArray): ByteArray = Hkdf.derive(
         ikm = passphrase,
         salt = null,
-        info = SyncProtocol.INFO_ARK_WRAP.toByteArray(Charsets.US_ASCII),
+        info = SyncProtocol.INFO_ARK_WRAP.encodeToByteArray(),
         length = KEY_BYTES,
     )
 }

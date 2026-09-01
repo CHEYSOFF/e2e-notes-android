@@ -1,16 +1,15 @@
 package my.cheysoff.core_crypto.sync
 
-import javax.crypto.Mac
-import javax.crypto.spec.SecretKeySpec
+import my.cheysoff.core_crypto.platform.hmacSha256
 
 /**
  * HKDF-SHA256 — RFC 5869 extract-and-expand key derivation.
  *
- * Hand-rolled over [javax.crypto.Mac] on purpose. The alternatives all cost more than the thirty
+ * Hand-rolled over one HMAC primitive on purpose. The alternatives all cost more than the thirty
  * lines below: `android.security.keystore` has no HKDF, Tink/BouncyCastle would be a new
- * dependency, and `javax.crypto.KDF` is Java 24. Doing it here keeps this file pure JVM, so it is
- * unit-testable in `src/test` against the published RFC 5869 vectors — which is exactly the
- * property [my.cheysoff.core_crypto.PassphraseCipher] already has and the reason to keep it.
+ * dependency, `javax.crypto.KDF` is Java 24 and JVM-only, and CommonCrypto has no HKDF at all.
+ * Doing it here keeps ONE HKDF for every platform -- which matters more than it sounds, because
+ * this repository has already shipped two that disagreed.
  *
  * A wrong HKDF is invisible: it still produces 32 pseudo-random-looking bytes, still round-trips
  * against itself, and only shows up as "the other device cannot decrypt anything" much later. That
@@ -19,9 +18,6 @@ import javax.crypto.spec.SecretKeySpec
  * Never logs key material.
  */
 object Hkdf {
-
-    private const val HMAC_ALGORITHM = "HmacSHA256"
-    private const val KEY_ALGORITHM = "HmacSHA256"
 
     /** Output length of SHA-256, called `HashLen` in RFC 5869. */
     const val HASH_LEN = 32
@@ -38,9 +34,7 @@ object Hkdf {
      */
     fun extract(salt: ByteArray?, ikm: ByteArray): ByteArray {
         val effectiveSalt = if (salt == null || salt.isEmpty()) ByteArray(HASH_LEN) else salt
-        val mac = Mac.getInstance(HMAC_ALGORITHM)
-        mac.init(SecretKeySpec(effectiveSalt, KEY_ALGORITHM))
-        return mac.doFinal(ikm)
+        return hmacSha256(key = effectiveSalt, message = ikm)
     }
 
     /**
@@ -55,18 +49,21 @@ object Hkdf {
         require(length > 0) { "HKDF output length must be positive" }
         require(length <= MAX_OUTPUT_BYTES) { "HKDF output length must be at most $MAX_OUTPUT_BYTES" }
 
-        val mac = Mac.getInstance(HMAC_ALGORITHM)
-        mac.init(SecretKeySpec(prk, KEY_ALGORITHM))
-
         val okm = ByteArray(length)
         var previousBlock = ByteArray(0)
         var written = 0
         var counter = 1
         while (written < length) {
-            mac.update(previousBlock)
-            mac.update(info)
-            mac.update(counter.toByte())
-            previousBlock = mac.doFinal()
+            // The JVM version of this loop fed the MAC incrementally (`update` three times, then
+            // `doFinal`). The seam offers one-shot HMAC only -- deliberately, so that a streaming
+            // variant cannot become a second way to compute the same value -- so the three pieces
+            // are concatenated here instead. Same bytes into the same PRF; the RFC 5869 vectors in
+            // `HkdfTest` are what say so, including the multi-block A.2 case this loop exists for.
+            val block = ByteArray(previousBlock.size + info.size + 1)
+            previousBlock.copyInto(block)
+            info.copyInto(block, destinationOffset = previousBlock.size)
+            block[block.size - 1] = counter.toByte()
+            previousBlock = hmacSha256(key = prk, message = block)
 
             val toCopy = minOf(previousBlock.size, length - written)
             previousBlock.copyInto(okm, destinationOffset = written, endIndex = toCopy)
