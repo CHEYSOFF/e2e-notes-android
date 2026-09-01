@@ -1,6 +1,10 @@
 package my.cheysoff.feature_pairing
 
+import my.cheysoff.core_pairing.protocol.AccountDeviceSession
 import my.cheysoff.core_pairing.protocol.MonotonicClock
+import my.cheysoff.core_pairing.protocol.OfferOutcome
+import my.cheysoff.core_pairing.protocol.P256
+import java.security.interfaces.ECPublicKey
 
 /**
  * A [MonotonicClock] the test drives by hand.
@@ -21,3 +25,27 @@ class FakeClock(var now: Long = 0L) : MonotonicClock {
         now += millis
     }
 }
+
+/**
+ * Scan an offer and seal it with an empty config: the other phone's half in one call.
+ *
+ * The tests in this file that use it are about *this* ViewModel as the new device, so the other
+ * side is a prop. The tests about the enrolment split drive `onScanned` and `seal` separately.
+ */
+fun AccountDeviceSession.accept(text: String, config: String = ""): AcceptedPairing? {
+    val outcome = onScanned(text) as? OfferOutcome.Accepted ?: return null
+    return AcceptedPairing(sas = outcome.sas, sealCode = seal(config)!!)
+}
+
+/** What [accept] produced: the six digits, and the QR2 payload. */
+class AcceptedPairing(val sas: String, val sealCode: String)
+
+/**
+ * A real P-256 point, as a computer's QR1 carries its long-lived device key.
+ *
+ * Generated rather than 65 arbitrary bytes: the account session validates it against the curve
+ * before it will vouch for it, so a fake would be refused and the test would fail for the wrong
+ * reason.
+ */
+fun aDeviceKey(): ByteArray =
+    P256.encodePublicKey(P256.generateKeyPair().public as ECPublicKey)
