@@ -268,7 +268,7 @@ private fun FailedStep(step: PairingStep.Failed, onStartOver: () -> Unit, onBack
  * and leaving a bright unpainted strip along two sides of the symbol.
  */
 @Composable
-private fun QrCode(code: String, modifier: Modifier = Modifier) {
+internal fun QrCode(code: String, modifier: Modifier = Modifier) {
     // `remember(code)`: encoding runs the symbol back through the decoder at three scales to catch
     // the ~0.6% of payloads that encode into something unreadable (see QrCodes), which is far too
     // much work to repeat on every recomposition — and the countdown recomposes this once a second.

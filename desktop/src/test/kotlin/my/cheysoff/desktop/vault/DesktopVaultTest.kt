@@ -311,6 +311,99 @@ class DesktopVaultTest {
         assertTrue(session.accountKeys.kId.all { it == 0.toByte() })
     }
 
+    // -------------------------------------------------------------------------------------------
+    // Enrolling a vault created on this computer
+    // -------------------------------------------------------------------------------------------
+
+    /**
+     * A vault created here has no server, and gains one after the fact.
+     *
+     * The order is forced by the key hierarchy: the handle a server files an account under is
+     * derived from the ARK, so it cannot be known before the vault exists. What this pins is that
+     * the result survives a lock — the enrolment is in `vault.json`, not only in the live session.
+     */
+    @Test
+    fun `an enrolment recorded after setup survives a lock and unlock`() {
+        val vault = vault()
+        val created = vault.setUp(passphrase, AccountOrigin.CREATED_HERE) as SetupResult.Created
+        assertNull("a vault created here starts with no server", created.session.sync)
+
+        val deviceKey = DeviceKeyPair.generate()
+        assertTrue(
+            vault.recordEnrolment(
+                created.session,
+                ServerEnrolment("https://notes.example", "dev-1", deviceKey),
+            )
+        )
+        assertEquals("dev-1", created.session.sync!!.deviceId)
+
+        val unlocked = vault.unlock(passphrase) as UnlockResult.Unlocked
+        val sync = unlocked.session.sync!!
+        assertEquals("https://notes.example", sync.serverUrl)
+        assertEquals("dev-1", sync.deviceId)
+        assertArrayEquals(deviceKey.publicKeySec1, sync.deviceKey.publicKeySec1)
+        assertTrue("the two stored halves must still agree", sync.deviceKey.verifySelfConsistent())
+    }
+
+    /**
+     * A second enrolment is refused rather than applied.
+     *
+     * Overwriting would leave a device row the server still trusts, still able to write to the
+     * account, that nothing on this machine can revoke — and the notes would keep opening
+     * throughout, so nothing would look wrong.
+     */
+    @Test
+    fun `a vault that is already enrolled refuses a second enrolment`() {
+        val vault = vault()
+        val created = vault.setUp(passphrase, AccountOrigin.CREATED_HERE) as SetupResult.Created
+        vault.recordEnrolment(
+            created.session,
+            ServerEnrolment("https://notes.example", "dev-1", DeviceKeyPair.generate()),
+        )
+
+        assertFalse(
+            vault.recordEnrolment(
+                created.session,
+                ServerEnrolment("https://evil.example", "dev-2", DeviceKeyPair.generate()),
+            )
+        )
+        assertEquals("dev-1", created.session.sync!!.deviceId)
+
+        // And from a fresh session, so this is a fact about the file rather than about the object.
+        val unlocked = vault.unlock(passphrase) as UnlockResult.Unlocked
+        assertEquals("https://notes.example", unlocked.session.sync!!.serverUrl)
+        assertFalse(
+            vault.recordEnrolment(
+                unlocked.session,
+                ServerEnrolment("https://evil.example", "dev-2", DeviceKeyPair.generate()),
+            )
+        )
+        assertEquals("dev-1", unlocked.session.sync!!.deviceId)
+    }
+
+    /** The device key is wrapped under the vault key, so the header alone does not carry it. */
+    @Test
+    fun `a recorded device key is not readable from the header without the vault key`() {
+        val vault = vault()
+        val created = vault.setUp(passphrase, AccountOrigin.CREATED_HERE) as SetupResult.Created
+        val deviceKey = DeviceKeyPair.generate()
+        vault.recordEnrolment(
+            created.session,
+            ServerEnrolment("https://notes.example", "dev-1", deviceKey),
+        )
+
+        val bytes = Files.readAllBytes(vault.headerFile)
+        val header = VaultHeader.decode(bytes)!!
+        assertNotNull(header.sync)
+        // The public half is in the clear -- it is public -- and the private half is not there in
+        // any form the file itself reveals.
+        assertArrayEquals(deviceKey.publicKeySec1, header.sync!!.devicePublicKey)
+        assertNull(
+            "the PKCS#8 private key must not appear in the header",
+            DeviceKeyCipher.unwrap(header.sync!!.deviceKeyWrap, ByteArray(32)),
+        )
+    }
+
     @Test
     fun `the hlc node is derived from the ARK and is stable across unlocks`() {
         val vault = vault()

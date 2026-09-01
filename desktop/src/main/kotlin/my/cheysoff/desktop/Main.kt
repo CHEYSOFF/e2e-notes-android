@@ -15,10 +15,12 @@ import my.cheysoff.desktop.app.AppController
 import my.cheysoff.desktop.app.DesktopSyncState
 import my.cheysoff.desktop.keychain.CredentialStores
 import my.cheysoff.desktop.platform.HostOs
+import my.cheysoff.desktop.ui.AccountInviteScreen
 import my.cheysoff.desktop.ui.CreatePassphraseScreen
 import my.cheysoff.desktop.ui.DamagedScreen
 import my.cheysoff.desktop.ui.FirstRunScreen
 import my.cheysoff.desktop.ui.MananaColors
+import my.cheysoff.desktop.ui.NameServerScreen
 import my.cheysoff.desktop.ui.PairingScreen
 import my.cheysoff.desktop.ui.MananaTheme
 import my.cheysoff.desktop.ui.UnlockScreen
@@ -75,6 +77,10 @@ fun main(args: Array<String>) {
                 syncLabel = syncLabelOf(controller.syncState),
                 onSync = if (controller.syncState is DesktopSyncState.Unavailable) null
                 else controller::syncNow,
+                // Offered only where it can work. A computer with no server enrolment cannot
+                // authorise anything, and a button that always led to "name a server first" would
+                // be an invitation to a dead end rather than a feature.
+                onAddDevice = if (screen.session.sync == null) null else controller::addDevice,
                 onExit = ::exitApplication,
             )
         } else {
@@ -118,7 +124,25 @@ private fun GateScreens(vault: DesktopVault, controller: AppController) {
     when (val screen = controller.screen) {
         is AppController.Screen.FirstRun -> FirstRunScreen(
             onPair = controller::choosePairing,
+            onCreateAccountHere = controller::chooseCreateAccountHere,
             onUseStandalone = controller::chooseStandalone,
+        )
+
+        is AppController.Screen.NameServer -> NameServerScreen(
+            url = screen.url,
+            busy = controller.busy,
+            message = screen.message ?: controller.message,
+            onUrlChange = controller::editServerUrl,
+            onContinue = controller::confirmServer,
+            onBack = controller::backToFirstRun,
+        )
+
+        is AppController.Screen.Invite -> AccountInviteScreen(
+            step = screen.controller.step,
+            onConfirmSas = screen.controller::confirmSas,
+            onRejectSas = screen.controller::rejectSas,
+            onStartOver = controller::inviteStartOver,
+            onDone = controller::inviteFinished,
         )
 
         is AppController.Screen.Pairing -> PairingScreen(
@@ -141,7 +165,7 @@ private fun GateScreens(vault: DesktopVault, controller: AppController) {
             message = controller.message,
             onBack = controller::backToFirstRun,
             onCreate = { passphrase, confirmation ->
-                controller.create(passphrase, confirmation, screen.origin)
+                controller.create(passphrase, confirmation, screen.origin, screen.server)
             },
         )
 
