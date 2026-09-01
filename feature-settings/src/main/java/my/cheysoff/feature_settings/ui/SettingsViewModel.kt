@@ -17,6 +17,7 @@ import my.cheysoff.core_crypto.domain.AuthRepository
 import my.cheysoff.core_domain.model.AppInfo
 import my.cheysoff.core_domain.repository.SettingsRepository
 import my.cheysoff.core_domain.repository.SyncSettingsRepository
+import my.cheysoff.core_domain.sync.SyncController
 import my.cheysoff.core_domain.sync.SyncServerCheck
 import my.cheysoff.core_domain.sync.SyncTransportStatus
 import my.cheysoff.feature_auth.util.BiometricEnrollResult
@@ -32,6 +33,7 @@ class SettingsViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val syncSettingsRepository: SyncSettingsRepository,
     private val syncTransportStatus: SyncTransportStatus,
+    syncController: SyncController,
     private val secureUnlockManager: SecureUnlockManager,
     private val authRepository: AuthRepository,
     private val biometricEnroller: BiometricEnroller,
@@ -44,6 +46,13 @@ class SettingsViewModel @Inject constructor(
     val state = _state.asStateFlow()
 
     init {
+        // The engine's own state, mirrored. A `StateFlow`, so this screen never asks "did anything
+        // sync?" — it is told, including while a pass triggered by the unlock is still running
+        // behind this screen.
+        syncController.state
+            .onEach { pass -> _state.update { it.copy(sync = pass) } }
+            .launchIn(viewModelScope)
+
         // Header settings and sort order are already exposed as flows, so those rows are a pure
         // mirror: the intent writes through the repository and the new value arrives back here.
         // Neither is echoed into state at the point of the tap, so those switches cannot show a

@@ -28,6 +28,9 @@ import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.model.NotesSortOrder
 import my.cheysoff.core_domain.repository.NotesRepository
 import my.cheysoff.core_domain.repository.SettingsRepository
+import my.cheysoff.core_domain.sync.SyncController
+import my.cheysoff.core_domain.sync.SyncPassState
+import my.cheysoff.core_domain.sync.SyncTrigger
 import my.cheysoff.feature_notes.model.list.BottomBarItem
 import my.cheysoff.feature_notes.model.list.HeaderLineUi
 import my.cheysoff.feature_notes.model.list.NotePreviewUi
@@ -80,6 +83,7 @@ private data class ListData(
 class NotesListViewModel @Inject constructor(
     private val notesRepository: NotesRepository,
     private val settingsRepository: SettingsRepository,
+    private val syncController: SyncController,
 ) : ViewModel() {
     private val _state = MutableStateFlow(NotesListScreenState())
     val state = _state.asStateFlow()
@@ -353,6 +357,52 @@ class NotesListViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Runs a sync pass and reports what it did.
+     *
+     * ## Why this waits for the pass rather than firing and forgetting
+     *
+     * A pull-to-refresh is a question: *is there anything new?* The list itself is already live —
+     * it is a Room `Flow`, so a record the engine writes appears without anything here asking — so
+     * the only thing this gesture adds is the network round trip and an answer about it. Returning
+     * immediately would spin the indicator for 200ms and tell the user nothing, which is worse than
+     * not offering the gesture.
+     *
+     * The spinner is driven by [NotesListScreenState.refreshing] rather than by `isLoading`: the
+     * list stays on screen and fully usable throughout, because a sync is a background fact and not
+     * a reason to take someone's notes away.
+     *
+     * `syncNow` never throws — every failure is a `SyncPassState` — so there is nothing to catch.
+     */
+    private fun refresh() {
+        _state.update { it.copy(refreshing = true, syncNotice = null) }
+        viewModelScope.launch {
+            val outcome = syncController.syncNow(SyncTrigger.MANUAL_REFRESH)
+            _state.update { it.copy(refreshing = false, syncNotice = refreshNotice(outcome)) }
+        }
+    }
+
+    /**
+     * What to tell someone who just pulled the list down.
+     *
+     * Every string reports what the pass did, and none claims where their notes now are — the same
+     * rule the settings screen's copy is held to, for the same reason. A pass that found nothing
+     * says so plainly: it is the commonest outcome by far, and "nothing new" is a real answer to
+     * the question the gesture asked.
+     */
+    private fun refreshNotice(outcome: SyncPassState): String? = when (outcome) {
+        is SyncPassState.Completed ->
+            if (outcome.summary.quiet) "Nothing new."
+            else "Sent ${outcome.summary.pushed}, applied ${outcome.summary.applied}."
+
+        is SyncPassState.Deferred -> outcome.message
+        is SyncPassState.Halted -> outcome.message
+        is SyncPassState.Unavailable -> outcome.message
+        // Another pass was already running and this one joined it rather than queueing a second.
+        // There is nothing to report that is not about to be replaced by that pass's own result.
+        SyncPassState.Running, SyncPassState.Idle -> null
+    }
+
     fun onIntent(intent: NotesListIntent) {
         when (intent) {
             is NotesListIntent.NoteClicked -> {
@@ -378,6 +428,8 @@ class NotesListViewModel @Inject constructor(
             is NotesListIntent.AddNoteClicked -> {
                 createNewNote()
             }
+
+            NotesListIntent.RefreshRequested -> refresh()
 
             NotesListIntent.AllNotesClicked -> selectBottomBarItem(BottomBarItem.ALL_NOTES)
             NotesListIntent.CalendarClicked -> selectBottomBarItem(BottomBarItem.CALENDAR)
