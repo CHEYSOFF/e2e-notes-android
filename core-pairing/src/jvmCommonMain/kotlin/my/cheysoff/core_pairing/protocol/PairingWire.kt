@@ -183,6 +183,59 @@ internal class PairingWireException(
  *   98   sealLen   seal     AES-256-GCM ciphertext ‖ 16-byte tag
  * ```
  *
+ * ## The invite direction — `kind = 0x03` and `kind = 0x04`
+ *
+ * The two frames above are the **scanned** direction: the device with no account key shows QR1 and
+ * the account device reads it with a camera. The two frames below are the *other* direction, for
+ * the case where the account device is the one with no camera — a laptop that created the account
+ * and now has to admit a phone. See [my.cheysoff.core_pairing.protocol.AccountInviteSession] for
+ * what that costs, which is not nothing.
+ *
+ * ### Invite body — `kind = 0x03`, emitted by the ACCOUNT device, shown as a QR code
+ *
+ * ```
+ *   off  len       field
+ *   18   1         epLen    = 65
+ *   19   epLen     EA       SEC1 uncompressed P-256 point, the account device's ephemeral
+ *   84   2         urlLen   0..1024
+ *   86   urlLen    url      rendezvous base URL, UTF-8. MUST be non-empty: there is no offline
+ *                          variant of this direction, because the reply cannot travel by QR.
+ *   ..   1         pinLen   0 or 32
+ *   ..   pinLen    spkiPin  SHA-256 of the server's SubjectPublicKeyInfo. Absent when pinLen = 0.
+ * ```
+ *
+ * Carries no device key. The account device is already enrolled — it claimed the account — so
+ * there is nothing here for anyone to vouch for. `url` is **authenticated by the screen**: the
+ * person reading this code is looking at their own computer, which is the same thing that makes
+ * QR1's `EB` trustworthy in the scanned direction.
+ *
+ * ### Reply body — `kind = 0x04`, emitted by the JOINING device, deposited over HTTP
+ *
+ * ```
+ *   off  len       field
+ *   18   1         epLen    = 65
+ *   19   epLen     EB       SEC1 uncompressed P-256 point, the joining device's ephemeral
+ *   84   1         dkLen    = 65
+ *   85   dkLen     DB       the joining device's LONG-LIVED device public key, SEC1 uncompressed
+ * ```
+ *
+ * **This frame is never a QR code.** It is `MNP1:`-wrapped anyway, so that it travels through
+ * [RendezvousProtocol.toBlob] and comes back through the same decoder with the same prefix check
+ * and the same base64url bound as everything else on that route — one framing, not two.
+ *
+ * `DB` is mandatory here, where QR1 makes it optional. A device that reaches a rendezvous at all is
+ * a device that intends to sync, and the account device's whole job in this direction is to vouch
+ * for it; a reply with no key would produce a pairing that hands over the ARK and enrols nothing.
+ *
+ * ### Why these are kinds and not a version bump
+ *
+ * The version byte governs the **layout of a kind's body**, and no existing body changed. Adding a
+ * kind is additive: a build that speaks only `0x01`/`0x02` decodes the header of a `0x03` frame,
+ * finds a kind it was not looking for, and reports [PairingFailure.WRONG_CODE_KIND] — "that is not
+ * the code this step wants", which is the truth. Bumping the version instead would make every
+ * existing pairing between a mixed pair of builds fail with "different version" for a change that
+ * does not touch the frames they exchange.
+ *
  * ## Key schedule
  *
  * ```
@@ -224,13 +277,31 @@ internal class PairingWireException(
  * means a different `sid` yields a different key, and the AAD binding means that even if the salt
  * were ever dropped from the schedule, a seal still cannot be lifted from one session into another.
  *
- * ## SAS
+ * ## SAS — scanned direction
  *
  * ```
  *   sas = decimal( KeyDerivation(ikm = ARK, salt = sid,
  *                                info = "manana/pair/v1/confirm", outLen = 8)  mod 1_000_000 )
  * ```
  * zero-padded to six digits. See [Sas].
+ *
+ * ## SAS — invite direction
+ *
+ * ```
+ *   sas = decimal( KeyDerivation(ikm = Z, salt = sid,
+ *                                info = "manana/pair/v1/confirm/inv" ‖ EA ‖ EB,
+ *                                outLen = 8)  mod 1_000_000 )
+ * ```
+ *
+ * A **different key and a different job**. The scanned direction's SAS is over the ARK, because
+ * there the ARK is the thing both devices are supposed to have ended up with and a man in the
+ * middle is impossible anyway. Here the ARK has not moved yet — it must not move until this
+ * comparison succeeds — so the SAS is over the raw ECDH secret with both ephemeral points bound
+ * into `info`. That is what makes a substituted `EB` produce two different six-digit strings, and
+ * it is the ONLY thing that does. See [Sas.deriveFromAgreement].
+ *
+ * The two `info` strings differ and the two `ikm`s differ, so neither value can ever be mistaken
+ * for the other.
  * ---------------------------------------------------------------------------------------------
  */
 object PairingProtocol {
@@ -251,6 +322,12 @@ object PairingProtocol {
 
     /** Frame kind: QR2, the seal from the device that holds the ARK. */
     const val KIND_SEAL: Byte = 0x02
+
+    /** Frame kind: the invite QR the account device shows in the invite direction. */
+    const val KIND_INVITE: Byte = 0x03
+
+    /** Frame kind: the joining device's answer to an invite. Never a QR; see the wire format. */
+    const val KIND_REPLY: Byte = 0x04
 
     /** The only bundle (sealed plaintext) version this build produces or accepts. */
     const val BUNDLE_VERSION: Byte = 0x01
@@ -273,8 +350,17 @@ object PairingProtocol {
      */
     const val DOMAIN = "manana/pair/v1"
 
-    /** HKDF `info` for the short authentication string. */
+    /** HKDF `info` for the short authentication string in the scanned direction. */
     const val SAS_INFO = "$DOMAIN/confirm"
+
+    /**
+     * HKDF `info` prefix for the short authentication string in the **invite** direction.
+     *
+     * Distinct from [SAS_INFO] and not merely by convention: the two are computed over different
+     * key material for different purposes, and a shared string would mean a value derived for one
+     * job could be presented as the other.
+     */
+    const val INVITE_SAS_INFO = "$DOMAIN/confirm/inv"
 
     /**
      * How long a pairing code stays usable, in milliseconds.
@@ -307,6 +393,19 @@ object PairingProtocol {
 
     /** The GCM AAD for the seal: `"manana/pair/v1" ‖ sid`. */
     fun sealAad(sid: ByteArray): ByteArray = DOMAIN_BYTES + sid
+
+    /** [INVITE_SAS_INFO] as bytes. */
+    val INVITE_SAS_INFO_BYTES: ByteArray = INVITE_SAS_INFO.toByteArray(Charsets.US_ASCII)
+
+    /**
+     * The HKDF `info` for the invite direction's SAS: `"manana/pair/v1/confirm/inv" ‖ EA ‖ EB`.
+     *
+     * Both points are bound in, and that is the whole mechanism: an attacker who replaces `EB` on
+     * the way to the account device changes this input on one side and not the other, so the two
+     * screens show different digits and the person is the one who notices.
+     */
+    fun inviteSasInfo(encodedEa: ByteArray, encodedEb: ByteArray): ByteArray =
+        INVITE_SAS_INFO_BYTES + encodedEa + encodedEb
 }
 
 /**
@@ -395,6 +494,27 @@ internal class OfferFrame(
     val encodedDeviceKey: ByteArray?,
 )
 
+/**
+ * A decoded invite (`kind = 0x03`).
+ *
+ * [serverHint] is not a hint on this frame the way it is on [OfferFrame]: the joining device read
+ * it off the account device's own screen, so it is as authenticated as anything in this protocol
+ * gets. The type is shared because the field layout is, and the difference is documented at both
+ * ends rather than expressed by two nearly identical classes.
+ */
+internal class InviteFrame(
+    val sid: ByteArray,
+    val encodedEphemeralKey: ByteArray,
+    val serverHint: ServerHint,
+)
+
+/** A decoded reply (`kind = 0x04`). Both keys are length-checked here and curve-checked above. */
+internal class ReplyFrame(
+    val sid: ByteArray,
+    val encodedEphemeralKey: ByteArray,
+    val encodedDeviceKey: ByteArray,
+)
+
 /** A decoded QR2. */
 internal class SealFrame(
     val sid: ByteArray,
@@ -433,6 +553,77 @@ internal object PairingCodec {
         writer.writeLengthPrefixed8(hint.spkiPinSha256 ?: ByteArray(0))
         writer.writeLengthPrefixed8(encodedDeviceKey ?: ByteArray(0))
         return wrap(writer.toByteArray())
+    }
+
+    fun encodeInvite(sid: ByteArray, encodedEphemeralKey: ByteArray, hint: ServerHint): String {
+        require(hint.url.isNotEmpty()) {
+            "an invite names the rendezvous the reply must travel through"
+        }
+        val writer = ByteWriter()
+        writeHeader(writer, PairingProtocol.KIND_INVITE, sid)
+        writer.writeLengthPrefixed8(encodedEphemeralKey)
+        writer.writeLengthPrefixed16(hint.url.toByteArray(Charsets.UTF_8))
+        writer.writeLengthPrefixed8(hint.spkiPinSha256 ?: ByteArray(0))
+        return wrap(writer.toByteArray())
+    }
+
+    fun encodeReply(
+        sid: ByteArray,
+        encodedEphemeralKey: ByteArray,
+        encodedDeviceKey: ByteArray,
+    ): String {
+        require(encodedDeviceKey.size == P256.POINT_SIZE_BYTES) {
+            "a device key is a ${P256.POINT_SIZE_BYTES}-byte SEC1 uncompressed P-256 point"
+        }
+        val writer = ByteWriter()
+        writeHeader(writer, PairingProtocol.KIND_REPLY, sid)
+        writer.writeLengthPrefixed8(encodedEphemeralKey)
+        writer.writeLengthPrefixed8(encodedDeviceKey)
+        return wrap(writer.toByteArray())
+    }
+
+    /** Decode an invite. Throws [PairingWireException] for anything that is not one. */
+    fun decodeInvite(text: String): InviteFrame {
+        val reader = openFrame(text, PairingProtocol.KIND_INVITE)
+        val sid = reader.readRaw(PairingProtocol.SID_SIZE_BYTES)
+        val point = reader.readLengthPrefixed8()
+        val url = reader.readLengthPrefixed16()
+        val pin = reader.readLengthPrefixed8()
+        reader.requireExhausted()
+
+        if (url.size > ServerHint.MAX_URL_BYTES) fail(PairingFailure.MALFORMED, "url too long")
+        // An invite with no address is unusable rather than merely unhelpful: the reply has nowhere
+        // to go, and there is no offline fallback on this path. Refused at the decoder so that no
+        // session is ever constructed around one.
+        if (url.isEmpty()) fail(PairingFailure.MALFORMED, "an invite carries no rendezvous address")
+        if (pin.isNotEmpty() && pin.size != ServerHint.SPKI_PIN_SIZE_BYTES) {
+            fail(PairingFailure.MALFORMED, "spki pin is not a SHA-256 digest")
+        }
+        return InviteFrame(
+            sid = sid,
+            encodedEphemeralKey = point,
+            serverHint = ServerHint(
+                url = String(url, Charsets.UTF_8),
+                spkiPinSha256 = pin.takeIf { it.isNotEmpty() },
+            ),
+        )
+    }
+
+    /** Decode a reply. Throws [PairingWireException] for anything that is not one. */
+    fun decodeReply(text: String): ReplyFrame {
+        val reader = openFrame(text, PairingProtocol.KIND_REPLY)
+        val sid = reader.readRaw(PairingProtocol.SID_SIZE_BYTES)
+        val point = reader.readLengthPrefixed8()
+        val deviceKey = reader.readLengthPrefixed8()
+        reader.requireExhausted()
+
+        // MALFORMED rather than INVALID_PEER_KEY, for the reason `decodeOffer` gives: a field of
+        // the wrong length is a frame that does not parse, and nothing has been read as a point
+        // yet. The on-curve check is in `AccountInviteSession`, where the key is used.
+        if (deviceKey.size != P256.POINT_SIZE_BYTES) {
+            fail(PairingFailure.MALFORMED, "device key is not a SEC1 uncompressed P-256 point")
+        }
+        return ReplyFrame(sid = sid, encodedEphemeralKey = point, encodedDeviceKey = deviceKey)
     }
 
     fun encodeSeal(

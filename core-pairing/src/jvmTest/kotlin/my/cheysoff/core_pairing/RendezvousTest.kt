@@ -13,6 +13,7 @@ import my.cheysoff.core_pairing.protocol.PairingProtocol
 import my.cheysoff.core_pairing.protocol.PollOutcome
 import my.cheysoff.core_pairing.protocol.RendezvousClient
 import my.cheysoff.core_pairing.protocol.RendezvousProtocol
+import my.cheysoff.core_pairing.protocol.RendezvousSlot
 import my.cheysoff.core_pairing.protocol.RendezvousUrl
 import my.cheysoff.core_pairing.protocol.ServerHint
 import org.junit.Assert.assertArrayEquals
@@ -71,7 +72,7 @@ class RendezvousTest {
         val accepted = phone.accept(desktop.offerCode, bundle.config)!!
 
         // Leg two is the new part: instead of rendering QR2, the phone posts it.
-        val deposit = drop.deposit(sidOf(desktop), accepted.sealCode)
+        val deposit = drop.deposit(sidOf(desktop), RendezvousSlot.BUNDLE, accepted.sealCode)
         assertTrue(deposit is DepositResult.Deposited)
 
         val outcome = desktop.poll()
@@ -94,7 +95,7 @@ class RendezvousTest {
 
         val phone = AccountDeviceSession(HkdfKeyDerivation, FakeClock(), bundle.ark, bundle.accountId)
         val accepted = phone.accept(desktop.offerCode)!!
-        drop.deposit(sidOf(desktop), accepted.sealCode)
+        drop.deposit(sidOf(desktop), RendezvousSlot.BUNDLE, accepted.sealCode)
         assertTrue(desktop.poll() is PollOutcome.Paired)
     }
 
@@ -137,7 +138,7 @@ class RendezvousTest {
         val forOther = phone.accept(other.offerCode)!!
 
         // File the *other* session's seal under the victim's sid.
-        drop.force(sidOf(victim), forOther.sealCode)
+        drop.force(sidOf(victim), RendezvousSlot.BUNDLE, forOther.sealCode)
 
         val outcome = victim.poll()
         assertTrue(outcome is PollOutcome.Failed)
@@ -162,7 +163,7 @@ class RendezvousTest {
         val phone = AccountDeviceSession(HkdfKeyDerivation, FakeClock(), bundle.ark, bundle.accountId)
         val accepted = phone.accept(desktop.offerCode)!!
 
-        drop.force(sidOf(desktop), tamperWithTheTag(accepted.sealCode))
+        drop.force(sidOf(desktop), RendezvousSlot.BUNDLE, tamperWithTheTag(accepted.sealCode))
 
         val outcome = desktop.poll()
         assertEquals(PairingFailure.SEAL_REJECTED, (outcome as PollOutcome.Failed).failure)
@@ -183,7 +184,7 @@ class RendezvousTest {
         val accepted = phone.accept(desktop.offerCode)!!
 
         clock.advance(PairingProtocol.CODE_TTL_MILLIS)
-        drop.force(sidOf(desktop), accepted.sealCode)
+        drop.force(sidOf(desktop), RendezvousSlot.BUNDLE, accepted.sealCode)
 
         assertEquals(PollOutcome.Expired, desktop.poll())
     }
@@ -219,7 +220,7 @@ class RendezvousTest {
 
         drop.answer = null
         val phone = AccountDeviceSession(HkdfKeyDerivation, FakeClock(), bundle.ark, bundle.accountId)
-        drop.deposit(sidOf(desktop), (phone.accept(desktop.offerCode)!!).sealCode)
+        drop.deposit(sidOf(desktop), RendezvousSlot.BUNDLE, (phone.accept(desktop.offerCode)!!).sealCode)
         assertTrue(desktop.poll() is PollOutcome.Paired)
     }
 
@@ -229,7 +230,7 @@ class RendezvousTest {
         val drop = FakeDrop()
         val desktop = newDevice(drop)
         val phone = AccountDeviceSession(HkdfKeyDerivation, FakeClock(), bundle.ark, bundle.accountId)
-        drop.deposit(sidOf(desktop), (phone.accept(desktop.offerCode)!!).sealCode)
+        drop.deposit(sidOf(desktop), RendezvousSlot.BUNDLE, (phone.accept(desktop.offerCode)!!).sealCode)
 
         assertTrue(desktop.poll() is PollOutcome.Paired)
         assertEquals(PairingFailure.SESSION_CLOSED, (desktop.poll() as PollOutcome.Failed).failure)
@@ -389,39 +390,5 @@ class RendezvousTest {
         val frame = decoder.decode(sealCode.removePrefix(PairingProtocol.QR_PREFIX))
         frame[frame.size - 1] = (frame[frame.size - 1].toInt() xor 0x01).toByte()
         return PairingProtocol.QR_PREFIX + encoder.encodeToString(frame)
-    }
-
-    /**
-     * An in-memory rendezvous with the server's own rules: keyed on `sid`, first write wins, single
-     * use.
-     *
-     * A fake of the *server's behaviour*, not of the client's — which is why the rules are
-     * reproduced rather than stubbed out. `force` is the attacker's door: it puts a blob somewhere
-     * the honest protocol never would, which is how the `sid` binding and the tag check get
-     * exercised.
-     */
-    private class FakeDrop : RendezvousClient {
-        private val rows = HashMap<String, String>()
-
-        /** When set, every collect returns this instead of looking at [rows]. */
-        var answer: CollectResult? = null
-
-        override fun deposit(sid: ByteArray, sealCode: String): DepositResult {
-            val key = RendezvousProtocol.encodeSid(sid)
-            if (rows.containsKey(key)) return DepositResult.AlreadyDeposited
-            rows[key] = RendezvousProtocol.toBlob(sealCode)
-            return DepositResult.Deposited(expiresAt = 0L)
-        }
-
-        override fun collect(sid: ByteArray): CollectResult {
-            answer?.let { return it }
-            val blob = rows.remove(RendezvousProtocol.encodeSid(sid)) ?: return CollectResult.Pending
-            return CollectResult.Collected(RendezvousProtocol.fromBlob(blob))
-        }
-
-        /** Park a blob regardless of what is already there. Only an attacker can do this. */
-        fun force(sid: ByteArray, sealCode: String) {
-            rows[RendezvousProtocol.encodeSid(sid)] = RendezvousProtocol.toBlob(sealCode)
-        }
     }
 }

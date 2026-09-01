@@ -7,6 +7,7 @@ import my.cheysoff.core_pairing.protocol.HkdfKeyDerivation
 import my.cheysoff.core_pairing.protocol.HttpRendezvousClient
 import my.cheysoff.core_pairing.protocol.MonotonicClock
 import my.cheysoff.core_pairing.protocol.OfferOutcome
+import my.cheysoff.core_pairing.protocol.RendezvousSlot
 import my.cheysoff.core_pairing.protocol.RendezvousUrl
 import my.cheysoff.core_pairing.qr.QrCodes
 import org.junit.Assume.assumeNotNull
@@ -61,7 +62,7 @@ class PhoneReadingAScreenshot {
         println("ARK the phone is sharing: ${ark.toHex()}")
         println("SAS the phone shows:      ${accepted.sas}")
 
-        val result = HttpRendezvousClient(server).deposit(phone.receivedSid!!, accepted.sealCode)
+        val result = HttpRendezvousClient(server).deposit(phone.receivedSid!!, RendezvousSlot.BUNDLE, accepted.sealCode)
         println("deposit: ${result::class.simpleName}")
         check(result is DepositResult.Deposited) { "the server refused the deposit: $result" }
     }

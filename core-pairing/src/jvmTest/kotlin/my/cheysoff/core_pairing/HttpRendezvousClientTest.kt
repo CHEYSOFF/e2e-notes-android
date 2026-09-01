@@ -7,6 +7,7 @@ import my.cheysoff.core_pairing.protocol.DepositResult
 import my.cheysoff.core_pairing.protocol.HttpRendezvousClient
 import my.cheysoff.core_pairing.protocol.PairingProtocol
 import my.cheysoff.core_pairing.protocol.RendezvousProtocol
+import my.cheysoff.core_pairing.protocol.RendezvousSlot
 import my.cheysoff.core_pairing.protocol.RendezvousUrl
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -43,7 +44,7 @@ class HttpRendezvousClientTest {
         assertTrue(!body.contains(PairingProtocol.QR_PREFIX))
         respond(exchange, 201, """{"expiresAt":1234}""")
     }.let { client ->
-        val result = client.deposit(sid, sealCode("hello-world-payload"))
+        val result = client.deposit(sid, RendezvousSlot.BUNDLE, sealCode("hello-world-payload"))
         assertTrue(result is DepositResult.Deposited)
         assertEquals(1234L, (result as DepositResult.Deposited).expiresAt)
     }
@@ -52,7 +53,7 @@ class HttpRendezvousClientTest {
     fun aConflictIsReportedAsAlreadyDeposited() = withServer { exchange ->
         respond(exchange, 409, """{"error":"pairing_exists","message":"already left"}""")
     }.let { client ->
-        assertTrue(client.deposit(sid, sealCode("x")) is DepositResult.AlreadyDeposited)
+        assertTrue(client.deposit(sid, RendezvousSlot.BUNDLE, sealCode("x")) is DepositResult.AlreadyDeposited)
     }
 
     /** The server writes its `message` for a person, so it is preferred over the status code. */
@@ -60,7 +61,7 @@ class HttpRendezvousClientTest {
     fun aRefusalCarriesTheServersOwnExplanation() = withServer { exchange ->
         respond(exchange, 503, """{"error":"pairing_capacity","message":"Too many pairings."}""")
     }.let { client ->
-        val result = client.deposit(sid, sealCode("x"))
+        val result = client.deposit(sid, RendezvousSlot.BUNDLE, sealCode("x"))
         assertEquals("Too many pairings.", (result as DepositResult.Refused).detail)
     }
 
@@ -71,7 +72,7 @@ class HttpRendezvousClientTest {
             RendezvousUrl.parse("http://127.0.0.1:1")!!,
             timeoutMillis = 500,
         )
-        assertTrue(client.deposit(sid, sealCode("x")) is DepositResult.Unreachable)
+        assertTrue(client.deposit(sid, RendezvousSlot.BUNDLE, sealCode("x")) is DepositResult.Unreachable)
     }
 
     // -----------------------------------------------------------------------------------------
@@ -83,7 +84,7 @@ class HttpRendezvousClientTest {
         assertEquals("GET", exchange.requestMethod)
         respond(exchange, 200, """{"sealed":"${blob("round-trip")}"}""")
     }.let { client ->
-        val result = client.collect(sid)
+        val result = client.collect(sid, RendezvousSlot.BUNDLE)
         assertEquals(sealCode("round-trip"), (result as CollectResult.Collected).sealCode)
     }
 
@@ -91,7 +92,7 @@ class HttpRendezvousClientTest {
     fun aMissingBlobIsPendingRatherThanAFailure() = withServer { exchange ->
         respond(exchange, 404, """{"error":"no_pairing","message":"Nothing is waiting."}""")
     }.let { client ->
-        assertTrue(client.collect(sid) is CollectResult.Pending)
+        assertTrue(client.collect(sid, RendezvousSlot.BUNDLE) is CollectResult.Pending)
     }
 
     /**
@@ -104,7 +105,7 @@ class HttpRendezvousClientTest {
     fun rateLimitingIsRetriableRatherThanTerminal() = withServer { exchange ->
         respond(exchange, 429, """{"error":"rate_limited","message":"slow down"}""")
     }.let { client ->
-        assertTrue(client.collect(sid) is CollectResult.Unreachable)
+        assertTrue(client.collect(sid, RendezvousSlot.BUNDLE) is CollectResult.Unreachable)
     }
 
     /**
@@ -124,7 +125,7 @@ class HttpRendezvousClientTest {
             """{"sealed":"${"A".repeat(400_000)}"}""",
         )) {
             val client = withServer { exchange -> respond(exchange, 200, body) }
-            val result = client.collect(sid)
+            val result = client.collect(sid, RendezvousSlot.BUNDLE)
             assertTrue("expected Unusable for $body, got $result", result is CollectResult.Unusable)
         }
     }
@@ -139,7 +140,7 @@ class HttpRendezvousClientTest {
     fun anEnormousResponseIsBoundedAndReportedAsUnusable() = withServer { exchange ->
         respond(exchange, 200, """{"sealed":"""" + "A".repeat(2_000_000) + """"}""")
     }.let { client ->
-        assertTrue(client.collect(sid) is CollectResult.Unusable)
+        assertTrue(client.collect(sid, RendezvousSlot.BUNDLE) is CollectResult.Unusable)
     }
 
     /**
@@ -160,7 +161,7 @@ class HttpRendezvousClientTest {
                 respond(exchange, 200, """{"sealed":"${blob("stolen")}"}""")
             }
         }
-        assertTrue(client.collect(sid) is CollectResult.Unusable)
+        assertTrue(client.collect(sid, RendezvousSlot.BUNDLE) is CollectResult.Unusable)
         assertTrue("the client followed a redirect", !redirected)
     }
 

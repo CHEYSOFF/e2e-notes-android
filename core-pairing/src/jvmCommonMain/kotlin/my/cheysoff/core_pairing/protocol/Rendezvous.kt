@@ -23,19 +23,29 @@ import java.util.Base64
  * — QR1 is still shown on the new device's screen and read by the account device's camera.
  *
  * ---------------------------------------------------------------------------------------------
- * # WHY THIS DOES NOT WEAKEN ANYTHING
+ * # WHY THIS DOES NOT WEAKEN THE SCANNED DIRECTION
  * ---------------------------------------------------------------------------------------------
  *
- * The QR remains an **authenticated visual channel**, and it is the whole reason a man in the
- * middle is structurally impossible here. The only key the account device has to authenticate is
- * `EB`, and it obtains `EB` by a human pointing a camera at the new device's screen. There is no
- * channel for an attacker to interpose on: they would have to be physically holding the laptop the
- * user is looking at.
+ * **Read this section as being about the scanned direction only.** The invite direction, where the
+ * account device is the one with no camera, uses the same two endpoints and does not have this
+ * property; [RendezvousSlot] and `AccountInviteSession` say what it has instead.
+ *
+ * In the scanned direction the QR remains an **authenticated visual channel**, and it is the whole
+ * reason a man in the middle is structurally impossible there. The only key the account device has
+ * to authenticate is `EB`, and it obtains `EB` by a human pointing a camera at the new device's
+ * screen. There is no channel for an attacker to interpose on: they would have to be physically
+ * holding the laptop the user is looking at.
  *
  * What travels over HTTP is the **QR2 frame, byte for byte** — the same bytes the phone-to-phone
  * flow renders as a QR symbol. It is AES-256-GCM ciphertext under `Ks`, and `Ks` comes from an
  * ECDH between two ephemeral keys the server has never seen one half of. The server holds
  * ciphertext under a key it does not have and cannot derive.
+ *
+ * In the **invite** direction the same is true of the bundle slot — the server still holds
+ * ciphertext it cannot open — but the reply slot carries the joining device's ephemeral point on
+ * the way *in*, which is a value an on-path attacker may replace. That is not a confidentiality
+ * problem for anything stored here and it is a real authentication problem for the exchange; it is
+ * answered by the six digits a person compares, and by nothing on this route.
  *
  * ## What the server DOES learn
  *
@@ -63,7 +73,8 @@ import java.util.Base64
 object RendezvousProtocol {
 
     /**
-     * Path template for one pairing rendezvous. `{sid}` is [encodeSid]'s output.
+     * Path template for one pairing rendezvous slot: `PATH_PREFIX + sid + slot.pathSuffix`.
+     * `{sid}` is [encodeSid]'s output.
      *
      * Versioned as `v1` alongside the rest of the server's routes rather than with the pairing
      * protocol's own version byte: this is an HTTP resource, and the thing that would change its
@@ -115,25 +126,25 @@ object RendezvousProtocol {
     }
 
     /**
-     * The body of a deposit: QR2's payload with its `MNP1:` prefix removed.
+     * The body of a deposit: a frame payload with its `MNP1:` prefix removed.
      *
      * The prefix is a fast reject for a camera pointed at the world and means nothing over HTTP,
      * where the URL already says what the bytes are. Dropping it also keeps the field pure
      * base64url, which is the only thing the server checks it for.
      *
-     * @throws IllegalArgumentException if [sealCode] is not something [PairingCodec.encodeSeal]
-     *   produced. That is a programming error, not untrusted input: the only caller holds the
-     *   string it was just handed by its own session.
+     * @throws IllegalArgumentException if [code] is not something [PairingCodec] produced. That is
+     *   a programming error, not untrusted input: the only callers hold the string they were just
+     *   handed by their own session.
      */
-    fun toBlob(sealCode: String): String {
-        require(sealCode.startsWith(PairingProtocol.QR_PREFIX)) {
-            "a rendezvous blob is made from a QR2 payload"
+    fun toBlob(code: String): String {
+        require(code.startsWith(PairingProtocol.QR_PREFIX)) {
+            "a rendezvous blob is made from a pairing frame payload"
         }
-        return sealCode.substring(PairingProtocol.QR_PREFIX.length)
+        return code.substring(PairingProtocol.QR_PREFIX.length)
     }
 
     /**
-     * The inverse: a collected blob as the QR2 payload [NewDeviceSession.onScanned] expects.
+     * The inverse: a collected blob as the framed payload the receiving session expects.
      *
      * Putting the prefix back rather than teaching the session a second input shape is the point of
      * this pair of functions. The new device runs **exactly** the code path it would have run had a
@@ -143,22 +154,78 @@ object RendezvousProtocol {
     fun fromBlob(blob: String): String = PairingProtocol.QR_PREFIX + blob
 
     /**
-     * True when [blob] is base64url of at most [MAX_SEALED_BYTES] bytes.
+     * Largest reply frame, in decoded bytes. Derived from the format for the same reason
+     * [MAX_SEALED_BYTES] is.
+     *
+     * Two orders of magnitude smaller than a bundle, and checked separately rather than sharing the
+     * looser bound: the reply slot is the one an unauthenticated stranger writes to, so it is the
+     * one whose size cap is worth being exact about.
+     */
+    val MAX_REPLY_BYTES: Int = 1 + // frame version
+        1 + // kind
+        PairingProtocol.SID_SIZE_BYTES +
+        1 + P256.POINT_SIZE_BYTES +
+        1 + P256.POINT_SIZE_BYTES
+
+    /**
+     * True when [blob] is base64url of at most [maxBytes] bytes.
      *
      * Checked on the receiving side before the string is handed anywhere, because a collect is the
-     * one input on the new device that arrives from a machine nobody watched the user point at.
+     * one input that arrives from a machine nobody watched the user point at.
      */
-    fun isPlausibleBlob(blob: String): Boolean {
+    fun isPlausibleBlob(blob: String, maxBytes: Int = MAX_SEALED_BYTES): Boolean {
         if (blob.isEmpty()) return false
         // 4 base64 characters per 3 bytes; reject on length before allocating the decode.
-        if (blob.length > 4 * (MAX_SEALED_BYTES + 2) / 3 + 4) return false
+        if (blob.length > 4 * (maxBytes + 2) / 3 + 4) return false
         val bytes = try {
             decoder.decode(blob)
         } catch (e: IllegalArgumentException) {
             return false
         }
-        return bytes.isNotEmpty() && bytes.size <= MAX_SEALED_BYTES
+        return bytes.isNotEmpty() && bytes.size <= maxBytes
     }
+}
+
+/**
+ * Which of a pairing's two dead drops a request is for.
+ *
+ * ## Why there are two now
+ *
+ * The scanned direction needs one: the account device leaves a sealed bundle and the joining device
+ * picks it up. The invite direction needs the joining device to send *first* — its ephemeral point
+ * and its device public key, which the account device cannot photograph — and only then does a
+ * bundle come back. That is two exchanges under one `sid`, in opposite directions, and they are
+ * separate resources rather than one blob that changes meaning depending on who wrote it.
+ *
+ * Both slots keep every property the single one had, and the server enforces all of them per slot:
+ * the same TTL, a size cap, the global cap on live pairings (counted per **pairing**, not per slot,
+ * so the bound still means what its name says), the deposit rate limit, the 16-byte `sid`, and
+ * single use — a slot is deleted on the first successful collect.
+ */
+enum class RendezvousSlot(
+    /** Appended to `/v1/pair/{sid}`. Empty for [BUNDLE], whose route predates the split. */
+    val pathSuffix: String,
+    /** The tight, format-derived bound this client applies to a body in this slot. */
+    val maxBlobBytes: Int,
+) {
+
+    /**
+     * The joining device's answer to an invite: `{sid, EB, DB}`, deposited by it, collected by the
+     * account device.
+     *
+     * Public values only. An attacker who reads this slot learns two P-256 points and nothing else;
+     * an attacker who *writes* it first is the man in the middle this direction defends against
+     * with the six digits, not with the transport.
+     */
+    REPLY("/reply", RendezvousProtocol.MAX_REPLY_BYTES),
+
+    /**
+     * The sealed account bundle, deposited by the account device and collected by the joining one.
+     *
+     * The empty suffix, so `/v1/pair/{sid}` keeps the exact meaning it has always had and the
+     * scanned direction's requests are byte-identical to what they were.
+     */
+    BUNDLE("", RendezvousProtocol.MAX_SEALED_BYTES),
 }
 
 /**
@@ -299,11 +366,17 @@ sealed interface CollectResult {
  */
 interface RendezvousClient {
 
-    /** Send the sealed QR2 payload for [sid]. Called once, by the device that holds the ARK. */
-    fun deposit(sid: ByteArray, sealCode: String): DepositResult
+    /**
+     * Leave [code] in [slot] under [sid]. Called once per slot, by whichever device fills it.
+     *
+     * [slot] has no default. It is the difference between publishing a public ephemeral point and
+     * publishing a sealed account key, and a call site that did not say which it meant would be a
+     * call site a reader has to reason about.
+     */
+    fun deposit(sid: ByteArray, slot: RendezvousSlot, code: String): DepositResult
 
-    /** Ask for the blob filed under [sid]. Called repeatedly, by the new device. */
-    fun collect(sid: ByteArray): CollectResult
+    /** Ask for the blob in [slot] under [sid]. Called repeatedly, by the device waiting on it. */
+    fun collect(sid: ByteArray, slot: RendezvousSlot): CollectResult
 }
 
 /**
