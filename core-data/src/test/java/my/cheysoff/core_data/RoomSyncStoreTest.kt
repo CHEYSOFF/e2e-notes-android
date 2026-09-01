@@ -529,4 +529,17 @@ class RoomSyncStoreTest {
         store.recordHalt(HaltReason.DEVICE_REVOKED)
         assertEquals(12L, store.cursor())
     }
+
+    /**
+     * The other direction, which is the dangerous one. Both writes are `INSERT … ON CONFLICT` on
+     * the same row, and the cursor's insert branch names `haltReason = ''`. If its conflict branch
+     * ever assigned that column too, a halted engine would un-halt itself the next time anything
+     * moved a cursor — which is the engine resuming against exactly the server it refused to trust.
+     */
+    @Test
+    fun `advancing the cursor does not clear a halt`() = runTest {
+        store.recordHalt(HaltReason.SERVER_ROLLED_BACK)
+        store.saveCursor(12L)
+        assertEquals(HaltReason.SERVER_ROLLED_BACK, store.halt())
+    }
 }

@@ -92,10 +92,12 @@ fun syncStatus(
     lastCheckFailed: Boolean,
     sync: SyncPassState = SyncPassState.Idle,
 ): SyncStatus = when {
-    // Order matters, and it is: prerequisites, then the halt, then what the engine is doing, then
-    // the health check. The prerequisites come first so that a check can never appear to be running
-    // on an unpaired device; the halt comes before everything the engine reports because it is the
-    // one state where the engine is not going to try again.
+    // Order matters. Prerequisites first, so a check can never appear to be running on an unpaired
+    // device. Then the halt, because it is the one state where the engine is not going to try
+    // again. Then whatever is happening right now. Then the things that are wrong. And **last** the
+    // two states that mean nothing is wrong — because a completed pass is a fact about a moment
+    // that has passed, and letting it outrank a check the user just ran and watched fail would
+    // leave the section reading "the last sync sent 3" over a server that is not answering.
     paired == null -> SyncStatus.UNKNOWN
     !paired -> SyncStatus.NOT_PAIRED
     storedUrl == null -> SyncStatus.NO_SERVER
@@ -105,8 +107,8 @@ fun syncStatus(
     sync is SyncPassState.Running -> SyncStatus.SYNCING
     sync is SyncPassState.Unavailable -> SyncStatus.CANNOT_SYNC
     sync is SyncPassState.Deferred -> SyncStatus.SYNC_INTERRUPTED
-    sync is SyncPassState.Completed -> SyncStatus.SYNC_RAN
     lastCheckFailed -> SyncStatus.UNREACHABLE
+    sync is SyncPassState.Completed -> SyncStatus.SYNC_RAN
     else -> SyncStatus.READY
 }
 

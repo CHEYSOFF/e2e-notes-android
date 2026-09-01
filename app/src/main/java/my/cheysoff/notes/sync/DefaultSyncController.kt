@@ -122,9 +122,15 @@ class DefaultSyncController @Inject constructor(
             is SyncTransport.Ready -> current
         }
 
-        val keys = AccountRootKey.derive(ark)
-        try {
+        // Zeroed in a `finally` rather than after the call: `currentArk` hands out a copy the caller
+        // owns, and a `derive` that threw would otherwise leave the account's root key sitting in a
+        // live heap array with nothing holding a reference that could clear it.
+        val keys = try {
+            AccountRootKey.derive(ark)
+        } finally {
             ark.fill(0)
+        }
+        try {
             val accountId = Base64Url.encode(keys.accountId)
             val deviceId = when (val enrolment = enrol(transport.api, accountId)) {
                 is Enrolment.Enrolled -> enrolment.deviceId
