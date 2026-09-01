@@ -9,20 +9,28 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 /**
- * The pairing rendezvous: `POST /v1/pair/{sid}` and `GET /v1/pair/{sid}`.
+ * The pairing rendezvous: `/v1/pair/{sid}` and `/v1/pair/{sid}/reply`.
  *
- * Five rules carry the security of this endpoint pair, and each has a test named after it here so
+ * Five rules carry the security of these endpoints, and each has a test named after it here so
  * that breaking one produces a sentence rather than a count:
  *
  *  1. **TTL** -- a deposit is not collectable after `pairingTtlMillis`.
  *  2. **Single use** -- the first collect takes it and the second finds nothing.
- *  3. **First write wins** -- a second deposit under a live `sid` cannot displace the first.
+ *  3. **First write wins** -- a second deposit under a live `(sid, slot)` cannot displace the first.
  *  4. **Size cap** -- an oversized blob is refused rather than stored.
  *  5. **Capacity** -- the table cannot grow past `maxLivePairings`, whoever is writing.
  *
  * There is also a sixth property that is not a rule so much as the point of the whole thing: the
  * server returns the blob **byte for byte** and never looks inside it. `opaqueBytesSurviveExactly`
  * is that test.
+ *
+ * ## The two slots
+ *
+ * Since the account device can be the one showing the code, a pairing has two exchanges: the
+ * joining device's key material goes to `/reply` and the sealed bundle comes back on the bare path.
+ * Every rule above holds **per slot**, except the capacity cap, which counts pairings -- the
+ * `slotsAreIndependent*` tests and `theGlobalCapCountsPairingsNotSlots` are where that distinction
+ * is pinned.
  */
 class PairingRendezvousTest {
 
@@ -381,6 +389,163 @@ class PairingRendezvousTest {
         val lines = harness.logLines.joinToString("\n")
         assertTrue(lines.contains("POST /v1/pair/{sid}"), "the route template should be logged: $lines")
         assertTrue(lines.contains("GET /v1/pair/{sid}"), "the route template should be logged: $lines")
+        assertTrue(!lines.contains(sid), "a sid reached a log line: $lines")
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // The reply slot
+    // -----------------------------------------------------------------------------------------
+
+    @Test
+    fun theReplySlotDepositsAndCollectsLikeTheBundleSlot() = serverTest { harness ->
+        val sid = randomSid()
+        val blob = randomBlob(133)
+
+        val deposit = client.postJson("/v1/pair/$sid/reply", depositBody(blob))
+        assertEquals(201, deposit.status.value)
+        assertEquals(
+            harness.clock.now + harness.config.pairingTtlMillis,
+            deposit.decode<PairingDepositResponse>().expiresAt,
+        )
+
+        val collect = client.get("/v1/pair/$sid/reply")
+        assertEquals(200, collect.status.value)
+        assertEquals(blob, collect.decode<PairingCollectResponse>().sealed)
+    }
+
+    /**
+     * The two slots are separate resources under one name.
+     *
+     * The invite direction writes both under one `sid` -- the phone's reply first, the desktop's
+     * bundle second -- so a deposit into either must not be visible from, or blocked by, the other.
+     */
+    @Test
+    fun slotsAreIndependentDrops() = serverTest {
+        val sid = randomSid()
+        val reply = randomBlob(133)
+        val bundle = randomBlob(512)
+
+        assertEquals(201, client.postJson("/v1/pair/$sid/reply", depositBody(reply)).status.value)
+        assertEquals(201, client.postJson("/v1/pair/$sid", depositBody(bundle)).status.value)
+
+        assertEquals(reply, client.get("/v1/pair/$sid/reply").decode<PairingCollectResponse>().sealed)
+        assertEquals(bundle, client.get("/v1/pair/$sid").decode<PairingCollectResponse>().sealed)
+    }
+
+    /** Collecting one slot must not consume the other. A pairing needs both legs to complete. */
+    @Test
+    fun slotsAreIndependentlySingleUse() = serverTest {
+        val sid = randomSid()
+        client.postJson("/v1/pair/$sid/reply", depositBody(randomBlob(133)))
+        client.postJson("/v1/pair/$sid", depositBody(randomBlob(64)))
+
+        assertEquals(200, client.get("/v1/pair/$sid/reply").status.value)
+        assertEquals(404, client.get("/v1/pair/$sid/reply").status.value)
+        // The bundle is untouched by the reply's collect.
+        assertEquals(200, client.get("/v1/pair/$sid").status.value)
+        assertEquals(404, client.get("/v1/pair/$sid").status.value)
+    }
+
+    /**
+     * First write wins per slot -- which is what stops an attacker who guessed a `sid` from
+     * replacing the phone's ephemeral key with their own after the honest one has landed.
+     */
+    @Test
+    fun aSecondReplyCannotDisplaceTheFirst() = serverTest {
+        val sid = randomSid()
+        val honest = randomBlob(133)
+
+        assertEquals(201, client.postJson("/v1/pair/$sid/reply", depositBody(honest)).status.value)
+        val second = client.postJson("/v1/pair/$sid/reply", depositBody(randomBlob(133)))
+        assertEquals(409, second.status.value)
+        assertEquals("pairing_exists", second.errorCode())
+
+        assertEquals(honest, client.get("/v1/pair/$sid/reply").decode<PairingCollectResponse>().sealed)
+    }
+
+    @Test
+    fun aReplyIsNotCollectableAfterItsTtl() = serverTest(
+        testConfig(pairingTtlMillis = 120_000)
+    ) { harness ->
+        val sid = randomSid()
+        client.postJson("/v1/pair/$sid/reply", depositBody(randomBlob(133)))
+
+        harness.clock.now += 119_999
+        assertEquals(200, client.get("/v1/pair/$sid/reply").status.value)
+
+        val next = randomSid()
+        client.postJson("/v1/pair/$next/reply", depositBody(randomBlob(133)))
+        harness.clock.now += 120_001
+        assertEquals(404, client.get("/v1/pair/$next/reply").status.value)
+    }
+
+    @Test
+    fun anOversizedReplyIsRefusedAndNotStored() = serverTest(
+        testConfig(maxPairingBlobBytes = 256)
+    ) { harness ->
+        val sid = randomSid()
+        val refused = client.postJson("/v1/pair/$sid/reply", depositBody(randomBlob(257)))
+        assertEquals(413, refused.status.value)
+        assertEquals(404, client.get("/v1/pair/$sid/reply").status.value)
+        assertEquals(0L, harness.store.pairingRowCount())
+    }
+
+    @Test
+    fun onlyASixteenByteSidIsAcceptedOnTheReplySlot() = serverTest {
+        assertEquals(400, client.postJson("/v1/pair/short/reply", depositBody(randomBlob(32))).status.value)
+        assertEquals(400, client.get("/v1/pair/short/reply").status.value)
+    }
+
+    /**
+     * The cap bounds pairings, not rows.
+     *
+     * Its name, its error message and the disk arithmetic in `ServerConfig` all say "pairings in
+     * progress". Counting slots instead would have silently halved it the day the second slot
+     * landed, which is exactly the kind of change nobody notices until a limit is hit.
+     */
+    @Test
+    fun theGlobalCapCountsPairingsNotSlots() = serverTest(
+        testConfig(maxLivePairings = 2)
+    ) { harness ->
+        val first = randomSid()
+        val second = randomSid()
+        client.postJson("/v1/pair/$first/reply", depositBody(randomBlob(133)))
+        client.postJson("/v1/pair/$first", depositBody(randomBlob(64)))
+        client.postJson("/v1/pair/$second/reply", depositBody(randomBlob(133)))
+
+        // Four rows would be over a cap of two; two pairings is not.
+        assertEquals(3L, harness.store.pairingRowCount())
+        assertEquals(2L, harness.store.livePairingCount())
+        assertEquals(201, client.postJson("/v1/pair/$second", depositBody(randomBlob(64))).status.value)
+
+        assertEquals(
+            503,
+            client.postJson("/v1/pair/${randomSid()}", depositBody(randomBlob(64))).status.value,
+        )
+    }
+
+    /** Both slots draw on one deposit bucket: a second route must not be a second allowance. */
+    @Test
+    fun theReplySlotSharesTheDepositRateLimit() = serverTest(
+        testConfig(pairingDepositPerMinute = 2, pairingDepositBurst = 2)
+    ) {
+        assertEquals(201, client.postJson("/v1/pair/${randomSid()}", depositBody(randomBlob(32))).status.value)
+        assertEquals(201, client.postJson("/v1/pair/${randomSid()}/reply", depositBody(randomBlob(133))).status.value)
+
+        val throttled = client.postJson("/v1/pair/${randomSid()}/reply", depositBody(randomBlob(133)))
+        assertEquals(429, throttled.status.value)
+        assertEquals("rate_limited", throttled.errorCode())
+    }
+
+    @Test
+    fun noSidReachesALogLineFromTheReplySlot() = serverTest { harness ->
+        val sid = randomSid()
+        client.postJson("/v1/pair/$sid/reply", depositBody(randomBlob(133)))
+        client.get("/v1/pair/$sid/reply")
+
+        val lines = harness.logLines.joinToString("\n")
+        assertTrue(lines.contains("POST /v1/pair/{sid}/reply"), "the route template should be logged: $lines")
+        assertTrue(lines.contains("GET /v1/pair/{sid}/reply"), "the route template should be logged: $lines")
         assertTrue(!lines.contains(sid), "a sid reached a log line: $lines")
     }
 
