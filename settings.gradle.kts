@@ -59,6 +59,15 @@ include(":core-sync-net")
 // Android, no Room, no HTTP -- so that the N-replica convergence harness can drive the real engine
 // on the JVM in milliseconds. See core-sync-engine/build.gradle.kts.
 include(":core-sync-engine")
+// The record-shaped store: one table of sealed `RecordEnvelope` blobs, and a `NotesRepository` over
+// it. It is what the Apple build persists notes with, and it is deliberately NOT an Android module
+// -- Android already implements that interface over Room and SQLCipher. See its build script.
+include(":core-store")
+
+// The iOS app: Compose Multiplatform screens over :core-store and the shared core. It declares
+// only Apple targets, so on a non-Mac host it configures and builds nothing. See its build script
+// and docs/BUILDING-IOS.md.
+include(":ios-app")
 // The record payload format and the envelope around it -- the layer between `SyncRecord` and the
 // opaque blob the server stores. It is its own module because BOTH apps need it and neither of the
 // modules it sits between can host it: :core-domain must stay free of crypto, :core-crypto-shared

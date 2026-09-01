@@ -90,6 +90,17 @@ coroutines = "1.11.0"
 zxing = "3.5.3"
 camerax = "1.5.0"
 robolectric = "4.16"
+# SQLDelight: the SQL behind the record store, for the Apple targets and for the JVM tests that
+# stand in for them. 2.3.2 resolves through the Google mirror (Maven Central 403s from this network
+# -- see settings.gradle.kts) and publishes both a Kotlin/Native driver and a JVM one.
+#
+# Chosen over sqlite-jdbc, which is what a JVM-only store would reach for and which has no Apple
+# artifact at all, and over hand-written `platform.sqlite3` cinterop, which would be a couple of
+# hundred lines of unverifiable pointer code. The property that decided it: SQLDelight's code
+# GENERATION is a plain JVM task, so the schema is parsed and the queries are type-checked on this
+# machine even though no Apple target can be compiled here -- and its JVM driver then lets the
+# store and the repository above it be tested against a real SQLite database.
+sqldelight = "2.3.2"
 
 sqliteJdbc = "3.53.4.0"
 jna = "5.19.1"
@@ -153,6 +164,15 @@ ktor-client-okhttp = { group = "io.ktor", name = "ktor-client-okhttp", version.r
 ktor-client-darwin = { group = "io.ktor", name = "ktor-client-darwin", version.ref = "ktor" }
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
 atomicfu = { group = "org.jetbrains.kotlinx", name = "atomicfu", version.ref = "atomicfu" }
+sqldelight-runtime = { group = "app.cash.sqldelight", name = "runtime", version.ref = "sqldelight" }
+# `Query.asFlow()` — what turns a SQL query into the `Flow` `NotesRepository` returns.
+sqldelight-coroutines = { group = "app.cash.sqldelight", name = "coroutines-extensions", version.ref = "sqldelight" }
+# The JVM driver. It belongs to no product and is a TEST dependency only: it is what lets the record
+# store, and the repository over it, be exercised against a real SQLite database on a machine that
+# cannot build for Apple. See core-store/build.gradle.kts.
+sqldelight-driver-jvm = { group = "app.cash.sqldelight", name = "sqlite-driver", version.ref = "sqldelight" }
+# The Kotlin/Native driver, over SQLiter. Never compiled here.
+sqldelight-driver-native = { group = "app.cash.sqldelight", name = "native-driver", version.ref = "sqldelight" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 
 sqlite-jdbc = { group = "org.xerial", name = "sqlite-jdbc", version.ref = "sqliteJdbc" }
@@ -175,3 +195,4 @@ compose-multiplatform = { id = "org.jetbrains.compose", version.ref = "composeMu
 kotlin-kapt = { id = "org.jetbrains.kotlin.kapt", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 dagger-hilt = { id = "com.google.dagger.hilt.android", version.ref = "dagger" }
+sqldelight = { id = "app.cash.sqldelight", version.ref = "sqldelight" }

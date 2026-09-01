@@ -174,7 +174,11 @@ class DeviceCredentials(val accountId: String, val deviceId: String)
  * every record whose timestamp tied with or preceded one it had already seen, permanently and
  * silently.
  */
-@JvmInline
+// `kotlin.jvm.JvmInline` is named in full rather than imported, and the qualification is the point:
+// it resolved bare while this module compiled only for the JVM and Android, both of which have it
+// as a default import, and it does not on a Kotlin/Native target. Nothing about the type changes --
+// on Apple the annotation is a no-op, because a value class is inlined by that backend regardless.
+@kotlin.jvm.JvmInline
 value class Cursor private constructor(val seq: Long) {
 
     override fun toString(): String = "Cursor(seq=$seq)"

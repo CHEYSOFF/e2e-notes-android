@@ -33,6 +33,24 @@ kotlin {
     // this module's whole layout depends on.
     mingwX64()
 
+    // The Apple targets. All four COMPILE on this machine: Kotlin/Native cross-compiles Apple
+    // klibs from any host, so `compileKotlinIosArm64` and its siblings are real checks here rather
+    // than aspirations. None of them has been LINKED or RUN, which needs macOS.
+    //
+    // That does not retire the `mingwX64` canary above, and it should not be read as retiring it.
+    // The canary is what fails FAST and on every machine, in seconds, without downloading an Apple
+    // platform-library set; and it is the check that keeps working if a future Kotlin release drops
+    // Apple klib cross-compilation, which is a JetBrains implementation detail rather than a
+    // guarantee. Keep it green.
+    //
+    // `macosArm64` earns its place separately from the three iOS ones: it is the only Apple target
+    // whose tests run without a simulator, so `./gradlew :core-domain:macosArm64Test` is the
+    // cheapest way to run this module's suite on Kotlin/Native. See docs/BUILDING-IOS.md.
+    iosArm64()
+    iosSimulatorArm64()
+    iosX64()
+    macosArm64()
+
     sourceSets {
         val commonMain by getting {
             // `api`, not `implementation`: Flow appears in this module's public repository

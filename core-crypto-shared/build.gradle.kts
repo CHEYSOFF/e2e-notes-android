@@ -16,36 +16,78 @@ kotlin {
     }
     jvm { compilerOptions { jvmTarget.set(JvmTarget.JVM_11) } }
 
-    // NOTE: no `mingwX64()` canary here, unlike :core-domain, and the absence is deliberate.
+    // The Apple targets.
     //
-    // The crypto in this module is built on the JCA -- `javax.crypto.Cipher`, `Mac`,
-    // `SecretKeyFactory`, `java.security.SecureRandom` -- so it is JVM-bound by construction, not
-    // by neglect. A canary target would only be satisfiable by stubbing the crypto out, which
-    // would make it prove nothing.
+    // `iosArm64` is a device, `iosSimulatorArm64` is the simulator on an Apple-silicon Mac,
+    // `iosX64` is the simulator on an Intel Mac, and `macosArm64` is there for one specific
+    // reason: it is the only Apple target whose tests run WITHOUT a simulator, so
+    // `./gradlew :core-crypto-shared:macosArm64Test` is the shortest path from a fresh clone to a
+    // yes-or-no answer on whether the Apple crypto agrees with the JVM. Run that first. See
+    // docs/BUILDING-IOS.md.
     //
-    // `commonMain` holds the two pieces that are NOT crypto: `Base64Url` and `SyncProtocol`. They
-    // are there because :core-sync-net's transport is common code and uses both -- see their own
-    // KDoc. They are pure Kotlin, so the canary argument above does not apply to them either way.
+    // All four COMPILE on this machine -- Kotlin/Native cross-compiles Apple klibs from any host --
+    // and none of them has been LINKED or RUN, which needs macOS. So `appleMain` is type-checked
+    // against the real CommonCrypto bindings and has never produced a byte. That distinction is
+    // the whole of what `PlatformCrypto.apple.kt` and docs/BUILDING-IOS.md are careful about.
+    iosArm64()
+    iosSimulatorArm64()
+    iosX64()
+    macosArm64()
+
+    // NOTE: still no `mingwX64()` canary here, unlike :core-domain, but the reason has changed and
+    // the old one no longer applies.
     //
-    // An Apple target needs real actuals (CryptoKit/CommonCrypto) behind an `expect` seam, and
-    // those must produce byte-identical output to these or two devices cannot read each other's
-    // notes. That is a piece of work with its own verification, not a source-set rearrangement,
-    // and it is why the code here sits in `jvmCommonMain` rather than pretending to be common.
-    // Wired with explicit `dependsOn` rather than through `applyDefaultHierarchyTemplate`.
+    // It used to be that the crypto in this module WAS the JVM: `javax.crypto.Cipher`, `Mac`,
+    // `SecretKeyFactory`, `java.security.SecureRandom`, sitting in `jvmCommonMain`, JVM-bound by
+    // construction. That is no longer true. Every class in this module now lives in `commonMain`
+    // and is written against the four `expect` functions in `my.cheysoff.core_crypto.platform`;
+    // `jvmCommonMain` holds the JCA actuals and nothing else.
     //
-    // The template's `withAndroidTarget()` matches the OLD `androidTarget()`, not the
-    // `androidLibrary` target that AGP 9's multiplatform plugin creates, so the template silently
-    // links nothing: `compileAndroidMain` reports NO-SOURCE and the Android variant ships an empty
-    // jar. That failure is quiet -- the module builds, its JVM target has every class, and only a
-    // consumer of the Android variant discovers the classes are missing.
+    // So a canary is now *possible* -- and it would need mingw actuals, which would mean either a
+    // Windows CNG binding that ships in no product or a hand-rolled AES-GCM, and the second of
+    // those is a third implementation of the primitive whose whole problem is that
+    // implementations must agree. The check a canary would give is instead given, more directly,
+    // by `ProtocolVectorsTest`: it is `commonTest`, so it compiles and runs on every target the
+    // module has, and it checks the answers rather than only the compilation.
     //
-    // The cost is a Gradle warning that the default template was not applied, which is accurate
-    // and harmless here: this module declares its two source-set edges itself, immediately below.
+    // What is genuinely NOT checked on this machine is whether `appleMain` compiles at all. Only a
+    // Mac can answer that.
     sourceSets {
         val commonMain by getting
+        val commonTest by getting {
+            dependencies {
+                // `kotlin.test` rather than JUnit, because this source set compiles for Apple
+                // targets too and JUnit does not. The existing JVM-only suites stay on JUnit; see
+                // the `jvmTest` block below.
+                implementation(kotlin("test"))
+            }
+        }
+
         val jvmCommonMain by creating { dependsOn(commonMain) }
         val androidMain by getting { dependsOn(jvmCommonMain) }
         val jvmMain by getting { dependsOn(jvmCommonMain) }
+
+        // Wired with explicit `dependsOn` rather than through `applyDefaultHierarchyTemplate`.
+        //
+        // The template's `withAndroidTarget()` matches the OLD `androidTarget()`, not the
+        // `androidLibrary` target that AGP 9's multiplatform plugin creates, so the template
+        // silently links nothing: `compileAndroidMain` reports NO-SOURCE and the Android variant
+        // ships an empty jar. That failure is quiet -- the module builds, its JVM target has every
+        // class, and only a consumer of the Android variant discovers the classes are missing.
+        //
+        // The cost is a Gradle warning that the default template was not applied, which is
+        // accurate and harmless: this module declares every source-set edge itself, here.
+        //
+        // `maybeCreate` rather than `by creating` for `appleMain` so that this keeps working if a
+        // future Kotlin version does apply the template after all -- in which case `appleMain`
+        // already exists and creating it again would fail the build.
+        val appleMain = maybeCreate("appleMain").apply { dependsOn(commonMain) }
+        val appleTest = maybeCreate("appleTest").apply { dependsOn(commonTest) }
+        listOf("iosArm64", "iosSimulatorArm64", "iosX64", "macosArm64").forEach { target ->
+            getByName("${target}Main").dependsOn(appleMain)
+            getByName("${target}Test").dependsOn(appleTest)
+        }
+
         val jvmTest by getting { dependencies { implementation(libs.junit) } }
     }
 }
