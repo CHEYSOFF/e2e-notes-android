@@ -61,8 +61,41 @@ interface PairingKeyMaterial {
      */
     fun accountBundle(): AccountBundle?
 
-    /** Store the bundle a completed pairing produced. Called exactly once, on the new device. */
-    fun adopt(bundle: AccountBundle)
+    /**
+     * Store the bundle a completed pairing produced. Called exactly once, on the new device.
+     *
+     * Suspends because a bundle can carry more than an ARK. When the account device named a server
+     * and enrolled this one, the sealed config carries the address and the id the server assigned —
+     * and those have no other channel to travel on, so dropping them here would produce a device
+     * that holds the account and can never open a session for it. Writing them is a DataStore edit.
+     */
+    suspend fun adopt(bundle: AccountBundle)
+}
+
+/**
+ * Where a pairing's **server** configuration is written, on the device that received it.
+ *
+ * A separate seam from [PairingKeyMaterial] and in `:app` for the reason [DeviceEnroller] gives:
+ * `:feature-pairing` can see neither the sync settings nor the enrolment store, and handing the
+ * pairing screen either would put the account's server configuration in the class that holds the
+ * ARK.
+ *
+ * Only ever called with values that came out of the **seal**. The `url` in the QR is a hint the
+ * other device put there in the clear; the copy inside `AccountBundle.config` is authenticated, and
+ * it is the only one that may be stored.
+ */
+fun interface PairedServerStore {
+
+    /**
+     * Record where this account syncs and, if the pairing enrolled this device, what it is called
+     * there.
+     *
+     * @param deviceId null when the account device could not vouch. The address is still worth
+     *   storing — the user can see it and the account is real — but the device cannot open a
+     *   session until somebody enrols it, and writing an id that does not exist would be worse
+     *   than writing none.
+     */
+    suspend fun record(accountId: String, serverUrl: String, deviceId: String?)
 }
 
 /**
