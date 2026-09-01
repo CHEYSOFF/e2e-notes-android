@@ -19,6 +19,7 @@ import my.cheysoff.core_domain.repository.NotesRepository
 import my.cheysoff.core_domain.sync.FieldClocks
 import my.cheysoff.core_domain.sync.Hlc
 import my.cheysoff.core_domain.sync.HlcGenerator
+import my.cheysoff.core_sync_engine.ClockObserver
 import my.cheysoff.core_domain.sync.RecordType
 
 /** Records that were on disk and could not be turned back into notes, and why. */
@@ -76,6 +77,17 @@ class RecordNotesRepository private constructor(
     /** What could not be loaded. Zero on a healthy vault; surfaced by the UI when it is not. */
     val diagnostics: LoadDiagnostics,
 ) : NotesRepository {
+
+    /**
+     * Folds a clock this device did not mint into the generator local writes draw from.
+     *
+     * The sync engine calls this for every remote record it merges. It has to be *this* generator
+     * and not another one: if a record arrives stamped later than anything here, the next local
+     * edit must still beat it, or the edit looks older than the thing it was written in response to
+     * and a merge discards it. A second generator observing the same clocks would drift, because
+     * only one of them stamps the writes.
+     */
+    val clockObserver: ClockObserver = ClockObserver { seen -> hlc.observe(seen) }
 
     /** Every note and folder this device holds, including the trashed ones. */
     data class Snapshot(val notes: Map<String, NoteRow>, val folders: Map<String, FolderRow>)
