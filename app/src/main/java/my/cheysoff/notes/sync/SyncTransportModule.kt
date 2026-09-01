@@ -9,6 +9,7 @@ import my.cheysoff.core_domain.sync.SyncController
 import my.cheysoff.core_domain.sync.SyncTransportStatus
 import my.cheysoff.core_sync_net.auth.DeviceLabelSealer
 import my.cheysoff.core_sync_net.auth.DeviceSigner
+import my.cheysoff.feature_pairing.di.PairedServerStore
 import my.cheysoff.feature_pairing.identity.DeviceEnroller
 import javax.inject.Singleton
 
@@ -84,6 +85,17 @@ abstract class SyncTransportModule {
     @Binds
     @Singleton
     abstract fun bindDeviceEnroller(impl: SyncDeviceEnroller): DeviceEnroller
+
+    /**
+     * Where a pairing's server configuration is written on the device that received it.
+     *
+     * The other half of [DeviceEnroller]'s seam, and in this module for the same reason: the
+     * address and the id come out of a sealed bundle in `:feature-pairing`, and the two stores they
+     * belong in are here.
+     */
+    @Binds
+    @Singleton
+    abstract fun bindPairedServerStore(impl: SyncPairedServerStore): PairedServerStore
 
     /**
      * The sync engine's entry point, as the two feature modules are allowed to see it.

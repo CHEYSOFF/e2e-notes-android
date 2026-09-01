@@ -19,14 +19,19 @@ import my.cheysoff.feature_pairing.identity.DeviceIdentity
 import my.cheysoff.feature_pairing.identity.EnrolmentResult
 import my.cheysoff.core_pairing.protocol.AccountBundle
 import my.cheysoff.core_pairing.protocol.AccountDeviceSession
+import my.cheysoff.core_pairing.protocol.BundleOutcome
+import my.cheysoff.core_pairing.protocol.CollectResult
 import my.cheysoff.core_pairing.protocol.DepositResult
 import my.cheysoff.core_pairing.protocol.KeyDerivation
+import my.cheysoff.core_pairing.protocol.InviteOutcome
+import my.cheysoff.core_pairing.protocol.JoiningDeviceSession
 import my.cheysoff.core_pairing.protocol.MonotonicClock
 import my.cheysoff.core_pairing.protocol.NewDeviceSession
 import my.cheysoff.core_pairing.protocol.OfferOutcome
 import my.cheysoff.core_pairing.protocol.PairingConfig
 import my.cheysoff.core_pairing.protocol.PairingFailure
 import my.cheysoff.core_pairing.protocol.RendezvousClientFactory
+import my.cheysoff.core_pairing.protocol.RendezvousSlot
 import my.cheysoff.core_pairing.protocol.RendezvousUrl
 import my.cheysoff.core_pairing.protocol.SealOutcome
 import javax.inject.Inject
@@ -102,6 +107,42 @@ class PairingViewModel @Inject constructor(
     private var accountDeviceSession: AccountDeviceSession? = null
 
     /**
+     * This phone's half of an invite from a computer, or null.
+     *
+     * A third session field rather than a shared one, because the three roles are three different
+     * state machines with three different orders, and a single nullable "the session" would be a
+     * field whose type a reader has to infer from the stage.
+     */
+    private var joiningSession: JoiningDeviceSession? = null
+
+    /** What an accepted invite agreed, held between the scan and the send. */
+    private var pendingReply: PendingReply? = null
+
+    /**
+     * The rendezvous an accepted invite named, held for the whole attempt.
+     *
+     * Separate from [pendingReply], which is dropped once the reply has landed: the same address is
+     * needed again to collect the bundle, and re-parsing the QR would mean keeping the QR.
+     */
+    private var pendingServer: RendezvousUrl? = null
+
+    private var collectJob: Job? = null
+
+    /**
+     * The reply this phone is about to deposit, and where.
+     *
+     * The contents are public — an ephemeral point and this device's own public key — so unlike
+     * [pendingBundle] this is not key material. It is still dropped on every exit path, because
+     * there is no reason to keep it once the screen is done with it.
+     */
+    private class PendingReply(
+        val server: RendezvousUrl,
+        val sid: ByteArray,
+        val replyCode: String,
+        val sas: String,
+    )
+
+    /**
      * The bundle the new device opened out of QR2, held until the user confirms the SAS.
      *
      * The one piece of key material this class ever touches. It is cleared on confirmation (after
@@ -158,6 +199,7 @@ class PairingViewModel @Inject constructor(
             PairingIntent.SealShown -> advanceToConfirming()
             is PairingIntent.CodeScanned -> onCode(intent.text)
             PairingIntent.SendSeal -> sendSeal()
+            PairingIntent.SendReply -> sendReply()
             PairingIntent.SasConfirmed -> commit()
             // failure = null: the protocol succeeded and a person stopped it. See PairingStage.Failed.
             PairingIntent.SasRejected -> abandon(
@@ -196,6 +238,22 @@ class PairingViewModel @Inject constructor(
                     )
                 }
                 startCountdown()
+            }
+
+            PairingRole.JoinFromComputer -> {
+                // The device identity key is provisioned HERE rather than on completion, because
+                // its public half has to travel in the reply: the computer vouches for exactly this
+                // key. It is idempotent, and a key on a device that then abandoned the pairing is a
+                // key nothing was ever enrolled against.
+                val devicePublicKey = deviceIdentity.ensureProvisioned()
+                joiningSession = JoiningDeviceSession(
+                    keyDerivation = keyDerivation,
+                    clock = clock,
+                    devicePublicKey = devicePublicKey,
+                )
+                newDeviceSession = null
+                accountDeviceSession = null
+                _state.update { it.copy(stage = PairingStage.ScanningInvite(lastHint = null)) }
             }
 
             PairingRole.HasMyNotes -> {
@@ -243,6 +301,7 @@ class PairingViewModel @Inject constructor(
         when (val stage = _state.value.stage) {
             is PairingStage.ScanningOffer -> onOfferScanned(text)
             is PairingStage.ScanningSeal -> onSealScanned(text, stage)
+            is PairingStage.ScanningInvite -> onInviteScanned(text)
             // Every other stage has no camera on screen. Frames can still arrive for a moment
             // after a transition, and they are dropped rather than fed to a finished session.
             else -> Unit
@@ -311,6 +370,229 @@ class PairingViewModel @Inject constructor(
                     _state.update { it.copy(stage = current.copy(lastHint = hint)) }
                 }
             }
+        }
+    }
+
+    /**
+     * One frame, on the path where a computer holds the account.
+     *
+     * Everything cryptographic happens inside [JoiningDeviceSession.onScanned]: the on-curve check
+     * on the computer's ephemeral point, the agreement, the six digits and this phone's reply. What
+     * is left here is that **nothing is sent yet** — see [PairingStage.AnsweringInvite].
+     */
+    private fun onInviteScanned(text: String) {
+        val session = joiningSession ?: return
+        when (val outcome = session.onScanned(text)) {
+            is InviteOutcome.Accepted -> {
+                val server = RendezvousUrl.parse(outcome.server.url)
+                if (server == null) {
+                    // The decoder already refuses an invite with no address, so this is an address
+                    // that decoded and does not parse -- a version disagreement or a hostile code.
+                    return abandon(
+                        PairingFailure.MALFORMED,
+                        "That code names a server address this phone cannot use. Nothing was sent.",
+                    )
+                }
+                pendingServer = server
+                pendingReply = PendingReply(
+                    server = server,
+                    sid = session.sid!!,
+                    replyCode = outcome.replyCode,
+                    sas = outcome.sas,
+                )
+                _state.update {
+                    it.copy(
+                        stage = PairingStage.AnsweringInvite(
+                            host = server.host,
+                            secure = server.secure,
+                            sas = outcome.sas,
+                        )
+                    )
+                }
+            }
+
+            is InviteOutcome.Rejected -> applyRejection(outcome.failure) { hint ->
+                val current = _state.value.stage
+                if (current is PairingStage.ScanningInvite) {
+                    _state.update { it.copy(stage = current.copy(lastHint = hint)) }
+                }
+            }
+        }
+    }
+
+    /**
+     * Deposit this phone's ephemeral point and device public key in the invite's reply slot.
+     *
+     * ## What is being sent, and what it is not
+     *
+     * Two P-256 public points. Nothing here is secret, so a wrong host learns nothing and an
+     * eavesdropper learns nothing — which is exactly why the confidentiality of this leg is not the
+     * question. The question is **authenticity**, and this route has none: whoever controls it can
+     * replace this reply with their own and the computer will agree a secret with them instead. The
+     * six digits are what catches that, which is why [PairingStage.Confirming] comes next and why
+     * nothing about the account key has happened yet on either side.
+     *
+     * ## The plain-`http` rule
+     *
+     * `https`, or `http` to a loopback address, and nothing else — `ServerEndpoint`'s rule, applied
+     * here for the reason [sendSeal] gives at length: Android blocks cleartext by default and
+     * `network_security_config.xml` opens exactly the same loopback hole and no other, so three
+     * lists that must agree is two too many.
+     */
+    private fun sendReply() {
+        val stage = _state.value.stage
+        if (stage !is PairingStage.AnsweringInvite || stage.sending) return
+        val reply = pendingReply ?: return abandon(
+            PairingFailure.SESSION_CLOSED,
+            "There is nothing left to send. Start over.",
+        )
+
+        if (!reply.server.secure && !isLoopback(reply.server.host)) {
+            _state.update {
+                it.copy(
+                    stage = stage.copy(
+                        message = "That computer offered a plain http:// address on a host this " +
+                            "phone will not send to in the clear. Put the server behind https:// " +
+                            "and start over.",
+                    )
+                )
+            }
+            return
+        }
+
+        _state.update { it.copy(stage = stage.copy(sending = true, message = null)) }
+        sendJob = viewModelScope.launch {
+            val result = withContext(ioDispatcher) {
+                rendezvousClients.create(reply.server)
+                    .deposit(reply.sid, RendezvousSlot.REPLY, reply.replyCode)
+            }
+            when (result) {
+                // A 409 means either that a previous attempt of ours landed and its response was
+                // lost, or that somebody else filled this slot first. The second is the man in the
+                // middle -- and moving on is right for both, because the digits are the check: if
+                // somebody else's reply is what the computer agreed with, its digits will not be
+                // ours and the user stops there.
+                is DepositResult.Deposited, DepositResult.AlreadyDeposited -> {
+                    pendingReply = null
+                    _state.update {
+                        it.copy(
+                            stage = PairingStage.Confirming(
+                                sas = reply.sas,
+                                role = PairingRole.JoinFromComputer,
+                            )
+                        )
+                    }
+                }
+
+                is DepositResult.Refused -> _state.update {
+                    it.copy(
+                        stage = stage.copy(
+                            sending = false,
+                            message = "The server refused: ${result.detail}",
+                        )
+                    )
+                }
+
+                is DepositResult.Unreachable -> _state.update {
+                    it.copy(
+                        stage = stage.copy(
+                            sending = false,
+                            message = "Could not reach ${stage.host}: ${result.detail}",
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Poll the bundle slot until the computer sends, this session expires, or something breaks.
+     *
+     * Started by [PairingIntent.SasConfirmed] and by nothing else. That ordering is not decoration:
+     * the computer does not seal the account key until its own user confirms, so a phone that
+     * started collecting earlier would only be asking for something that does not exist — and it
+     * would make the confirmation on this side look like a formality rather than the one check that
+     * matters.
+     */
+    private fun collectBundle() {
+        val session = joiningSession ?: return abandon(
+            PairingFailure.SESSION_CLOSED,
+            "This pairing attempt is finished. Start over to try again.",
+        )
+        val server = pendingServer ?: return abandon(
+            PairingFailure.SESSION_CLOSED,
+            "This pairing attempt is finished. Start over to try again.",
+        )
+        val sid = session.sid ?: return abandon(
+            PairingFailure.SESSION_CLOSED,
+            "This pairing attempt is finished. Start over to try again.",
+        )
+
+        _state.update {
+            it.copy(
+                stage = PairingStage.CollectingBundle(
+                    secondsRemaining = session.remainingMillis().toSeconds()
+                )
+            )
+        }
+
+        val client = rendezvousClients.create(server)
+        collectJob = viewModelScope.launch {
+            while (isActive) {
+                if (session.isExpired()) {
+                    return@launch abandon(
+                        PairingFailure.EXPIRED,
+                        "The pairing code expired before the computer sent the account key. " +
+                            "Nothing was saved — start over.",
+                    )
+                }
+                val result = withContext(ioDispatcher) {
+                    client.collect(sid, RendezvousSlot.BUNDLE)
+                }
+                when (result) {
+                    is CollectResult.Pending -> publishCollecting(session, null)
+
+                    // A dropped connection is not a failure: the deadline is the session TTL, which
+                    // is already counting.
+                    is CollectResult.Unreachable ->
+                        publishCollecting(session, "Cannot reach the server. Still trying.")
+
+                    is CollectResult.Unusable -> return@launch abandon(
+                        null,
+                        "The pairing server answered with something unusable: ${result.detail}",
+                    )
+
+                    is CollectResult.Collected -> {
+                        when (val outcome = session.onBundle(result.sealCode)) {
+                            is BundleOutcome.Opened -> {
+                                pendingBundle = outcome.bundle
+                                adoptAndFinish(PairingRole.JoinFromComputer)
+                            }
+
+                            // The loud abort. A tag failure here means the bundle was not sealed by
+                            // the computer this phone agreed with -- which, after a matching SAS,
+                            // means it was modified in flight.
+                            is BundleOutcome.Rejected ->
+                                abandon(outcome.failure, messageFor(outcome.failure))
+                        }
+                        return@launch
+                    }
+                }
+                delay(COLLECT_INTERVAL_MILLIS)
+            }
+        }
+    }
+
+    private fun publishCollecting(session: JoiningDeviceSession, note: String?) {
+        val current = _state.value.stage
+        if (current !is PairingStage.CollectingBundle) return
+        _state.update {
+            it.copy(
+                stage = current.copy(
+                    secondsRemaining = session.remainingMillis().toSeconds(),
+                    note = note,
+                )
+            )
         }
     }
 
@@ -456,7 +738,7 @@ class PairingViewModel @Inject constructor(
 
             // The client is blocking; the ViewModel's scope is the main dispatcher.
             val result = withContext(ioDispatcher) {
-                rendezvousClients.create(seal.server).deposit(seal.sid, sealCode)
+                rendezvousClients.create(seal.server).deposit(seal.sid, RendezvousSlot.BUNDLE, sealCode)
             }
             when (result) {
                 // Both of these move on, and the second deliberately so. A 409 means either that a
@@ -512,17 +794,44 @@ class PairingViewModel @Inject constructor(
         if (stage !is PairingStage.Confirming) return
         stopCountdown()
 
-        if (stage.role == PairingRole.NewDevice) {
-            val bundle = pendingBundle ?: return abandon(
-                PairingFailure.SESSION_CLOSED,
-                "The pairing result was already discarded. Start over.",
-            )
-            keyMaterial.adopt(bundle)
-            pendingBundle = null
+        when (stage.role) {
+            // The account key is already here, opened out of QR2. Store it.
+            PairingRole.NewDevice -> adoptAndFinish(stage.role)
+
+            // Nothing to store: this device gave the account key away and kept the one it had.
+            PairingRole.HasMyNotes -> {
+                deviceIdentity.ensureProvisioned()
+                clearSessions()
+                _state.update { it.copy(stage = PairingStage.Finished(stage.role)) }
+            }
+
+            // The account key has not arrived yet, and this confirmation is what allows it to be
+            // sent at all: the computer does not seal until its own user confirms. So this branch
+            // starts asking, rather than finishing.
+            PairingRole.JoinFromComputer -> collectBundle()
         }
-        deviceIdentity.ensureProvisioned()
-        clearSessions()
-        _state.update { it.copy(stage = PairingStage.Finished(stage.role)) }
+    }
+
+    /**
+     * Store the received bundle and finish.
+     *
+     * Suspending work behind a launch, because adopting is no longer only an in-memory wrap: a
+     * bundle that named a server carries the address and this device's server-assigned id, and
+     * those are DataStore writes. The stage moves to [PairingStage.Finished] only after they land,
+     * so "Finished" never means "the account key is stored and the server configuration was lost".
+     */
+    private fun adoptAndFinish(role: PairingRole) {
+        val bundle = pendingBundle ?: return abandon(
+            PairingFailure.SESSION_CLOSED,
+            "The pairing result was already discarded. Start over.",
+        )
+        pendingBundle = null
+        viewModelScope.launch {
+            keyMaterial.adopt(bundle)
+            deviceIdentity.ensureProvisioned()
+            clearSessions()
+            _state.update { it.copy(stage = PairingStage.Finished(role)) }
+        }
     }
 
     /**
@@ -572,9 +881,14 @@ class PairingViewModel @Inject constructor(
     private fun clearSessions() {
         newDeviceSession = null
         accountDeviceSession = null
+        joiningSession = null
         pendingSeal = null
+        pendingReply = null
+        pendingServer = null
         sendJob?.cancel()
         sendJob = null
+        collectJob?.cancel()
+        collectJob = null
     }
 
     // -- countdown ----------------------------------------------------------------------------
@@ -596,6 +910,8 @@ class PairingViewModel @Inject constructor(
                         newDeviceSession?.remainingMillis()
 
                     is PairingStage.ShowingSeal -> accountDeviceSession?.remainingMillis()
+                    // Ticked by the collect loop itself, which is the authority on how long is
+                    // left; a second countdown job for it would race that one.
                     else -> null
                 } ?: return@launch
 
@@ -652,6 +968,15 @@ class PairingViewModel @Inject constructor(
 
     private companion object {
         const val TICK_MILLIS = 1_000L
+
+        /**
+         * 1.5 seconds between polls of the bundle slot.
+         *
+         * The same cadence the desktop uses on its own poll loop, and for the same arithmetic: a
+         * two-minute window is about 80 requests rather than thousands, which keeps an honest
+         * client comfortably inside the server's general rate limit.
+         */
+        const val COLLECT_INTERVAL_MILLIS = 1_500L
 
         /**
          * The name the joining device is enrolled under.

@@ -42,6 +42,15 @@ sealed interface PairingIntent {
      */
     data object SendSeal : PairingIntent
 
+    /**
+     * Send this phone's key to the rendezvous the computer's invite named.
+     *
+     * The mirror of [SendSeal] on the other side of the same argument: an explicit act, because the
+     * address arrived on a code and this is the first request the phone would make because of it.
+     * Retriable — a failed send leaves the stage in place with a message.
+     */
+    data object SendReply : PairingIntent
+
     /** The user says the two six-digit codes match. This is what commits the pairing. */
     data object SasConfirmed : PairingIntent
 
