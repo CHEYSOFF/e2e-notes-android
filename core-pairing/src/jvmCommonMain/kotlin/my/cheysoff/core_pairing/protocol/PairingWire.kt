@@ -1,4 +1,4 @@
-package my.cheysoff.feature_pairing.protocol
+package my.cheysoff.core_pairing.protocol
 
 import java.util.Base64
 
@@ -96,7 +96,7 @@ internal class PairingWireException(
  * Base64url rather than raw bytes in QR byte-mode because the alphabet is URL- and log-safe and
  * survives every text pipeline a QR library might put it through; the ~33% size cost is affordable
  * at these payload sizes (QR1 ≈ 200 chars, QR2 ≈ 300 chars — both well inside a version-13 symbol
- * at error-correction level M, which is what [my.cheysoff.feature_pairing.qr.QrCodes] emits).
+ * at error-correction level M, which is what [my.cheysoff.core_pairing.qr.QrCodes] emits).
  *
  * The `MNP1:` prefix (Mañana Pairing, version 1) is a fast reject: a camera pointed at the world
  * resolves QR codes constantly, and a five-character string comparison is what keeps the decoder

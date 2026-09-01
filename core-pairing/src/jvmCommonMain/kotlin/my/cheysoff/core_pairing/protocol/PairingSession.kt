@@ -1,4 +1,4 @@
-package my.cheysoff.feature_pairing.protocol
+package my.cheysoff.core_pairing.protocol
 
 import java.security.KeyPair
 import java.security.SecureRandom
@@ -200,6 +200,22 @@ class AccountDeviceSession(
         private set
 
     /**
+     * The `sid` this session accepted, available after a successful [onScanned].
+     *
+     * Exposed because the seal no longer necessarily goes back the way it came: when the new device
+     * asked for a rendezvous, `sid` is the name the sealed bundle is filed under. It is not a
+     * secret — it travels in QR1 in the clear and appears in a URL path — but it *is* this
+     * session's identity, which is why the caller is handed the one the session actually used
+     * rather than being trusted to re-parse QR1 and arrive at the same bytes.
+     *
+     * Copied on the way out: the caller must not be able to mutate the value the AAD and the HKDF
+     * salt were built from.
+     */
+    var receivedSid: ByteArray? = null
+        private set
+        get() = field?.copyOf()
+
+    /**
      * Milliseconds until QR2 should be taken off the screen, floored at zero.
      *
      * Returns [ttlMillis] before an offer has been accepted: nothing is on screen yet, so nothing
@@ -262,6 +278,7 @@ class AccountDeviceSession(
 
         acceptedAt = clock.elapsedMillis()
         receivedServerHint = frame.serverHint
+        receivedSid = frame.sid
         return OfferOutcome.Accepted(sealCode = code, sas = Sas.derive(keyDerivation, bundle.ark, frame.sid))
     }
 

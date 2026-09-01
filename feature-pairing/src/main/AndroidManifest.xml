@@ -2,18 +2,46 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!--
-      The one and only permission this feature adds.
-
       Declared HERE rather than in app/src/main/AndroidManifest.xml on purpose: the permission
       exists because of this module and disappears with it, so a future "offline flavour" that
       drops :feature-pairing drops the permission with it and needs no manifest edit.
-
-      Deliberately NOT declared: INTERNET. Pairing is a screen-to-camera exchange between two
-      phones in the same room; it opens no socket. INTERNET belongs to Phase 3 (the sync engine),
-      and adding it early would retire the "this app talks to nobody" property months before
-      anything actually needs it.
     -->
     <uses-permission android:name="android.permission.CAMERA" />
+
+    <!--
+      INTERNET, for pairing with a computer and for nothing else.
+
+      This file used to say INTERNET was deliberately absent, because "pairing is a screen-to-camera
+      exchange between two phones in the same room; it opens no socket". That sentence is still true
+      of pairing with a PHONE, and that flow is unchanged: two phones exchange two QR codes and this
+      module opens nothing.
+
+      What changed is that a laptop has no camera to point at the second QR code. So when (and only
+      when) the scanned QR1 names a rendezvous server, this module POSTs the SEALED bundle there
+      and the computer collects it. Concretely:
+
+      1. Nothing here contacts anything until the user has scanned a computer's pairing code AND
+         pressed "Send" on a screen that names the host it is about to send to. The address is
+         unauthenticated (it arrives in the clear in a QR code), which is exactly why it is shown
+         and confirmed rather than acted on.
+
+      2. Exactly one request is made, to exactly that host: one POST of one opaque string. There is
+         no discovery, no fallback address, no bundled default, no update check, and redirects are
+         refused so a response cannot move the request to a different host.
+
+      3. What is sent is AES-256-GCM ciphertext under a key derived from an ECDH whose private
+         halves never left either device. The server stores it, cannot open it, and deletes it when
+         the computer collects it. See core-pairing's RendezvousProtocol for exactly what the server
+         does and does not learn.
+
+      4. There is deliberately no analytics, crash reporting or telemetry dependency in this module,
+         and adding one would change what this permission means.
+
+      The manifest merger unions this with the identical declaration in :core-sync-net, so the merged
+      application manifest is unchanged. It is declared here as well rather than leaned on from
+      there, because a build that dropped :core-sync-net would otherwise silently break this module.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <!--
       Both pairing roles have to scan (device A scans QR1, device B scans QR2), so the feature

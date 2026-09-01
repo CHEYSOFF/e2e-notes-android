@@ -1,7 +1,7 @@
-package my.cheysoff.feature_pairing
+package my.cheysoff.core_pairing
 
-import my.cheysoff.feature_pairing.protocol.InvalidPeerKeyException
-import my.cheysoff.feature_pairing.protocol.P256
+import my.cheysoff.core_pairing.protocol.InvalidPeerKeyException
+import my.cheysoff.core_pairing.protocol.P256
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals

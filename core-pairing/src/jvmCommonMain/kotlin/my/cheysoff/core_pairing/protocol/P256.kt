@@ -1,4 +1,4 @@
-package my.cheysoff.feature_pairing.protocol
+package my.cheysoff.core_pairing.protocol
 
 import java.math.BigInteger
 import java.security.KeyFactory
@@ -161,7 +161,7 @@ object P256 {
      *
      * Ephemeral in the strict sense: one key pair per session, never persisted, never reused. The
      * device's *long-lived* identity key is a separate object entirely and lives in the Keystore —
-     * see `my.cheysoff.feature_pairing.identity.DeviceIdentityKey`.
+     * see `my.cheysoff.feature_pairing.identity.DeviceIdentityKey` in `:feature-pairing`.
      */
     fun generateEphemeralKeyPair(random: SecureRandom = SecureRandom()): KeyPair {
         val generator = KeyPairGenerator.getInstance("EC")

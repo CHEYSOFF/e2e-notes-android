@@ -1,12 +1,18 @@
 package my.cheysoff.feature_pairing
 
-import my.cheysoff.feature_pairing.protocol.MonotonicClock
+import my.cheysoff.core_pairing.protocol.MonotonicClock
 
 /**
  * A [MonotonicClock] the test drives by hand.
  *
  * The pairing sessions read the clock rather than owning one precisely so expiry can be tested
  * without a two-minute `Thread.sleep`.
+ *
+ * A near-copy of the one in `:core-pairing`'s own suite, and deliberately not shared: a test
+ * fixture published from one module to another is a `testFixtures` variant to configure and an
+ * extra publication edge for four lines that never change. The two are independent by design --
+ * neither is a protocol primitive, so the "two implementations drift" argument that governs
+ * `KeyDerivation` does not apply.
  */
 class FakeClock(var now: Long = 0L) : MonotonicClock {
     override fun elapsedMillis(): Long = now
@@ -15,14 +21,3 @@ class FakeClock(var now: Long = 0L) : MonotonicClock {
         now += millis
     }
 }
-
-/** Hex helpers, so the RFC vectors can be pasted in the form the RFC prints them. */
-fun hex(s: String): ByteArray {
-    val clean = s.filterNot { it.isWhitespace() }
-    require(clean.length % 2 == 0)
-    return ByteArray(clean.length / 2) {
-        clean.substring(it * 2, it * 2 + 2).toInt(16).toByte()
-    }
-}
-
-fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }

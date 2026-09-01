@@ -1,7 +1,7 @@
 package my.cheysoff.feature_pairing.ui
 
 import androidx.compose.runtime.Immutable
-import my.cheysoff.feature_pairing.protocol.PairingFailure
+import my.cheysoff.core_pairing.protocol.PairingFailure
 
 /**
  * Which half of the exchange this device is playing.
@@ -69,6 +69,36 @@ sealed interface PairingStage {
         val code: String,
         val sas: String,
         val secondsRemaining: Int,
+    ) : PairingStage
+
+    /**
+     * Account device, step 2, when the other device asked for the bundle to be **sent** instead.
+     *
+     * Reached only when QR1 carried a server address, which today means the other device is a
+     * computer: a laptop has no camera worth relying on, so the sealed bundle goes through a
+     * rendezvous server rather than a second QR code. A phone pairing with a phone never reaches
+     * this stage and never touches the network — see [ShowingSeal], which is still that flow.
+     *
+     * **The send is a deliberate act, not an automatic one.** [host] is stated and a button is
+     * pressed, because the address arrived unauthenticated in a QR code: at the moment it is read
+     * nothing has been agreed, so a code on a poster could otherwise make a stranger's phone POST
+     * to a host of the printer's choosing. What it would POST is sealed to a key that host does not
+     * have — so nothing leaks either way — but a request made from inside someone's network without
+     * their knowing is worth one tap to prevent.
+     *
+     * [sas] is shown from the start, before the send, for the same reason [ShowingSeal] shows it:
+     * the comparison is between two screens that are both already displaying it.
+     */
+    @Immutable
+    data class SendingSeal(
+        val host: String,
+        /** False for a plain `http://` address. Governs the warning the screen shows. */
+        val secure: Boolean,
+        val sas: String,
+        /** True while a request is in flight. The button is disabled and says so. */
+        val sending: Boolean = false,
+        /** What went wrong with the last attempt, or null. Non-terminal: the user may retry. */
+        val message: String? = null,
     ) : PairingStage
 
     /** Both roles: compare the six digits and say whether they match. */

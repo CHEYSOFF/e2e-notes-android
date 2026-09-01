@@ -220,9 +220,12 @@ vault.setUp(passphrase, AccountOrigin.PAIRED, arkFromThePhone)
 
 Already implemented, already tested (`a paired setup adopts the supplied ARK rather than minting
 one`), and it refuses to mint a key of its own — passing `PAIRED` without an ARK is an
-`IllegalArgumentException`, not a silent standalone setup. What the pairing agent adds is the
-transport that produces `arkFromThePhone`, and a button on `FirstRunScreen` that is currently
-disabled.
+`IllegalArgumentException`, not a silent standalone setup.
+
+**This seam is now filled.** `arkFromThePhone` comes from the rendezvous: the desktop shows QR1, the
+phone scans it and POSTs the sealed bundle to a server, the desktop polls for it. Nothing in
+`DesktopVault` or below changed to accommodate that, which is what the seam was for. See
+[desktop-pairing.md](desktop-pairing.md).
 
 ---
 

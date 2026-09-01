@@ -169,3 +169,35 @@ class HistoryResponse(val blindedId: String, val versions: List<RecordDto>)
 
 @Serializable
 class HealthResponse(val status: String, val version: String)
+
+// --------------------------------------------------------------------------------------------
+// POST /v1/pair/{sid}, GET /v1/pair/{sid}
+// --------------------------------------------------------------------------------------------
+
+/**
+ * The sealed pairing bundle, in both directions.
+ *
+ * One field, and there will never be a second one that this server reads. Everything a pairing
+ * carries -- the account root key, the account id, the client configuration -- is inside
+ * [sealed], encrypted under a key derived from an ECDH whose private halves this server has never
+ * seen. It is base64url of a `manana/pair/v1` QR2 frame with its `MNP1:` prefix removed, and the
+ * server checks it for exactly two things: that it is base64url, and that it is not too big.
+ *
+ * **Do not add a field here that the server does not itself act on.** The rule is the same one
+ * [RecordDto] states, and it bites harder here: a pairing is the one moment an account key moves
+ * between devices, and a plaintext field beside the ciphertext is the obvious place for a future
+ * change to put something that should have been sealed.
+ */
+@Serializable
+class PairingDepositRequest(val sealed: String)
+
+/**
+ * [expiresAt] is this server's clock, and the client treats it as advisory -- the deadline that
+ * binds is the collecting device's own monotonic session TTL. It is returned so a UI can say how
+ * long is left without inventing a number.
+ */
+@Serializable
+class PairingDepositResponse(val expiresAt: Long)
+
+@Serializable
+class PairingCollectResponse(val sealed: String)
