@@ -142,6 +142,95 @@ interface NoteDao {
     @Upsert
     suspend fun applyRemoteNote(note: NoteEntity)
 
+    // ── What the sync engine reads and writes. See `RoomSyncStore`. ───────────────────────────
+
+    /**
+     * One row in full, **tombstones included**.
+     *
+     * Every other single-row read on this DAO carries `WHERE isDeleted = 0`, because a trashed note
+     * must not appear in the editor or the list. This one must not: a tombstone is an ordinary
+     * record to the sync engine — it is the only delete the protocol has — and a store that could
+     * not see one would answer "this device has never heard of that record" for a note it deleted
+     * ten seconds ago, and then accept the server's older, living copy back over it.
+     */
+    @Query("SELECT * FROM notes WHERE id = :id")
+    suspend fun noteRow(id: String): NoteEntity?
+
+    /**
+     * Every note the server has not acknowledged, **oldest row clock first**.
+     *
+     * The order is part of `SyncStore`'s contract rather than a detail: a device that has been
+     * offline for a week pushes the week in the order it happened, and a deterministic order is
+     * what makes a failing convergence seed replay identically. `id ASC` is the tie-break, and it
+     * is total because `id` is the primary key.
+     *
+     * There is no companion "deleted records" query. A tombstone is an ordinary dirty row carrying
+     * `isDeleted = 1`, so it is already here.
+     */
+    @Query("SELECT * FROM notes WHERE dirty = 1 ORDER BY hlcMs ASC, hlcCounter ASC, hlcNode ASC, id ASC")
+    suspend fun dirtyNotes(): List<NoteEntity>
+
+    /**
+     * The two rules of §3.2, as **one** statement.
+     *
+     * They have to be one statement, and this is the place in the whole design where that is true
+     * of SQL rather than of a comment:
+     *
+     *  1. **`dirty` is cleared only if the row has not moved.** The user can type into a note while
+     *     its push is in flight. The `CASE` compares the row's clock now against the clock of the
+     *     version that was actually sealed and sent; when they differ the row keeps `dirty = 1` and
+     *     the next pass pushes the newer version. Clearing it unconditionally drops that edit
+     *     forever, with no error and no way for anyone to notice.
+     *  2. **`lastSyncedSeq` is written either way.** The server did accept the version that was
+     *     sent, whatever has happened locally since, so the next push must be built on that `seq`.
+     *     Skipping it when rule 1's guard fails makes every subsequent push send a stale `baseSeq`
+     *     and take a guaranteed `409`, forever.
+     *
+     * Written as two statements — an `UPDATE … WHERE clock matches` followed by an `UPDATE … SET
+     * lastSyncedSeq` — the pair is only correct if nothing runs between them, which is precisely
+     * what no caller can promise and what a crash does not respect. As one `UPDATE` the atomicity
+     * is the statement's, not the caller's discipline.
+     *
+     * The guard compares all three clock components, not the two the plan's example SQL names. The
+     * row clock *is* `(ms, counter, node)`; comparing a prefix of it would let a row rewritten by
+     * another node in the same millisecond and counter pass as unchanged, and the counter is
+     * per-generator, so two nodes reaching the same `(ms, counter)` is not exotic.
+     *
+     * @param contentSyncedHlc the new content baseline, in `Hlc.toString()` form, or `''`.
+     *   Unconditional: `Baselines.advance` has already taken the max, and the engine is the only
+     *   writer of this column, so it cannot move backwards here.
+     */
+    @Query(
+        """
+        UPDATE notes SET
+            lastSyncedSeq = :seq,
+            contentSyncedHlc = :contentSyncedHlc,
+            dirty = CASE
+                WHEN hlcMs = :sealedMs AND hlcCounter = :sealedCounter AND hlcNode = :sealedNode
+                THEN 0 ELSE dirty END
+        WHERE id = :id
+        """
+    )
+    suspend fun acknowledgeNotePush(
+        id: String,
+        seq: Long,
+        sealedMs: Long,
+        sealedCounter: Int,
+        sealedNode: String,
+        contentSyncedHlc: String,
+    )
+
+    /**
+     * The merge decided nothing had to be written, but this device has now **seen** server version
+     * [seq] and its next push must be built on it.
+     *
+     * Deliberately touches neither the row's data nor `dirty`. A row left at a stale
+     * `lastSyncedSeq` takes a guaranteed `409` on every subsequent pass, forever; a row whose
+     * `dirty` were cleared here would have a local edit silently declared published.
+     */
+    @Query("UPDATE notes SET lastSyncedSeq = :seq, contentSyncedHlc = :contentSyncedHlc WHERE id = :id")
+    suspend fun recordNoteSeen(id: String, seq: Long, contentSyncedHlc: String)
+
     /**
      * Single-statement upsert (avoids a read on every autosave). A new note gets
      * createdAt = updatedAt = [timestamp] and isFavorite = false. An existing note keeps its

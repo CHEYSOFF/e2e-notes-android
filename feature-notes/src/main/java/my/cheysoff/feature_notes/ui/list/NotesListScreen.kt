@@ -59,6 +59,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -249,88 +250,120 @@ fun NotesListScreen(
             .coerceAtLeast(0.dp)
         val bottomClearance =
             innerPadding.calculateBottomPadding() + fabOverhang + spacing.contentToNavBarGap
-        LazyVerticalStaggeredGrid(
-            modifier = Modifier
-                .fillMaxSize()
-                .progressiveBottomBlur(
-                    bandHeight = innerPadding.calculateBottomPadding(),
-                    background = MaterialTheme.colorScheme.background,
-                ),
-            columns = StaggeredGridCells.Fixed(2),
-            contentPadding = PaddingValues(
-                top = innerPadding.calculateTopPadding() + spacing.screenVertical,
-                start = innerPadding.calculateStartPadding(androidx.compose.ui.platform.LocalLayoutDirection.current) + spacing.screenHorizontal,
-                end = innerPadding.calculateEndPadding(androidx.compose.ui.platform.LocalLayoutDirection.current) + spacing.screenHorizontal,
-                bottom = bottomClearance
-            ),
-            verticalItemSpacing = spacing.interItemSpacingVertical,
-            horizontalArrangement = Arrangement.spacedBy(spacing.interItemSpacingHorizontal)
+
+        // Pull down to sync. The one sync trigger a person can reach on purpose — the other is the
+        // unlock, which is automatic and invisible — and it is here because this is the screen
+        // someone is looking at when they wonder why a note from their other device has not
+        // arrived yet.
+        //
+        // It wraps all three tabs rather than only the notes grid, because a sync is a property of
+        // the account and not of the tab: a person looking at Search who wants to check for new
+        // notes should not have to work out that the gesture only exists somewhere else.
+        //
+        // The list is NOT hidden while this runs. It is a Room `Flow`, so anything the engine
+        // writes appears by itself; the indicator is about the round trip, not about the data being
+        // unavailable, and blanking a library that is perfectly readable would be the worse lie.
+        PullToRefreshBox(
+            isRefreshing = state.refreshing,
+            onRefresh = { onIntent(NotesListIntent.RefreshRequested) },
+            modifier = Modifier.fillMaxSize(),
         ) {
-            // The Search tab is a MODE of this screen rather than its own destination. The four
-            // bottom-bar tabs are already modeled as `selectedBottomBarItem` state and switch
-            // without navigating, so a route would have introduced a second mechanism for the same
-            // thing — and would have had to duplicate the nav bar, the FAB, the progressive blur
-            // band and the note card, all of which are private to this file. Searching therefore
-            // swaps the grid's content and leaves the chrome untouched.
-            if (state.selectedBottomBarItem == BottomBarItem.SEARCH) {
-                searchPane(state, onIntent, onLongClick = { moveNoteTarget = it })
-                return@LazyVerticalStaggeredGrid
-            }
-
-            // Calendar is a mode too, for the same reasons spelled out above for Search.
-            if (state.selectedBottomBarItem == BottomBarItem.CALENDAR) {
-                calendarPane(state, onIntent, onLongClick = { moveNoteTarget = it })
-                return@LazyVerticalStaggeredGrid
-            }
-
-            item(span = StaggeredGridItemSpan.FullLine, contentType = "header") {
-                HeaderLine(state.headerLine, state.statsLine)
-            }
-            item(span = StaggeredGridItemSpan.FullLine, contentType = "chips") {
-                // The trash and sort pills ride at the end of the chip row but OUTSIDE the chips'
-                // own horizontal scroll, so they stay on screen however many folders exist. Trash
-                // in particular has to be reachable without scrolling past every folder — it is
-                // the only route to an undo.
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(modifier = Modifier.weight(1f)) {
-                        FolderChips(
-                            folders = state.folderPreviews,
-                            selectedFolderId = state.selectedFolderId,
-                            onAllClick = { state.selectedFolderId?.let { onIntent(NotesListIntent.FolderClicked(it)) } },
-                            onFolderClick = { onIntent(NotesListIntent.FolderClicked(it)) },
-                            onCreateFolder = { showCreateFolder = true },
-                            onEditFolder = { editFolderTarget = it },
-                            onDeleteFolder = { deleteFolderTarget = it },
+            LazyVerticalStaggeredGrid(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .progressiveBottomBlur(
+                        bandHeight = innerPadding.calculateBottomPadding(),
+                        background = MaterialTheme.colorScheme.background,
+                    ),
+                columns = StaggeredGridCells.Fixed(2),
+                contentPadding = PaddingValues(
+                    top = innerPadding.calculateTopPadding() + spacing.screenVertical,
+                    start = innerPadding.calculateStartPadding(androidx.compose.ui.platform.LocalLayoutDirection.current) + spacing.screenHorizontal,
+                    end = innerPadding.calculateEndPadding(androidx.compose.ui.platform.LocalLayoutDirection.current) + spacing.screenHorizontal,
+                    bottom = bottomClearance
+                ),
+                verticalItemSpacing = spacing.interItemSpacingVertical,
+                horizontalArrangement = Arrangement.spacedBy(spacing.interItemSpacingHorizontal)
+            ) {
+                // The Search tab is a MODE of this screen rather than its own destination. The four
+                // bottom-bar tabs are already modeled as `selectedBottomBarItem` state and switch
+                // without navigating, so a route would have introduced a second mechanism for the same
+                // thing — and would have had to duplicate the nav bar, the FAB, the progressive blur
+                // band and the note card, all of which are private to this file. Searching therefore
+                // swaps the grid's content and leaves the chrome untouched.
+                if (state.selectedBottomBarItem == BottomBarItem.SEARCH) {
+                    searchPane(state, onIntent, onLongClick = { moveNoteTarget = it })
+                    return@LazyVerticalStaggeredGrid
+                }
+    
+                // Calendar is a mode too, for the same reasons spelled out above for Search.
+                if (state.selectedBottomBarItem == BottomBarItem.CALENDAR) {
+                    calendarPane(state, onIntent, onLongClick = { moveNoteTarget = it })
+                    return@LazyVerticalStaggeredGrid
+                }
+    
+                item(span = StaggeredGridItemSpan.FullLine, contentType = "header") {
+                    HeaderLine(state.headerLine, state.statsLine)
+                }
+                // What the refresh the user just asked for actually did. Only after a manual pull:
+                // a sync that ran on unlock reports itself in Settings and has no business
+                // interrupting someone who came here to read a note.
+                state.syncNotice?.let { notice ->
+                    item(span = StaggeredGridItemSpan.FullLine, contentType = "syncNotice") {
+                        Text(
+                            text = notice,
+                            color = BodyGrey,
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(bottom = spacing.interItemSpacingVertical),
                         )
                     }
-                    TrashPill(onClick = { onIntent(NotesListIntent.TrashClicked) })
-                    SortPill(
-                        order = state.sortOrder,
-                        onSelect = { onIntent(NotesListIntent.SortOrderSelected(it)) },
-                    )
                 }
-            }
-
-            if (state.pinnedPreviews.isNotEmpty()) {
-                item(span = StaggeredGridItemSpan.FullLine, contentType = "pinned_label") {
-                    SectionLabel("Pinned")
+                item(span = StaggeredGridItemSpan.FullLine, contentType = "chips") {
+                    // The trash and sort pills ride at the end of the chip row but OUTSIDE the chips'
+                    // own horizontal scroll, so they stay on screen however many folders exist. Trash
+                    // in particular has to be reachable without scrolling past every folder — it is
+                    // the only route to an undo.
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(modifier = Modifier.weight(1f)) {
+                            FolderChips(
+                                folders = state.folderPreviews,
+                                selectedFolderId = state.selectedFolderId,
+                                onAllClick = { state.selectedFolderId?.let { onIntent(NotesListIntent.FolderClicked(it)) } },
+                                onFolderClick = { onIntent(NotesListIntent.FolderClicked(it)) },
+                                onCreateFolder = { showCreateFolder = true },
+                                onEditFolder = { editFolderTarget = it },
+                                onDeleteFolder = { deleteFolderTarget = it },
+                            )
+                        }
+                        TrashPill(onClick = { onIntent(NotesListIntent.TrashClicked) })
+                        SortPill(
+                            order = state.sortOrder,
+                            onSelect = { onIntent(NotesListIntent.SortOrderSelected(it)) },
+                        )
+                    }
                 }
-                item(span = StaggeredGridItemSpan.FullLine, contentType = "pinned_pager") {
-                    PinnedPager(state.pinnedPreviews, onClick = { onIntent(NotesListIntent.NoteClicked(it)) }, onLongClick = { note -> moveNoteTarget = note })
+    
+                if (state.pinnedPreviews.isNotEmpty()) {
+                    item(span = StaggeredGridItemSpan.FullLine, contentType = "pinned_label") {
+                        SectionLabel("Pinned")
+                    }
+                    item(span = StaggeredGridItemSpan.FullLine, contentType = "pinned_pager") {
+                        PinnedPager(state.pinnedPreviews, onClick = { onIntent(NotesListIntent.NoteClicked(it)) }, onLongClick = { note -> moveNoteTarget = note })
+                    }
                 }
-            }
-
-            if (state.notePreviews.isNotEmpty()) {
-                item(span = StaggeredGridItemSpan.FullLine, contentType = "recent_label") {
-                    SectionLabel("Recent")
+    
+                if (state.notePreviews.isNotEmpty()) {
+                    item(span = StaggeredGridItemSpan.FullLine, contentType = "recent_label") {
+                        SectionLabel("Recent")
+                    }
                 }
-            }
-            items(
-                items = state.notePreviews,
-                key = { it.id },
-                contentType = { "note" }
-            ) { note ->
-                NoteCard(note, onClick = { onIntent(NotesListIntent.NoteClicked(note.id)) }, onLongClick = { moveNoteTarget = note })
+                items(
+                    items = state.notePreviews,
+                    key = { it.id },
+                    contentType = { "note" }
+                ) { note ->
+                    NoteCard(note, onClick = { onIntent(NotesListIntent.NoteClicked(note.id)) }, onLongClick = { moveNoteTarget = note })
+                }
             }
         }
     }

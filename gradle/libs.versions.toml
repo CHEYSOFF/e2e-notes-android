@@ -102,6 +102,15 @@ robolectric = "4.16"
 # store and the repository above it be tested against a real SQLite database.
 sqldelight = "2.3.2"
 
+sqliteJdbc = "3.53.4.0"
+jna = "5.19.1"
+# Taken for its runtime only -- the serialization COMPILER PLUGIN is deliberately not applied
+# anywhere in this build. :core-sync-codec builds its JSON object key by key, which is what fixes
+# the key order (so a record encodes to the same bytes on every device) and makes every unknown key
+# a decode failure rather than a silently ignored one.
+kotlinxSerialization = "1.9.0"
+richeditorDesktop = "1.2.0"
+
 [libraries]
 androidx-compose-material-icons-extended = { module = "androidx.compose.material:material-icons-extended", version.ref = "materialIconsExtended" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -164,6 +173,14 @@ sqldelight-coroutines = { group = "app.cash.sqldelight", name = "coroutines-exte
 sqldelight-driver-jvm = { group = "app.cash.sqldelight", name = "sqlite-driver", version.ref = "sqldelight" }
 # The Kotlin/Native driver, over SQLiter. Never compiled here.
 sqldelight-driver-native = { group = "app.cash.sqldelight", name = "native-driver", version.ref = "sqldelight" }
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
+
+sqlite-jdbc = { group = "org.xerial", name = "sqlite-jdbc", version.ref = "sqliteJdbc" }
+jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
+jna-platform = { group = "net.java.dev.jna", name = "jna-platform", version.ref = "jna" }
+richeditor-compose-desktop = { group = "com.mohamedrejeb.richeditor", name = "richeditor-compose-desktop", version.ref = "richeditorDesktop" }
+ksoup-entities = { group = "com.mohamedrejeb.ksoup", name = "ksoup-entities-jvm", version = "0.6.0" }
+compose-material-icons-core = { group = "org.jetbrains.compose.material", name = "material-icons-core-desktop", version = "1.7.3" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
