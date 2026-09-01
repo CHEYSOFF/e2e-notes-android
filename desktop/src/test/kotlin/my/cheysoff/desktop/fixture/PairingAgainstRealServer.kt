@@ -1,5 +1,6 @@
 package my.cheysoff.desktop.fixture
 
+import my.cheysoff.desktop.vault.DeviceKeyPair
 import my.cheysoff.core_pairing.protocol.AccountBundle
 import my.cheysoff.core_pairing.protocol.AccountDeviceSession
 import my.cheysoff.core_pairing.protocol.CollectResult
@@ -58,11 +59,16 @@ class PairingAgainstRealServer {
             ?: error("manana.pairingServer is not a usable address: $address")
 
         // -- the laptop ------------------------------------------------------------------------
+        // A real device key, because QR1 now carries its public half and the phone vouches for
+        // exactly that key. Generating one here rather than passing a stub keeps the fixture
+        // exercising the same bytes the enrolment path will sign over.
+        val deviceKey = DeviceKeyPair.generate()
         val desktop = NewDeviceRendezvous(
             client = HttpRendezvousClient(server),
             keyDerivation = HkdfKeyDerivation,
             clock = MonotonicClock { System.nanoTime() / 1_000_000 },
             server = server,
+            devicePublicKey = deviceKey.publicKeySec1,
         )
         println("QR1: ${desktop.offerCode}")
 
@@ -75,7 +81,8 @@ class PairingAgainstRealServer {
         val phone = AccountDeviceSession(
             keyDerivation = HkdfKeyDerivation,
             clock = MonotonicClock { System.nanoTime() / 1_000_000 },
-            bundle = AccountBundle(ark, "e2e-account", """{"server":"$address"}"""),
+            ark = ark,
+            accountId = "e2e-account",
         )
         val accepted = phone.onScanned(desktop.offerCode) as? OfferOutcome.Accepted
             ?: error("the phone refused the laptop's QR1")
@@ -84,7 +91,9 @@ class PairingAgainstRealServer {
         assertEquals(server.base, phone.receivedServerHint?.url)
 
         val deposit = HttpRendezvousClient(server)
-            .deposit(phone.receivedSid!!, accepted.sealCode)
+            // Sealing is a separate step from accepting: a device must not be able to hand over
+            // the account root key before its user has had a chance to compare the SAS digits.
+            .deposit(phone.receivedSid!!, phone.seal("""{"server":"$address"}""")!!)
         println("deposit: $deposit")
         assertTrue("the server refused the deposit: $deposit", deposit is DepositResult.Deposited)
 

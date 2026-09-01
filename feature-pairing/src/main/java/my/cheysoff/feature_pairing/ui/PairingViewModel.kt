@@ -14,7 +14,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import my.cheysoff.feature_pairing.di.PairingIoDispatcher
 import my.cheysoff.feature_pairing.di.PairingKeyMaterial
+import my.cheysoff.feature_pairing.identity.DeviceEnroller
 import my.cheysoff.feature_pairing.identity.DeviceIdentity
+import my.cheysoff.feature_pairing.identity.EnrolmentResult
 import my.cheysoff.core_pairing.protocol.AccountBundle
 import my.cheysoff.core_pairing.protocol.AccountDeviceSession
 import my.cheysoff.core_pairing.protocol.DepositResult
@@ -22,6 +24,7 @@ import my.cheysoff.core_pairing.protocol.KeyDerivation
 import my.cheysoff.core_pairing.protocol.MonotonicClock
 import my.cheysoff.core_pairing.protocol.NewDeviceSession
 import my.cheysoff.core_pairing.protocol.OfferOutcome
+import my.cheysoff.core_pairing.protocol.PairingConfig
 import my.cheysoff.core_pairing.protocol.PairingFailure
 import my.cheysoff.core_pairing.protocol.RendezvousClientFactory
 import my.cheysoff.core_pairing.protocol.RendezvousUrl
@@ -61,6 +64,13 @@ class PairingViewModel @Inject constructor(
     private val keyMaterial: PairingKeyMaterial,
     private val clock: MonotonicClock,
     private val deviceIdentity: DeviceIdentity,
+    /**
+     * How the device on the other side of QR1 is enrolled on this account.
+     *
+     * Only ever called for a pairing that named a server; a phone pairing with a phone reaches no
+     * server and has nothing to enrol on.
+     */
+    private val deviceEnroller: DeviceEnroller,
     /**
      * How a rendezvous client is built for the address a computer named in QR1.
      *
@@ -114,12 +124,32 @@ class PairingViewModel @Inject constructor(
 
     private var sendJob: Job? = null
 
-    /** What a send needs: the address, the session id it is filed under, and the QR2 payload. */
+    /**
+     * What a send needs: the address, the session id the drop is filed under, and the joining
+     * device's key.
+     *
+     * The **seal is not here**, and that is the change enrolment forced. The bundle carries the id
+     * the server assigns to [joiningDeviceKey], so it cannot be built until the vouch has happened —
+     * and the vouch is a network call, which must not run inside the method the camera analyser
+     * drives. So this holds the inputs and `AccountDeviceSession.seal` produces the payload once
+     * [sendSeal] knows what to put in it.
+     */
     private class PendingSeal(
         val server: RendezvousUrl,
         val sid: ByteArray,
-        val sealCode: String,
-    )
+        /** As QR1 carried it, or null when the other device asked for no enrolment. */
+        val joiningDeviceKey: ByteArray?,
+    ) {
+        /**
+         * The payload, once the vouch and the seal have happened.
+         *
+         * A retry after a failed deposit re-sends **these bytes**; it does not vouch again and does
+         * not seal again. Vouching again would take `409 device_exists` from a server that had
+         * already enrolled the device, and sealing again would put a second `deviceId` in a second
+         * bundle for one pairing. Both would turn a dropped connection into a dead pairing.
+         */
+        var sealCode: String? = null
+    }
 
     fun onIntent(intent: PairingIntent) {
         when (intent) {
@@ -181,7 +211,8 @@ class PairingViewModel @Inject constructor(
                 accountDeviceSession = AccountDeviceSession(
                     keyDerivation = keyDerivation,
                     clock = clock,
-                    bundle = bundle,
+                    ark = bundle.ark,
+                    accountId = bundle.accountId,
                 )
                 newDeviceSession = null
                 _state.update { it.copy(stage = PairingStage.ScanningOffer(lastHint = null)) }
@@ -234,10 +265,18 @@ class PairingViewModel @Inject constructor(
                     ?.let { RendezvousUrl.parse(it) }
 
                 if (server == null) {
+                    // No server was named, so there is nothing to enrol on and nothing to tell the
+                    // other device about one. The seal happens here, immediately, and this branch
+                    // opens no socket -- which is the property
+                    // `pairingWithAnotherPhoneNeverTouchesTheNetwork` pins.
+                    val sealCode = session.seal("") ?: return abandon(
+                        PairingFailure.SESSION_CLOSED,
+                        "This pairing attempt is finished. Start over to try again.",
+                    )
                     _state.update {
                         it.copy(
                             stage = PairingStage.ShowingSeal(
-                                code = outcome.sealCode,
+                                code = sealCode,
                                 sas = outcome.sas,
                                 secondsRemaining = session.remainingMillis().toSeconds(),
                             )
@@ -245,7 +284,15 @@ class PairingViewModel @Inject constructor(
                     }
                     startCountdown()
                 } else {
-                    pendingSeal = PendingSeal(server, session.receivedSid!!, outcome.sealCode)
+                    pendingSeal = PendingSeal(
+                        server = server,
+                        sid = session.receivedSid!!,
+                        // Straight from the session, which read it out of QR1 and checked it
+                        // against the curve. This is the only key that reaches the enroller, and
+                        // taking it from anywhere else -- the rendezvous, a server lookup -- would
+                        // be enrolling a device nobody pointed a camera at.
+                        joiningDeviceKey = session.receivedDeviceKey,
+                    )
                     _state.update {
                         it.copy(
                             stage = PairingStage.SendingSeal(
@@ -320,20 +367,37 @@ class PairingViewModel @Inject constructor(
     // -- sending ------------------------------------------------------------------------------
 
     /**
-     * POST the sealed bundle to the address the other device named.
+     * Enrol the other device, seal the bundle for it, and POST the result to the address it named.
      *
-     * What crosses the wire is the QR2 payload, byte for byte — the very thing the phone-to-phone
-     * flow renders as a symbol. The server stores it, cannot open it, and deletes it the moment the
-     * other device collects it. See `RendezvousProtocol` for what the server does and does not
-     * learn from that.
+     * Three steps behind one button, in that order, and the order is the design:
      *
-     * The plain-`http` refusal below is a platform fact reported honestly rather than a policy this
-     * app invents. Android has blocked cleartext HTTP by default since it started targeting API 28,
-     * so an `http://` address here would fail somewhere inside `HttpURLConnection` and surface as
-     * an unexplained "cannot reach the server". Saying which of the two it is turns an unfixable
-     * retry loop into an instruction. Nothing is weakened by the refusal: what would have travelled
-     * is ciphertext either way, and the cost of cleartext is that an on-path attacker can disrupt
-     * the pairing, not read it.
+     *  1. **Vouch.** The server assigns the joining device an id, and that id has to be inside the
+     *     seal — there is no other channel it could travel on, because every endpoint that would
+     *     tell the joining device its own id needs a session and opening a session needs the id.
+     *  2. **Seal.** With the address and the id, so the other device receives an authenticated copy
+     *     of both rather than the unauthenticated hint it put in QR1 itself.
+     *  3. **Deposit.** What crosses the wire is the QR2 payload, byte for byte — the very thing the
+     *     phone-to-phone flow renders as a symbol. The server stores it, cannot open it, and deletes
+     *     it the moment the other device collects it.
+     *
+     * ## The vouch happens before the SAS is confirmed, and that is not a weakening
+     *
+     * It cannot be otherwise: the id it produces goes inside the seal, and the seal is deposited
+     * before either screen shows a confirmation. The ARK itself already leaves on exactly this
+     * schedule — sealed and posted, then the digits are compared — so enrolling a signing key at the
+     * same moment gives away strictly less than the step it accompanies. If the digits then do not
+     * match, the account has a device row it can revoke and an attacker who could reach that point
+     * already holds the account key.
+     *
+     * ## The plain-`http` rule
+     *
+     * `https`, or `http` to a loopback address, and nothing else. That is `ServerEndpoint`'s rule
+     * for the sync transport, stated there at length: the server speaks plain HTTP behind a
+     * TLS-terminating proxy, so loopback is the one case where no traffic leaves the machine and
+     * there is nothing for TLS to protect. Anything else is refused here rather than left to fail
+     * inside the HTTP stack as an unexplained "cannot reach the server", because Android blocks
+     * cleartext by default and `network_security_config.xml` opens exactly the same loopback hole
+     * and no other.
      */
     private fun sendSeal() {
         val stage = _state.value.stage
@@ -342,14 +406,18 @@ class PairingViewModel @Inject constructor(
             PairingFailure.SESSION_CLOSED,
             "There is nothing left to send. Start over.",
         )
+        val session = accountDeviceSession ?: return abandon(
+            PairingFailure.SESSION_CLOSED,
+            "This pairing attempt is finished. Start over to try again.",
+        )
 
-        if (!seal.server.secure) {
+        if (!seal.server.secure && !isLoopback(seal.server.host)) {
             _state.update {
                 it.copy(
                     stage = stage.copy(
-                        message = "That computer offered a plain http:// address, and Android " +
-                            "refuses unencrypted connections. Put the server behind https:// and " +
-                            "start over.",
+                        message = "That computer offered a plain http:// address on a host this " +
+                            "phone will not send to in the clear. Put the server behind https:// " +
+                            "and start over.",
                     )
                 )
             }
@@ -358,9 +426,37 @@ class PairingViewModel @Inject constructor(
 
         _state.update { it.copy(stage = stage.copy(sending = true, message = null)) }
         sendJob = viewModelScope.launch {
+            val sealCode = seal.sealCode ?: run {
+                val enrolment = seal.joiningDeviceKey?.let { key ->
+                    deviceEnroller.enrol(seal.server, key, label = JOINING_DEVICE_LABEL)
+                }
+                if (enrolment is EnrolmentResult.Refused) {
+                    // Reported and stopped, rather than sealed without an id. A bundle naming a
+                    // server the other device cannot open a session on produces a paired device
+                    // that silently never syncs -- which is the failure this whole change exists to
+                    // remove, and shipping a quieter version of it here would be perverse. The user
+                    // can retry: the session is still live and the button comes back.
+                    _state.update {
+                        it.copy(stage = stage.copy(sending = false, message = enrolment.message))
+                    }
+                    return@launch
+                }
+                val produced = session.seal(
+                    PairingConfig.encode(
+                        serverUrl = seal.server.base,
+                        deviceId = (enrolment as? EnrolmentResult.Enrolled)?.deviceId.orEmpty(),
+                    )
+                ) ?: return@launch abandon(
+                    PairingFailure.SESSION_CLOSED,
+                    "This pairing attempt is finished. Start over to try again.",
+                )
+                seal.sealCode = produced
+                produced
+            }
+
             // The client is blocking; the ViewModel's scope is the main dispatcher.
             val result = withContext(ioDispatcher) {
-                rendezvousClients.create(seal.server).deposit(seal.sid, seal.sealCode)
+                rendezvousClients.create(seal.server).deposit(seal.sid, sealCode)
             }
             when (result) {
                 // Both of these move on, and the second deliberately so. A 409 means either that a
@@ -541,8 +637,32 @@ class PairingViewModel @Inject constructor(
         clearSessions()
     }
 
+    /**
+     * Loopback, in the two spellings a URL can carry.
+     *
+     * The same set `ServerEndpoint.isLoopback` recognises, and it has to stay the same set: this
+     * decides whether the phone will POST to a plain-http address, and `network_security_config.xml`
+     * decides whether the platform lets it. Three lists that must agree is two too many, and the
+     * cheapest way to notice a disagreement is that pairing to a loopback server stops working.
+     */
+    private fun isLoopback(hostAndPort: String): Boolean =
+        hostAndPort.substringBeforeLast(':', hostAndPort).let {
+            it == "localhost" || it == "127.0.0.1" || it == "[::1]"
+        } || hostAndPort == "[::1]"
+
     private companion object {
         const val TICK_MILLIS = 1_000L
+
+        /**
+         * The name the joining device is enrolled under.
+         *
+         * A constant, because this phone does not know what the other machine is called: QR1 carries
+         * a key and an address, not a hostname. "Computer" is honest and it is what the rendezvous
+         * path means — a laptop, which is the only kind of device that asks for this flow. The user
+         * can rename it from the device list, and an unnamed row is worse than a generic one because
+         * a device the user cannot identify is a device they will not revoke.
+         */
+        const val JOINING_DEVICE_LABEL = "Computer"
     }
 }
 

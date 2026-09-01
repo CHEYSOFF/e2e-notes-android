@@ -194,4 +194,25 @@ object DeviceLabelCipher {
             length = SyncProtocol.DERIVED_KEY_BYTES,
         )
     }
+    /**
+     * The longest prefix of [label] that fits in [MAX_LABEL_UTF8_BYTES] UTF-8 bytes, cut on a
+     * character boundary.
+     *
+     * [seal] throws for anything longer and says why: it will not truncate, because cutting UTF-8
+     * at an arbitrary byte can split a multi-byte character and leave a replacement glyph in
+     * somebody's device name. Capping is the caller's job -- and there are now two callers, one per
+     * platform, which is why the rule lives here rather than being written out twice. An over-long
+     * name must not be able to stop a device enrolling, which a thrown exception on the enrolment
+     * path would.
+     *
+     * Whole code points are dropped from the end, surrogate pairs included, so a Cyrillic or emoji
+     * name comes back shorter rather than broken.
+     */
+    fun trimToSealableLength(label: String): String {
+        var candidate = label
+        while (candidate.toByteArray(Charsets.UTF_8).size > MAX_LABEL_UTF8_BYTES) {
+            candidate = candidate.substring(0, candidate.offsetByCodePoints(candidate.length, -1))
+        }
+        return candidate
+    }
 }

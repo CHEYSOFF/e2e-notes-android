@@ -8,6 +8,7 @@ import my.cheysoff.core_pairing.protocol.HkdfKeyDerivation
 import my.cheysoff.core_pairing.protocol.NewDeviceRendezvous
 import my.cheysoff.core_pairing.protocol.OfferOutcome
 import my.cheysoff.core_pairing.protocol.PairingFailure
+import my.cheysoff.core_pairing.protocol.P256
 import my.cheysoff.core_pairing.protocol.PairingProtocol
 import my.cheysoff.core_pairing.protocol.PollOutcome
 import my.cheysoff.core_pairing.protocol.RendezvousClient
@@ -37,6 +38,17 @@ class RendezvousTest {
     private val bundle = AccountBundle(ark, "acct-desktop", """{"server":"https://example.test"}""")
     private val server = RendezvousUrl.parse("https://pair.example.test")!!
 
+    /**
+     * The laptop's long-lived device key, as QR1 carries it.
+     *
+     * A real generated point rather than 65 arbitrary bytes: the account session validates it
+     * against the curve before it will vouch for it, so a fake would be rejected and every test
+     * here would fail for the wrong reason.
+     */
+    private val deviceKey = P256.encodePublicKey(
+        P256.generateKeyPair().public as java.security.interfaces.ECPublicKey,
+    )
+
     // -----------------------------------------------------------------------------------------
     // The whole thing
     // -----------------------------------------------------------------------------------------
@@ -55,8 +67,8 @@ class RendezvousTest {
         val desktop = newDevice(drop)
 
         // Leg one is unchanged: the phone's camera reads QR1 off the laptop's screen.
-        val phone = AccountDeviceSession(HkdfKeyDerivation, FakeClock(), bundle)
-        val accepted = phone.onScanned(desktop.offerCode) as OfferOutcome.Accepted
+        val phone = AccountDeviceSession(HkdfKeyDerivation, FakeClock(), bundle.ark, bundle.accountId)
+        val accepted = phone.accept(desktop.offerCode, bundle.config)!!
 
         // Leg two is the new part: instead of rendering QR2, the phone posts it.
         val deposit = drop.deposit(sidOf(desktop), accepted.sealCode)
@@ -80,8 +92,8 @@ class RendezvousTest {
 
         repeat(20) { assertTrue(desktop.poll() is PollOutcome.Waiting) }
 
-        val phone = AccountDeviceSession(HkdfKeyDerivation, FakeClock(), bundle)
-        val accepted = phone.onScanned(desktop.offerCode) as OfferOutcome.Accepted
+        val phone = AccountDeviceSession(HkdfKeyDerivation, FakeClock(), bundle.ark, bundle.accountId)
+        val accepted = phone.accept(desktop.offerCode)!!
         drop.deposit(sidOf(desktop), accepted.sealCode)
         assertTrue(desktop.poll() is PollOutcome.Paired)
     }
@@ -96,7 +108,7 @@ class RendezvousTest {
     @Test
     fun theServerUrlReachesTheAccountDeviceThroughQr1() {
         val desktop = newDevice(FakeDrop())
-        val phone = AccountDeviceSession(HkdfKeyDerivation, FakeClock(), bundle)
+        val phone = AccountDeviceSession(HkdfKeyDerivation, FakeClock(), bundle.ark, bundle.accountId)
 
         phone.onScanned(desktop.offerCode)
 
@@ -121,8 +133,8 @@ class RendezvousTest {
         val victim = newDevice(drop)
         val other = newDevice(drop)
 
-        val phone = AccountDeviceSession(HkdfKeyDerivation, FakeClock(), bundle)
-        val forOther = phone.onScanned(other.offerCode) as OfferOutcome.Accepted
+        val phone = AccountDeviceSession(HkdfKeyDerivation, FakeClock(), bundle.ark, bundle.accountId)
+        val forOther = phone.accept(other.offerCode)!!
 
         // File the *other* session's seal under the victim's sid.
         drop.force(sidOf(victim), forOther.sealCode)
@@ -147,8 +159,8 @@ class RendezvousTest {
     fun aModifiedBlobFailsTheTagAndKillsTheSession() {
         val drop = FakeDrop()
         val desktop = newDevice(drop)
-        val phone = AccountDeviceSession(HkdfKeyDerivation, FakeClock(), bundle)
-        val accepted = phone.onScanned(desktop.offerCode) as OfferOutcome.Accepted
+        val phone = AccountDeviceSession(HkdfKeyDerivation, FakeClock(), bundle.ark, bundle.accountId)
+        val accepted = phone.accept(desktop.offerCode)!!
 
         drop.force(sidOf(desktop), tamperWithTheTag(accepted.sealCode))
 
@@ -165,10 +177,10 @@ class RendezvousTest {
     fun aSessionPastItsTtlStopsPollingAndRefusesALateBundle() {
         val drop = FakeDrop()
         val clock = FakeClock()
-        val desktop = NewDeviceRendezvous(drop, HkdfKeyDerivation, clock, server)
+        val desktop = NewDeviceRendezvous(drop, HkdfKeyDerivation, clock, server, deviceKey)
 
-        val phone = AccountDeviceSession(HkdfKeyDerivation, FakeClock(), bundle)
-        val accepted = phone.onScanned(desktop.offerCode) as OfferOutcome.Accepted
+        val phone = AccountDeviceSession(HkdfKeyDerivation, FakeClock(), bundle.ark, bundle.accountId)
+        val accepted = phone.accept(desktop.offerCode)!!
 
         clock.advance(PairingProtocol.CODE_TTL_MILLIS)
         drop.force(sidOf(desktop), accepted.sealCode)
@@ -206,8 +218,8 @@ class RendezvousTest {
         assertEquals("connection refused", (outcome as PollOutcome.Waiting).detail)
 
         drop.answer = null
-        val phone = AccountDeviceSession(HkdfKeyDerivation, FakeClock(), bundle)
-        drop.deposit(sidOf(desktop), (phone.onScanned(desktop.offerCode) as OfferOutcome.Accepted).sealCode)
+        val phone = AccountDeviceSession(HkdfKeyDerivation, FakeClock(), bundle.ark, bundle.accountId)
+        drop.deposit(sidOf(desktop), (phone.accept(desktop.offerCode)!!).sealCode)
         assertTrue(desktop.poll() is PollOutcome.Paired)
     }
 
@@ -216,8 +228,8 @@ class RendezvousTest {
     fun aSecondPollAfterSuccessIsRefused() {
         val drop = FakeDrop()
         val desktop = newDevice(drop)
-        val phone = AccountDeviceSession(HkdfKeyDerivation, FakeClock(), bundle)
-        drop.deposit(sidOf(desktop), (phone.onScanned(desktop.offerCode) as OfferOutcome.Accepted).sealCode)
+        val phone = AccountDeviceSession(HkdfKeyDerivation, FakeClock(), bundle.ark, bundle.accountId)
+        drop.deposit(sidOf(desktop), (phone.accept(desktop.offerCode)!!).sealCode)
 
         assertTrue(desktop.poll() is PollOutcome.Paired)
         assertEquals(PairingFailure.SESSION_CLOSED, (desktop.poll() as PollOutcome.Failed).failure)
@@ -237,9 +249,9 @@ class RendezvousTest {
      */
     @Test
     fun theBlobIsTheQrPayloadWithoutItsPrefix() {
-        val phone = AccountDeviceSession(HkdfKeyDerivation, FakeClock(), bundle)
+        val phone = AccountDeviceSession(HkdfKeyDerivation, FakeClock(), bundle.ark, bundle.accountId)
         val desktop = newDevice(FakeDrop())
-        val sealCode = (phone.onScanned(desktop.offerCode) as OfferOutcome.Accepted).sealCode
+        val sealCode = (phone.accept(desktop.offerCode)!!).sealCode
 
         val blob = RendezvousProtocol.toBlob(sealCode)
         assertFalse(blob.startsWith(PairingProtocol.QR_PREFIX))
@@ -348,7 +360,7 @@ class RendezvousTest {
     // -----------------------------------------------------------------------------------------
 
     private fun newDevice(drop: FakeDrop) =
-        NewDeviceRendezvous(drop, HkdfKeyDerivation, FakeClock(), server)
+        NewDeviceRendezvous(drop, HkdfKeyDerivation, FakeClock(), server, deviceKey)
 
     /**
      * The `sid` a rendezvous is filed under.

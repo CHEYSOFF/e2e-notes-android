@@ -17,8 +17,11 @@ import my.cheysoff.core_pairing.protocol.HttpRendezvousClient
 import my.cheysoff.core_pairing.protocol.MonotonicClock
 import my.cheysoff.core_pairing.protocol.NewDeviceRendezvous
 import my.cheysoff.core_pairing.protocol.PollOutcome
+import my.cheysoff.core_pairing.protocol.PairingConfig
 import my.cheysoff.core_pairing.protocol.RendezvousClient
 import my.cheysoff.core_pairing.protocol.RendezvousUrl
+import my.cheysoff.desktop.vault.DeviceKeyPair
+import my.cheysoff.desktop.vault.PairedEnrolment
 import kotlin.math.ceil
 
 /** Where a pairing attempt has got to. Everything [PairingScreen] draws comes from this. */
@@ -111,6 +114,18 @@ class DesktopPairingController(
      */
     private val rememberedServer: () -> String = PairingServer::remembered,
     private val recordWorkingServer: (RendezvousUrl) -> Unit = PairingServer::remember,
+    /**
+     * This computer's long-lived signing key, minted for this attempt.
+     *
+     * Generated here rather than read from a vault, because on the path this class exists for there
+     * **is** no vault yet: the public half has to be in QR1 before the phone will vouch for it, and
+     * the phone's answer is what creates the vault. So it is held in memory across the attempt and
+     * written to disk by `DesktopVault.setUp` if and only if the user confirms the SAS. An abandoned
+     * pairing leaves a key pair that was never enrolled anywhere and is simply dropped.
+     *
+     * A parameter so a test can supply a fixed pair; production mints one per attempt.
+     */
+    private val deviceKey: DeviceKeyPair = DeviceKeyPair.generate(),
 ) : AutoCloseable {
 
     var step by mutableStateOf<PairingStep>(PairingStep.Address(rememberedServer()))
@@ -161,6 +176,9 @@ class DesktopPairingController(
             keyDerivation = HkdfKeyDerivation,
             clock = clock,
             server = url,
+            // The public half goes into QR1, where a person's camera is what authenticates it. The
+            // phone will vouch for exactly this key and for nothing it fetched from anywhere else.
+            devicePublicKey = deviceKey.publicKeySec1,
         )
         session = rendezvous
         server = url
@@ -272,6 +290,34 @@ class DesktopPairingController(
         val bundle = pending
         pending = null
         return bundle
+    }
+
+    /**
+     * What the pairing agreed about the account's server, or null when it agreed nothing usable.
+     *
+     * Read from the **sealed** config, so the address here is the account device's authenticated
+     * statement rather than the hint this computer typed and put in QR1 in the clear. Null covers
+     * three cases and all three mean the same thing to a caller — this vault will not sync yet:
+     *
+     *  - the pairing is not confirmed;
+     *  - the config named no server (a phone-to-phone-shaped bundle);
+     *  - the config named a server but carried no `deviceId`, which is what an account device that
+     *    could not vouch produces. A key with nothing to authenticate as cannot open a session, so
+     *    storing the key and the address without the id would be storing a configuration that
+     *    cannot work while looking as though it can.
+     *
+     * Takes the bundle's config from the argument rather than re-reading [pending], because
+     * [takeBundle] has already consumed it and a second read would be null. The caller passes back
+     * what it was handed.
+     */
+    fun enrolmentFrom(bundle: AccountBundle): PairedEnrolment? {
+        val config = PairingConfig.decode(bundle.config) ?: return null
+        val deviceId = config.deviceId ?: return null
+        return PairedEnrolment(
+            serverUrl = config.serverUrl,
+            deviceId = deviceId,
+            deviceKey = deviceKey,
+        )
     }
 
     /** Abandon whatever is in flight. Called when the screen goes away and from [startOver]. */

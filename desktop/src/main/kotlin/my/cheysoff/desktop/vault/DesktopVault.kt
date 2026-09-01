@@ -30,13 +30,49 @@ class VaultSession(
     val accountKeys: AccountKeys,
     /** This device's HLC node pseudonym: `HlcNode.derive(ark, deviceId)`. */
     val hlcNode: String,
+    /**
+     * How this vault syncs, or null when it has never been paired to a server.
+     *
+     * Null is an ordinary state, not a failure: a vault created standalone, or paired with a phone
+     * that named no server, has an account and nowhere to sync it. The UI says so; nothing here
+     * treats it as an error.
+     */
+    val sync: SyncSession? = null,
 ) : AutoCloseable {
     override fun close() {
         vaultKey.fill(0)
         ark.fill(0)
         accountKeys.destroy()
+        sync?.deviceKey?.privateKeyPkcs8?.fill(0)
     }
 }
+
+/**
+ * The unwrapped half of `VaultHeader.SyncIdentity`: where to sync, as whom, signing with what.
+ *
+ * [deviceKey]'s private half is live key material and is zeroed by [VaultSession.close], for the
+ * reason everything else in that class is: a desktop process stays open for hours and a dropped
+ * array survives in the heap until a collection that may never come.
+ */
+class SyncSession(
+    val serverUrl: String,
+    val deviceId: String,
+    val deviceKey: DeviceKeyPair,
+)
+
+/**
+ * What a pairing agreed about the account's server, on its way into a new vault.
+ *
+ * All three travel together because they are useless apart: the key signs the session challenge,
+ * the id names which device row the server checks it against, and the address says where. Two of
+ * the three came out of the **sealed** pairing bundle (`PairingConfig`), so they are the account
+ * device's authenticated statement rather than the unauthenticated hint this computer put in QR1.
+ */
+class PairedEnrolment(
+    val serverUrl: String,
+    val deviceId: String,
+    val deviceKey: DeviceKeyPair,
+)
 
 /** How a first run obtained its ARK. Recorded so the UI can say which one happened. */
 enum class AccountOrigin {
@@ -132,6 +168,13 @@ class DesktopVault(
         passphrase: CharArray,
         origin: AccountOrigin,
         ark: ByteArray? = null,
+        /**
+         * What the pairing agreed about the account's server, or null when it agreed nothing.
+         *
+         * Only [AccountOrigin.PAIRED] can supply one: a standalone vault has not been enrolled
+         * anywhere, and an id it invented for itself would be an id no server has ever heard of.
+         */
+        enrolment: PairedEnrolment? = null,
     ): SetupResult {
         // The account-forking guard, and it is checked FIRST: on a directory that already holds a
         // vault, "a vault already exists here" is the answer whatever the passphrase looks like,
@@ -149,6 +192,9 @@ class DesktopVault(
         require(origin == AccountOrigin.CREATED_HERE || ark != null) {
             "pairing must supply the ARK it received; it must not be minted here"
         }
+        require(origin == AccountOrigin.PAIRED || enrolment == null) {
+            "only a paired vault can carry a server enrolment"
+        }
 
         // THE one call site. Guarded by `isSetUp()` above, exactly as `ensureArk` is guarded by the
         // presence of `ark_ct` on the phone.
@@ -163,11 +209,19 @@ class DesktopVault(
             keyWrap = PassphraseCipher.wrapWithPin(vaultKey, passphrase, PassphrasePolicy.ITERATIONS),
             arkWrap = ArkCipher.wrap(accountKey, vaultKey),
             deviceId = UUID.randomUUID().toString(),
+            sync = enrolment?.let {
+                VaultHeader.SyncIdentity(
+                    serverUrl = it.serverUrl,
+                    deviceId = it.deviceId,
+                    deviceKeyWrap = DeviceKeyCipher.wrap(it.deviceKey.privateKeyPkcs8, vaultKey),
+                    devicePublicKey = it.deviceKey.publicKeySec1,
+                )
+            },
         )
 
         return try {
             writeHeader(header)
-            SetupResult.Created(session(vaultKey, accountKey, header.deviceId), origin)
+            SetupResult.Created(session(vaultKey, accountKey, header.deviceId, header.sync), origin)
         } catch (e: Exception) {
             // Nothing is left behind: `writeHeader` publishes atomically, so a failure means no
             // `vault.json` exists and the next launch is a first run again. The freshly minted ARK
@@ -239,15 +293,46 @@ class DesktopVault(
             // this as a reason to create a new account.
             return UnlockResult.Damaged("the account key could not be unwrapped")
         }
-        return UnlockResult.Unlocked(session(vaultKey, ark, header.deviceId))
+        return UnlockResult.Unlocked(session(vaultKey, ark, header.deviceId, header.sync))
     }
 
-    private fun session(vaultKey: ByteArray, ark: ByteArray, deviceId: String) = VaultSession(
+    private fun session(
+        vaultKey: ByteArray,
+        ark: ByteArray,
+        deviceId: String,
+        sync: VaultHeader.SyncIdentity?,
+    ) = VaultSession(
         vaultKey = vaultKey,
         ark = ark,
         accountKeys = AccountRootKey.derive(ark),
         hlcNode = HlcNode.derive(ark, deviceId),
+        sync = sync?.let { openSync(it, vaultKey) },
     )
+
+    /**
+     * Unwrap the device key, or answer null.
+     *
+     * Null for a wrap GCM refuses **and** for a pair whose two halves no longer agree, and both are
+     * reported the same way for the same reason: neither can be repaired here, and both produce a
+     * device that would enrol nothing and fail every session handshake. The vault still opens —
+     * the notes are readable and the ARK is intact — it simply cannot sync, which the UI says out
+     * loud rather than discovering at the first pass. Minting a replacement key would be strictly
+     * worse: the server holds one public key per device row and would reject every signature the
+     * new one made.
+     */
+    private fun openSync(identity: VaultHeader.SyncIdentity, vaultKey: ByteArray): SyncSession? {
+        val pkcs8 = DeviceKeyCipher.unwrap(identity.deviceKeyWrap, vaultKey) ?: return null
+        val pair = DeviceKeyPair(pkcs8, identity.devicePublicKey)
+        if (!pair.verifySelfConsistent()) {
+            pkcs8.fill(0)
+            return null
+        }
+        return SyncSession(
+            serverUrl = identity.serverUrl,
+            deviceId = identity.deviceId,
+            deviceKey = pair,
+        )
+    }
 
     private fun readHeader(): VaultHeader? =
         if (!Files.isRegularFile(headerFile)) null else VaultHeader.decode(Files.readAllBytes(headerFile))

@@ -52,16 +52,60 @@ class PairingCodecTest {
         assertTrue(text.startsWith("MNP1:"))
 
         val frame = Base64.getUrlDecoder().decode(text.removePrefix("MNP1:"))
-        assertEquals("version byte", 0x01.toByte(), frame[0])
+        assertEquals("version byte", 0x02.toByte(), frame[0])
         assertEquals("kind byte: offer", 0x01.toByte(), frame[1])
         assertArrayEqualsBytes(sid, frame.copyOfRange(2, 18))
         assertEquals("point length prefix", 65.toByte(), frame[18])
         assertArrayEqualsBytes(point, frame.copyOfRange(19, 84))
-        // urlLen = 0, pinLen = 0, and then nothing at all.
+        // urlLen = 0, pinLen = 0, dkLen = 0, and then nothing at all.
         assertEquals(0.toByte(), frame[84])
         assertEquals(0.toByte(), frame[85])
         assertEquals(0.toByte(), frame[86])
-        assertEquals(87, frame.size)
+        assertEquals(0.toByte(), frame[87])
+        assertEquals(88, frame.size)
+    }
+
+    /**
+     * The v2 addition, at the documented offset and length.
+     *
+     * Asserted against the bytes rather than only through a round trip, because this field is what
+     * the account device vouches for: a decoder reading it from the wrong offset would enrol 65
+     * bytes of somebody's server URL, and a round-trip test written against the same mistake would
+     * agree.
+     */
+    @Test
+    fun offerCarriesTheDeviceKeyAfterTheServerHint() {
+        val deviceKey = P256.encodePublicKey(P256.generateKeyPair().public as ECPublicKey)
+        val text = PairingCodec.encodeOffer(sid, point, ServerHint.NONE, deviceKey)
+
+        val frame = Base64.getUrlDecoder().decode(text.removePrefix("MNP1:"))
+        assertEquals("dkLen", 65.toByte(), frame[87])
+        assertArrayEqualsBytes(deviceKey, frame.copyOfRange(88, 88 + 65))
+        assertEquals(88 + 65, frame.size)
+
+        assertArrayEqualsBytes(deviceKey, PairingCodec.decodeOffer(text).encodedDeviceKey!!)
+    }
+
+    /** `dkLen = 0` is the phone-to-phone case and decodes to no key, not to an empty array. */
+    @Test
+    fun offerWithNoDeviceKeyDecodesToNull() {
+        val decoded = PairingCodec.decodeOffer(PairingCodec.encodeOffer(sid, point, ServerHint.NONE))
+        assertNull(decoded.encodedDeviceKey)
+    }
+
+    /**
+     * A device-key field of any length but 0 or 65 is a malformed frame.
+     *
+     * MALFORMED rather than INVALID_PEER_KEY, and the distinction is not cosmetic: MALFORMED is
+     * non-terminal, so a camera keeps scanning, while INVALID_PEER_KEY kills the session. A truncated
+     * field is damage; an off-curve point is an attack, and it is checked where the key is used.
+     */
+    @Test
+    fun rejectsADeviceKeyOfTheWrongLength() {
+        val frame = Base64.getUrlDecoder()
+            .decode(PairingCodec.encodeOffer(sid, point, ServerHint.NONE).removePrefix("MNP1:"))
+        val truncated = frame.copyOf(frame.size - 1) + byteArrayOf(4) + ByteArray(4)
+        assertFailure(PairingFailure.MALFORMED) { PairingCodec.decodeOffer(rewrap(truncated)) }
     }
 
     /** Base64url, not base64: no `+`, no `/`, and no `=` padding. */
@@ -99,7 +143,7 @@ class PairingCodecTest {
         val frame = Base64.getUrlDecoder()
             .decode(PairingCodec.encodeSeal(sid, point, nonce, seal).removePrefix("MNP1:"))
 
-        assertEquals(0x01.toByte(), frame[0])
+        assertEquals(0x02.toByte(), frame[0])
         assertEquals("kind byte: seal", 0x02.toByte(), frame[1])
         assertArrayEqualsBytes(sid, frame.copyOfRange(2, 18))
         assertEquals(65.toByte(), frame[18])
@@ -132,7 +176,12 @@ class PairingCodecTest {
     fun rejectsAnUnknownVersion() {
         val frame = Base64.getUrlDecoder()
             .decode(PairingCodec.encodeOffer(sid, point, ServerHint.NONE).removePrefix("MNP1:"))
-        frame[0] = 0x02
+        // 0x01 is the version this build used to speak, and is the one a real mixed-version pair
+        // would produce. It must be refused rather than parsed leniently: a v1 frame has no device
+        // key field, and reading one out of a shorter frame is how a decoder invents a key.
+        frame[0] = 0x01
+        assertFailure(PairingFailure.UNSUPPORTED_VERSION) { PairingCodec.decodeOffer(rewrap(frame)) }
+        frame[0] = 0x7F
         assertFailure(PairingFailure.UNSUPPORTED_VERSION) { PairingCodec.decodeOffer(rewrap(frame)) }
     }
 

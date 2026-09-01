@@ -51,9 +51,10 @@ class PhoneReadingAScreenshot {
         val phone = AccountDeviceSession(
             keyDerivation = HkdfKeyDerivation,
             clock = MonotonicClock { System.nanoTime() / 1_000_000 },
-            bundle = AccountBundle(ark, "screenshot-demo", "{}"),
+            ark = ark,
+            accountId = "screenshot-demo",
         )
-        val accepted = phone.onScanned(offer) as? OfferOutcome.Accepted
+        val accepted = phone.accept(offer)
             ?: error("the phone refused what it read: ${phone.onScanned(offer)}")
 
         println("server named in the code: ${phone.receivedServerHint?.url}")
