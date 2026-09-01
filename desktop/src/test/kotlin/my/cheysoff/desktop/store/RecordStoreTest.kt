@@ -136,4 +136,62 @@ class RecordStoreTest {
         RecordStore.open(path).use { assertEquals(1, it.readAll().size) }
         RecordStore.open(path).use { assertEquals(1, it.readAll().size) }
     }
+    /**
+     * The reason [RecordStore.inTransaction] exists.
+     *
+     * Applying a merge that produced a conflict copy writes two rows: the merged record, which
+     * takes the winning body, and the copy, which is the only remaining home of the losing one.
+     * If the second write fails and the first is already committed, the winner is stored and the
+     * loser is gone -- exactly the outcome conflict copies exist to prevent, and silent, because
+     * nothing afterwards knows a body was ever there.
+     *
+     * The failure is injected rather than waited for: a crash between two statements is not
+     * something a test can schedule, but it is indistinguishable from a throw for this purpose.
+     */
+    @Test
+    fun `a failure part way through a transaction leaves none of it behind`() {
+        store.put("committed-before", envelope(1))
+
+        val thrown = try {
+            store.inTransaction {
+                store.put("winner", envelope(2))
+                error("the conflict copy could not be sealed")
+            }
+            null
+        } catch (e: IllegalStateException) {
+            e
+        }
+
+        assertEquals("the conflict copy could not be sealed", thrown?.message)
+        // The row written inside the transaction is gone; the one written before it survives, so
+        // the rollback undid the transaction rather than the whole database.
+        assertEquals(listOf("committed-before"), store.readAll().map { it.blindedId })
+    }
+
+    @Test
+    fun `both rows of a merge that produced a conflict copy land together`() {
+        store.inTransaction {
+            store.put("winner", envelope(2))
+            store.put("conflict-copy", envelope(3))
+        }
+
+        assertEquals(
+            setOf("winner", "conflict-copy"),
+            store.readAll().map { it.blindedId }.toSet(),
+        )
+    }
+
+    @Test
+    fun `a transaction restores autocommit so later writes stand on their own`() {
+        store.inTransaction { store.put("inside", envelope(1)) }
+        // Written with no transaction around it. If `inTransaction` left autoCommit false, this
+        // would sit uncommitted and vanish on close -- a leak that only shows up in whatever runs
+        // next, which is the worst place for it to show up.
+        store.put("after", envelope(2))
+
+        assertEquals(
+            setOf("inside", "after"),
+            store.readAll().map { it.blindedId }.toSet(),
+        )
+    }
 }
