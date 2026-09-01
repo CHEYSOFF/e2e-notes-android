@@ -49,6 +49,11 @@ dependencies {
     // The sync key hierarchy. This module needs exactly one thing from it -- HKDF-SHA256 -- and
     // takes it rather than carrying a second copy; see PairingSeamModule.
     implementation(project(":core-crypto"))
+    // The protocol: P-256, the wire format, the seal, the SAS, the QR codec, and the rendezvous
+    // client. `api` rather than `implementation` because this module's own public surface is made
+    // of those types -- `PairingViewModel` exposes `PairingFailure`, `PairingScreenState` names it
+    // -- and a consumer that cannot see a type it is handed cannot compile against it.
+    api(project(":core-pairing"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
@@ -68,11 +73,12 @@ dependencies {
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
 
-    // QR. `com.google.zxing:core` is pure Java with no Android dependency at all -- it is used
-    // here both to WRITE (QrEncoder -> ImageBitmap) and to READ (QrFrameDecoder over a camera
-    // frame). zxing-android-embedded is deliberately not used: it ships a whole capture Activity
-    // and its own manifest, which is more surface than a Compose app needs.
-    implementation(libs.zxing.core)
+    // No zxing here any more: the encoder and the frame decoder both moved to :core-pairing, so
+    // the desktop renders and this module scans through one implementation. What is left in this
+    // module is the two Android-only halves -- turning a matrix into an `android.graphics.Bitmap`
+    // (QrImage) and pulling a luminance plane off CameraX (QrScanner) -- and neither names a zxing
+    // type. `zxing-android-embedded` remains deliberately unused: it ships a whole capture
+    // Activity and its own manifest, which is more surface than a Compose app needs.
 
     // Camera. camera-camera2 is the CameraX backend, camera-lifecycle binds the use cases to a
     // LifecycleOwner, camera-view supplies PreviewView. ML Kit is deliberately not used for

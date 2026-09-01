@@ -165,6 +165,24 @@ class SyncStore(
                 expires_at   INTEGER NOT NULL
             )
             """,
+            // The pairing rendezvous. Deliberately NOT keyed on an account: at the moment a blob is
+            // deposited the collecting device does not have an account yet -- that is the entire
+            // point of a pairing -- so there is nothing to scope it to and no foreign key to hang
+            // it on. `sid` is 16 bytes of the new device's SecureRandom and names nothing else.
+            //
+            // `sid` is stored as it arrives, where a session token is stored digested. The
+            // asymmetry is real and is not an oversight: a token is a credential the server can
+            // verify without holding, so hashing it means a database read yields nothing usable.
+            // Here the row already contains the blob that `sid` would retrieve, so digesting the
+            // key would protect a secret against someone who is holding the thing it unlocks.
+            """
+            CREATE TABLE IF NOT EXISTS pairings (
+                sid        TEXT    NOT NULL PRIMARY KEY,
+                sealed     TEXT    NOT NULL,
+                expires_at INTEGER NOT NULL
+            )
+            """,
+            "CREATE INDEX IF NOT EXISTS pairings_by_expiry ON pairings(expires_at)",
         )
     }
 
@@ -332,6 +350,78 @@ class SyncStore(
         ) { if (it.next()) SessionRow(it.getString(1), it.getString(2)) else null }
         update("DELETE FROM challenges WHERE challenge = ?", challenge)
         row
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Pairing rendezvous
+    // ---------------------------------------------------------------------------------------
+
+    /**
+     * Files [sealed] under [sid] until [expiresAt]. Returns false if something is already there.
+     *
+     * **First write wins, and that is a security rule rather than a tidiness one.** An attacker who
+     * guessed a `sid` and could overwrite would replace the real bundle with one the waiting device
+     * cannot open, and the pairing would die at a GCM tag failure -- which the client reports,
+     * correctly and alarmingly, as "this was meant for a different device or it was modified". Last
+     * write wins would make that message reachable by a stranger. It is also what stops a single
+     * `sid` from being used to park more than one blob's worth of storage.
+     *
+     * Expired rows are swept first, in the same transaction, so the table is bounded by the TTL and
+     * the deposit rate rather than by anyone remembering to run a cleanup. The sweep is here rather
+     * than on a timer for the same reason [claimSignature] and [createChallenge] do it: a server
+     * that is not being written to has nothing to clean up.
+     */
+    fun putPairing(sid: String, sealed: String, expiresAt: Long): Boolean = tx {
+        update("DELETE FROM pairings WHERE expires_at <= ?", clock.nowMillis())
+        update(
+            "INSERT OR IGNORE INTO pairings(sid, sealed, expires_at) VALUES (?, ?, ?)",
+            sid, sealed, expiresAt,
+        ) == 1
+    }
+
+    /**
+     * Reads the blob filed under [sid] and deletes it in the same transaction, so it is collectable
+     * exactly once. Returns null if it is unknown, already collected, or expired.
+     *
+     * Single use is the same rule [consumeChallenge] enforces and it buys the same thing: the
+     * window in which the server is holding anything at all closes at the first successful read
+     * rather than at the TTL. It costs a retry -- a collect whose *response* is lost has consumed
+     * the blob, and the pairing must be started again -- and that is the right trade at a two-minute
+     * TTL, because the alternative is a blob that stays fetchable to anyone who later learns `sid`.
+     */
+    fun takePairing(sid: String): String? = tx {
+        val row = query(
+            "SELECT sealed FROM pairings WHERE sid = ? AND expires_at > ?",
+            sid, clock.nowMillis(),
+        ) { if (it.next()) it.getString(1) else null }
+        update("DELETE FROM pairings WHERE sid = ?", sid)
+        row
+    }
+
+    /**
+     * How many unexpired blobs are parked right now.
+     *
+     * The input to the only bound this table has that is not per-IP. Expired rows are excluded
+     * rather than swept here, because this runs on the path that is about to *refuse* a write and a
+     * refusal should not also be doing housekeeping -- [putPairing] sweeps on the path that grows
+     * the table.
+     */
+    fun livePairingCount(): Long = tx {
+        query("SELECT COUNT(*) FROM pairings WHERE expires_at > ?", clock.nowMillis()) {
+            if (it.next()) it.getLong(1) else 0L
+        }
+    }
+
+    /**
+     * Every row in the table, expired ones included.
+     *
+     * Exists so a test can tell "the sweep deleted the dead rows" from "the query filtered them
+     * out", which [livePairingCount] cannot distinguish and which is the difference between a table
+     * that stays small and one that grows forever while reporting a small number. No route calls
+     * it.
+     */
+    fun pairingRowCount(): Long = tx {
+        query("SELECT COUNT(*) FROM pairings") { if (it.next()) it.getLong(1) else 0L }
     }
 
     fun createSession(accountId: String, deviceId: String, tokenHash: String, expiresAt: Long) = tx {

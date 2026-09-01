@@ -112,6 +112,18 @@ fun Application.syncModule(deps: ServerDeps) {
             }
         }
 
+        // The pairing rendezvous. Unauthenticated, and it cannot be otherwise: the device that
+        // collects has no account yet, which is the whole reason it is pairing.
+        post("/v1/pair/{sid}") {
+            serve(deps, "POST /v1/pair/{sid}") {
+                depositPairing(deps, call.parameters["sid"], it)
+            }
+        }
+
+        get("/v1/pair/{sid}") {
+            serve(deps, "GET /v1/pair/{sid}") { collectPairing(deps, call.parameters["sid"]) }
+        }
+
         get("/v1/records/{id}/history") {
             serve(deps, "GET /v1/records/{id}/history") {
                 authenticated(deps) {
@@ -667,3 +679,142 @@ private fun history(deps: ServerDeps, session: SessionRow, blindedId: String?, l
         JSON.encodeToString(HistoryResponse(blindedId, versions.map { it.toDto() })),
     )
 }
+
+// -------------------------------------------------------------------------------------------
+// Pairing rendezvous
+// -------------------------------------------------------------------------------------------
+//
+// ## What these two endpoints are
+//
+// A dead drop with a two-minute lease. The device that already holds the account key leaves one
+// opaque string under a name the *other* device chose, and the other device picks it up. That is
+// all. In between, the server holds a string it did not produce, cannot read, and deletes on the
+// first read.
+//
+// They exist because a laptop has no camera worth relying on. Two phones pair with two QR codes
+// and nothing in between; that flow is untouched and never reaches this file. What travels here is
+// the second QR's payload, byte for byte, for the case where there is nothing to point a camera at.
+//
+// ## What the server learns
+//
+// That a pairing happened and when; the IP addresses of the depositing and the collecting device,
+// and that the two belong to one pairing; the blob's size, which varies by a few bytes with the
+// account id and the client configuration sealed inside it; and `sid`, which is 16 random bytes
+// minted for this attempt and means nothing anywhere else.
+//
+// It does not learn the account root key, the account id, or anything derived from either. The blob
+// is AES-256-GCM under a key from an ECDH between two ephemeral P-256 keys, one of which was only
+// ever displayed as a QR code on a screen and never transmitted. There is no code in this server
+// that could open it and no key here that would help.
+//
+// ## What an attacker who can guess or enumerate `sid` gets
+//
+// `sid` is 128 bits of `SecureRandom`, so "guess" is not a plan and "enumerate" is not either --
+// but the question deserves an answer that does not rest on that.
+//
+//  - **Collecting someone else's blob**: ciphertext they cannot open, and the pairing they
+//    interrupted dies at a `404`. Denial of service, not disclosure.
+//  - **Depositing under a `sid` already in use**: refused. `SyncStore.putPairing` is
+//    first-write-wins, so a real bundle cannot be displaced by a decoy that would fail the waiting
+//    device's GCM tag -- which the client reports, correctly and alarmingly, as "this was meant for
+//    a different device or it was modified".
+//  - **Depositing under random `sid`s to fill the disk**: bounded twice over, by a per-address
+//    deposit bucket much tighter than the general limiter and by a global cap on live rows. See
+//    `ServerConfig.pairingDepositPerMinute` and `maxLivePairings`.
+//
+// The one thing they do not get, under any of those, is a note or a key.
+
+/**
+ * `POST /v1/pair/{sid}` -- leave one sealed bundle.
+ *
+ * Create-only. A second deposit under the same `sid` is a `409` and the first blob stands.
+ *
+ * The deposit bucket is charged **after** the shape of `sid` is checked and **before** the body is
+ * looked at, so a malformed request cannot spend a permit and a well-formed flood cannot avoid
+ * spending one.
+ */
+private fun RoutingContext.depositPairing(deps: ServerDeps, sid: String?, body: ByteArray): Reply {
+    if (sid == null || !validSid(sid)) {
+        return error(BAD_REQUEST, "invalid_sid", "sid is not a 16-byte base64url value.")
+    }
+
+    val decision = deps.pairingDepositLimiter.check("pair:" + call.request.origin.remoteAddress)
+    if (decision is RateDecision.Throttled) {
+        return Reply(
+            HttpStatusCode.TooManyRequests,
+            errorJson("rate_limited", "Too many pairing deposits. Retry after the advertised delay."),
+            decision.retryAfterSeconds,
+        )
+    }
+
+    val request = parse<PairingDepositRequest>(body) ?: return MALFORMED_BODY
+
+    // Base64url and bounded, and nothing else. The server does not parse the frame inside and must
+    // not start: every guard that matters -- the version, the kind, the `sid` echo, the peer point
+    // being on the curve, the GCM tag -- belongs to the device that can actually check them, and a
+    // second, weaker copy here would be a place for the two to disagree.
+    val decoded = B64.decodeOrNull(request.sealed)
+        ?: return error(BAD_REQUEST, "invalid_sealed", "sealed is not valid base64url.")
+    if (decoded.isEmpty() || decoded.size > deps.config.maxPairingBlobBytes) {
+        return error(
+            HttpStatusCode.PayloadTooLarge,
+            "sealed_too_large",
+            "sealed is empty or exceeds the configured limit.",
+        )
+    }
+
+    // Checked here rather than inside the store's transaction, so the answer is a `503` the client
+    // can explain to a user rather than an insert that silently loses a race. The window between
+    // this and the insert lets the cap be exceeded by the number of concurrent deposits, which is a
+    // handful of rows on a server whose premise is one person's devices -- and the cap exists to
+    // bound a disk, not to be exact.
+    if (deps.store.livePairingCount() >= deps.config.maxLivePairings) {
+        return error(
+            HttpStatusCode.ServiceUnavailable,
+            "pairing_capacity",
+            "Too many pairings are in progress. Try again in a couple of minutes.",
+        )
+    }
+
+    val expiresAt = deps.clock.nowMillis() + deps.config.pairingTtlMillis
+    if (!deps.store.putPairing(sid, request.sealed, expiresAt)) {
+        return error(
+            HttpStatusCode.Conflict,
+            "pairing_exists",
+            "A bundle has already been left for this pairing.",
+        )
+    }
+    return Reply(HttpStatusCode.Created, JSON.encodeToString(PairingDepositResponse(expiresAt)))
+}
+
+/**
+ * `GET /v1/pair/{sid}` -- collect the sealed bundle, once.
+ *
+ * Unknown, expired and already-collected are all the same `404` with the same message. That is not
+ * only the usual "do not confirm what exists" reflex: while a device is polling, "not yet" and "not
+ * ever" are genuinely the same instruction -- keep waiting until your own clock says stop -- and a
+ * client that could tell them apart would still do the same thing.
+ */
+private fun collectPairing(deps: ServerDeps, sid: String?): Reply {
+    if (sid == null || !validSid(sid)) {
+        return error(BAD_REQUEST, "invalid_sid", "sid is not a 16-byte base64url value.")
+    }
+    val sealed = deps.store.takePairing(sid)
+        ?: return error(HttpStatusCode.NotFound, "no_pairing", "Nothing is waiting for this pairing.")
+    return Reply(HttpStatusCode.OK, JSON.encodeToString(PairingCollectResponse(sealed)))
+}
+
+/**
+ * A `sid` must be base64url that decodes to exactly 16 bytes -- the client protocol's own
+ * `SID_SIZE_BYTES`.
+ *
+ * Pinned to a length where [validBlindedId] deliberately is not, and the difference is which side
+ * owns the value. A blinded record ID is the client's to shape and a future record type could
+ * reasonably change it. A `sid` is a fixed-width random identifier in a protocol both ends
+ * implement; accepting a two-character one would let a caller park rows in a namespace small enough
+ * to sweep.
+ */
+private fun validSid(value: String): Boolean = B64.decodeExactly(value, SID_SIZE_BYTES) != null
+
+/** Length of a pairing session id. Matches the client's `PairingProtocol.SID_SIZE_BYTES`. */
+private const val SID_SIZE_BYTES = 16

@@ -69,7 +69,7 @@ import my.cheysoff.core_ui.theme.LocalSpacing
 import my.cheysoff.core_ui.theme.OutlineDark
 import my.cheysoff.core_ui.theme.SurfaceDark
 import my.cheysoff.core_ui.theme.TitleGrey
-import my.cheysoff.feature_pairing.qr.QrCodes
+import my.cheysoff.core_pairing.qr.QrCodes
 import my.cheysoff.feature_pairing.qr.rememberQrImageBitmap
 
 /** Matches the settings cards and note cards: between Radii.medium and Radii.large. */
@@ -226,6 +226,12 @@ fun PairingScreen(
                     sas = stage.sas,
                     primaryLabel = "They've scanned it",
                     onPrimary = { onIntent(PairingIntent.SealShown) },
+                    onStartOver = { onIntent(PairingIntent.StartOver) },
+                )
+
+                is PairingStage.SendingSeal -> SendSealStep(
+                    stage = stage,
+                    onSend = { onIntent(PairingIntent.SendSeal) },
                     onStartOver = { onIntent(PairingIntent.StartOver) },
                 )
 
@@ -479,6 +485,68 @@ private fun ShowCodeStep(
         ExpiryLine(secondsRemaining)
         sas?.let { SasCard(it) }
         PrimaryButton(label = primaryLabel, onClick = onPrimary)
+        StartOverButton(onStartOver)
+    }
+}
+
+/**
+ * The account device's second step when the other device is a **computer**.
+ *
+ * A laptop has no camera to point at a QR code, so the sealed bundle is sent to a rendezvous server
+ * instead of drawn on this screen. The phone-to-phone flow is untouched and never reaches here — it
+ * still renders QR2 through [ShowCodeStep].
+ *
+ * ## Why the host is on screen, and why there is a button
+ *
+ * The address arrived in the clear inside the code this phone just scanned, at a point where nothing
+ * had been agreed. Sending on scan would make any printed QR code a way to have a stranger's phone
+ * POST to a host of the printer's choosing. What it would POST is sealed to a key that host does
+ * not have — nothing leaks either way — but a request made from inside someone's network without
+ * their knowing is worth one tap to prevent, and the person is looking at their own computer, so
+ * "does that match?" is a question they can actually answer.
+ *
+ * The six digits are shown here, before the send, for the same reason [ShowCodeStep] shows them:
+ * the comparison is between two screens that are already both displaying it.
+ */
+@Composable
+private fun SendSealStep(
+    stage: PairingStage.SendingSeal,
+    onSend: () -> Unit,
+    onStartOver: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Card {
+            CardTitle("Send your account key to that computer")
+            CardBody(
+                "That computer cannot scan a code back, so your account key travels through the " +
+                    "server it named — sealed, so only that computer can open it. The server " +
+                    "stores it for two minutes and cannot read it."
+            )
+        }
+        Card {
+            CardTitle(stage.host)
+            CardBody(
+                if (stage.secure) {
+                    "Check that this is your own server before sending."
+                } else {
+                    "This is a plain http:// address. Android refuses unencrypted connections, " +
+                        "so this cannot be sent. Put the server behind https:// and start over."
+                },
+                color = if (stage.secure) BodyGrey else ErrorRed,
+            )
+        }
+        SasCard(stage.sas)
+        stage.message?.let {
+            Card {
+                CardTitle("That did not work")
+                CardBody(it, color = ErrorRed)
+            }
+        }
+        PrimaryButton(
+            label = if (stage.sending) "Sending…" else "Send to ${stage.host}",
+            onClick = onSend,
+            enabled = !stage.sending && stage.secure,
+        )
         StartOverButton(onStartOver)
     }
 }

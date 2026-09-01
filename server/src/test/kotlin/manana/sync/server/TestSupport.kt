@@ -95,6 +95,9 @@ class Harness(config: ServerConfig) {
         clock = clock,
         log = RequestLog(sink = { logLines.add(it) }, debugEnabled = false),
         rateLimiter = RateLimiter(config.rateLimitPerMinute, config.rateLimitBurst, clock),
+        pairingDepositLimiter = RateLimiter(
+            config.pairingDepositPerMinute, config.pairingDepositBurst, clock,
+        ),
     )
 }
 
@@ -112,6 +115,13 @@ fun testConfig(
     rateLimitBurst: Int = 100_000,
     signatureWindowMillis: Long = 5 * 60 * 1000,
     sessionTtlMillis: Long = 24 * 60 * 60 * 1000,
+    pairingTtlMillis: Long = 120_000,
+    maxPairingBlobBytes: Int = 8 * 1024,
+    maxLivePairings: Long = 1000,
+    // High enough that only the test that is *about* the deposit bucket ever meets it, matching
+    // what `rateLimitPerMinute` above does for the general one.
+    pairingDepositPerMinute: Int = 100_000,
+    pairingDepositBurst: Int = 100_000,
 ) = ServerConfig(
     databasePath = databasePath,
     maxRequestBytes = maxRequestBytes,
@@ -122,6 +132,11 @@ fun testConfig(
     rateLimitBurst = rateLimitBurst,
     signatureWindowMillis = signatureWindowMillis,
     sessionTtlMillis = sessionTtlMillis,
+    pairingTtlMillis = pairingTtlMillis,
+    maxPairingBlobBytes = maxPairingBlobBytes,
+    maxLivePairings = maxLivePairings,
+    pairingDepositPerMinute = pairingDepositPerMinute,
+    pairingDepositBurst = pairingDepositBurst,
 )
 
 /** Boots a server for one test. */

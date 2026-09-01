@@ -21,6 +21,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import my.cheysoff.core_pairing.qr.QrCodes
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -36,7 +37,7 @@ private const val TAG = "QrScanner"
  * `SurfaceView`; there is no unit-test seam for it and this project has no instrumented-test
  * infrastructure beyond `ExampleInstrumentedTest`. Everything that *can* be decided without a
  * camera — reading a QR out of a luminance plane, parsing the payload, the protocol — lives in
- * [QrCodes] and `my.cheysoff.feature_pairing.protocol`, which are tested thoroughly. What is left
+ * [QrCodes] and `my.cheysoff.core_pairing.protocol`, which are tested thoroughly. What is left
  * here is wiring: bind two use cases, copy a plane, call a function.
  *
  * ## Rotation

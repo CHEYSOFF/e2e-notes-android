@@ -52,6 +52,16 @@ include(":core-domain")
 include(":core-data")
 include(":feature-settings")
 include(":feature-pairing")
+// The pairing protocol itself -- the P-256 key agreement, the wire format, the seal, the SAS, the
+// QR codec -- split out of :feature-pairing so the desktop app runs the SAME code rather than a
+// second implementation of it. :feature-pairing keeps everything that needs Android: CameraX, the
+// Bitmap renderer, the Keystore identity key, the Compose screens and the Hilt bindings.
+//
+// A desktop that reimplemented this would be two implementations of one protocol, and the two
+// would each pass their own tests and disagree only on a real phone and a real laptop. That is the
+// failure this project has already shipped once (see KeyDerivation's KDoc) and it is the reason
+// this is a module rather than a copy.
+include(":core-pairing")
 // The network transport for E2E sync (Phase 3). It is the only module that declares INTERNET; see
 // core-sync-net/src/main/AndroidManifest.xml for what that permission is for and when it is used.
 include(":core-sync-net")

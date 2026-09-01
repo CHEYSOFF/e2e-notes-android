@@ -27,6 +27,9 @@ fun main() {
         clock = clock,
         log = log,
         rateLimiter = RateLimiter(config.rateLimitPerMinute, config.rateLimitBurst, clock),
+        pairingDepositLimiter = RateLimiter(
+            config.pairingDepositPerMinute, config.pairingDepositBurst, clock,
+        ),
     )
 
     if (config.host != "127.0.0.1" && config.host != "localhost") {

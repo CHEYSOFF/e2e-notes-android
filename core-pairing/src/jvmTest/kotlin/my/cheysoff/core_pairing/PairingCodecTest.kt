@@ -1,12 +1,12 @@
-package my.cheysoff.feature_pairing
+package my.cheysoff.core_pairing
 
-import my.cheysoff.feature_pairing.protocol.AccountBundle
-import my.cheysoff.feature_pairing.protocol.P256
-import my.cheysoff.feature_pairing.protocol.PairingCodec
-import my.cheysoff.feature_pairing.protocol.PairingFailure
-import my.cheysoff.feature_pairing.protocol.PairingProtocol
-import my.cheysoff.feature_pairing.protocol.PairingWireException
-import my.cheysoff.feature_pairing.protocol.ServerHint
+import my.cheysoff.core_pairing.protocol.AccountBundle
+import my.cheysoff.core_pairing.protocol.P256
+import my.cheysoff.core_pairing.protocol.PairingCodec
+import my.cheysoff.core_pairing.protocol.PairingFailure
+import my.cheysoff.core_pairing.protocol.PairingProtocol
+import my.cheysoff.core_pairing.protocol.PairingWireException
+import my.cheysoff.core_pairing.protocol.ServerHint
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
