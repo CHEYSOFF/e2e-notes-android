@@ -101,6 +101,20 @@ class SyncRowTest {
     }
 
     /**
+     * The reverse, which is the one that would mislead: a pass that completed is a fact about a
+     * moment that has passed, and a check the user just ran and watched fail is about right now.
+     * Letting the pass win would leave the section reading "the last sync sent 3" over a server
+     * that is not answering.
+     */
+    @Test
+    fun `a failed check outranks an older completed pass`() {
+        assertEquals(
+            SyncStatus.UNREACHABLE,
+            status(lastCheckFailed = true, sync = SyncPassState.Completed(SyncPassSummary(pushed = 3))),
+        )
+    }
+
+    /**
      * A halt outranks everything the engine can otherwise report, and outranks a check in flight.
      * Every other line would read as "things are fine" while nothing is syncing at all and nothing
      * will until a person intervenes.

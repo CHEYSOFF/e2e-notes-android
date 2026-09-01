@@ -1,5 +1,6 @@
 package my.cheysoff.notes.sync
 
+import my.cheysoff.core_domain.sync.FieldClocks
 import my.cheysoff.core_domain.sync.RecordType
 import my.cheysoff.core_sync_codec.OpenResult
 import my.cheysoff.core_sync_codec.RecordCodec
@@ -92,8 +93,7 @@ class EnvelopeSyncTransport(
                 // Only reachable if the row were deleted between `dirtyRecords()` and here, which
                 // one pass cannot do. `updatedAt` is the same fallback the receiving side uses, so
                 // the two agree rather than each inventing something.
-                ?: item.record.valueOf(my.cheysoff.core_domain.sync.FieldClocks.UPDATED_AT)
-                    .parts[0]?.toLongOrNull() ?: 0L
+                ?: item.record.valueOf(FieldClocks.UPDATED_AT).parts[0]?.toLongOrNull() ?: 0L
             val sealed = codec.seal(SyncRecords.toPayload(item.record, createdAt))
             identities[sealed.blindedId] = item
             PushItem(blindedId = sealed.blindedId, baseSeq = item.baseSeq, envelope = sealed.envelope)
