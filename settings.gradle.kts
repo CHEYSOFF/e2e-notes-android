@@ -69,6 +69,12 @@ include(":core-sync-net")
 // Android, no Room, no HTTP -- so that the N-replica convergence harness can drive the real engine
 // on the JVM in milliseconds. See core-sync-engine/build.gradle.kts.
 include(":core-sync-engine")
+// The record payload format and the envelope around it -- the layer between `SyncRecord` and the
+// opaque blob the server stores. It is its own module because BOTH apps need it and neither of the
+// modules it sits between can host it: :core-domain must stay free of crypto, :core-crypto-shared
+// must stay free of the merge vocabulary, and :core-data is Room and therefore invisible to the
+// desktop. A byte-level disagreement here is a note one device can write and the other cannot open.
+include(":core-sync-codec")
 
 // The Compose Desktop app. Plain Kotlin/JVM -- it is the same binary on Windows, macOS and
 // Linux, and jpackage builds whichever installer the host OS supports.

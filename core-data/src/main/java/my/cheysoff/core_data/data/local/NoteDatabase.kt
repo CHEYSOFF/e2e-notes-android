@@ -15,7 +15,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * stale the moment the next migration lands — which is how Migration4to5Test came to be broken
  * without anyone noticing.
  */
-internal const val NOTE_DATABASE_VERSION = 7
+internal const val NOTE_DATABASE_VERSION = 8
 
 @Database(
     entities = [NoteEntity::class, FolderEntity::class, SyncStateEntity::class],
@@ -191,6 +191,27 @@ abstract class NoteDatabase : RoomDatabase() {
             }
         }
 
+        // v7 -> v8: the two columns the sync engine needs and v7 did not have. Additive, and both
+        // defaults are the inert reading rather than a plausible-looking value.
+        //
+        // `contentSyncedHlc` closes decision D7: it is the `content` clock of the newest version
+        // this device and the server agreed on, and it is what lets the merge tell "we both edited
+        // the body" from "I pinned it and they edited the body". `''` means "no agreement is
+        // recorded", which is true of every row that exists at migration time and makes the merge
+        // fall back to its conservative rule — safe, and noisier by one duplicate note per pin
+        // until the row has synced once. `Hlc.ZERO` would have been the wrong default for the same
+        // reason `dirty` defaults to 1: it asserts something ("we agreed, at the beginning of
+        // time") where the truth is that nothing is known.
+        //
+        // `haltReason` gives the engine's halt somewhere to survive process death. Empty is
+        // healthy; the value is a `HaltReason.name`.
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE notes ADD COLUMN contentSyncedHlc TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE sync_state ADD COLUMN haltReason TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         /**
          * Every migration above, in order. `DataModule` spreads this into Room's builder instead
          * of listing the fields a second time, so the chain the app ships with cannot be missing a
@@ -213,6 +234,7 @@ abstract class NoteDatabase : RoomDatabase() {
             MIGRATION_4_5,
             MIGRATION_5_6,
             MIGRATION_6_7,
+            MIGRATION_7_8,
         )
     }
 }

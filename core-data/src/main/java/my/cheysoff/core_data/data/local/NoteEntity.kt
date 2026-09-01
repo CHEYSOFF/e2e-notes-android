@@ -89,9 +89,40 @@ data class NoteEntity(
      */
     @ColumnInfo(defaultValue = "0")
     val lastSyncedSeq: Long = 0L,
+
+    /**
+     * The `content` clock of the newest version this device and the server have **agreed on**, in
+     * [Hlc.toString] form, or `''` when no such agreement is recorded. Added in v8.
+     *
+     * This is decision D7 of the phase-3 plan, closed. Without it the merge cannot tell "both
+     * devices edited the body" from "this device pinned the note and the other edited the body",
+     * because an HLC is a total order and cannot express concurrency — the ancestor has to be
+     * written down. `Merge` falls back to a conservative rule when it is absent, which converges
+     * but writes a duplicate note for the pin, and pinning on one device while typing on another
+     * is precisely the gesture field-level merging exists to handle losslessly.
+     *
+     * `''` is therefore a legitimate reading and the one every row migrated into v8 carries: no
+     * agreement has been recorded, so the merge is conservative until one is. It is never
+     * `Hlc.ZERO` written out — a zero clock would claim an agreement at the beginning of time,
+     * which is a claim, not the absence of one.
+     *
+     * Only `notes` has it. A folder has no body, so it never produces a conflict copy and
+     * `Baselines.advance` returns null for one.
+     */
+    @ColumnInfo(defaultValue = "''")
+    val contentSyncedHlc: String = "",
 ) {
     /** The row clock as one value. */
     fun rowHlc(): Hlc = Hlc(ms = hlcMs, counter = hlcCounter, node = hlcNode)
+
+    /**
+     * Just the clock columns, in the shape `FieldClocks.stamp` wants.
+     *
+     * A write path that has already read the whole row — because it has to compare the old values
+     * against the new ones to know what it actually changed — should not then issue a second query
+     * for the four columns it is holding.
+     */
+    fun clocks(): RowClock = RowClock(hlcMs, hlcCounter, hlcNode, fieldHlc)
 }
 
 fun NoteEntity.toDomain() = Note(
