@@ -69,9 +69,9 @@ class PairingEndToEndTest {
         // 2-4. The protocol. Both sessions get the production KDF.
         val clock = FakeClock()
         val deviceB = NewDeviceSession(HkdfKeyDerivation, clock)
-        val deviceA = AccountDeviceSession(HkdfKeyDerivation, clock, bundle)
+        val deviceA = AccountDeviceSession(HkdfKeyDerivation, clock, bundle.ark, bundle.accountId)
 
-        val qr2 = deviceA.onScanned(deviceB.offerCode) as OfferOutcome.Accepted
+        val qr2 = deviceA.accept(deviceB.offerCode)!!
         val paired = deviceB.onScanned(qr2.sealCode) as SealOutcome.Paired
 
         // The bytes crossed intact.
@@ -118,18 +118,19 @@ class PairingEndToEndTest {
         val clock = FakeClock()
 
         val deviceB = NewDeviceSession(HkdfKeyDerivation, clock)
-        val deviceA = AccountDeviceSession(HkdfKeyDerivation, clock, bundle)
+        val deviceA = AccountDeviceSession(HkdfKeyDerivation, clock, bundle.ark, bundle.accountId)
 
         // Device A, but with the first byte of every `info` flipped. Everything else -- the ECDH,
         // the salt, the wire format, the AAD -- is identical.
         val driftedA = AccountDeviceSession(
             keyDerivation = OneByteOffInfo(HkdfKeyDerivation),
             clock = clock,
-            bundle = bundle,
+            ark = bundle.ark,
+            accountId = bundle.accountId,
         )
 
         val goodOffer = deviceB.offerCode
-        val drifted = driftedA.onScanned(goodOffer) as OfferOutcome.Accepted
+        val drifted = driftedA.accept(goodOffer)!!
         val outcome = deviceB.onScanned(drifted.sealCode) as SealOutcome.Rejected
 
         assertEquals(PairingFailure.SEAL_REJECTED, outcome.failure)
@@ -138,7 +139,7 @@ class PairingEndToEndTest {
         // And the control, so the test cannot pass for the wrong reason: an identical device B
         // pairs with the undrifted device A, on the same clock, in the same run.
         val freshB = NewDeviceSession(HkdfKeyDerivation, clock)
-        val honest = deviceA.onScanned(freshB.offerCode) as OfferOutcome.Accepted
+        val honest = deviceA.accept(freshB.offerCode)!!
         val ok = freshB.onScanned(honest.sealCode) as SealOutcome.Paired
         assertArrayEquals(ark, ok.bundle.ark)
         assertEquals(honest.sas, ok.sas)

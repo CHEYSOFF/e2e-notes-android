@@ -18,6 +18,7 @@ import my.cheysoff.core_domain.sync.SyncController
 import my.cheysoff.core_domain.sync.SyncPassState
 import my.cheysoff.core_domain.sync.SyncPassSummary
 import my.cheysoff.core_domain.sync.SyncTrigger
+import my.cheysoff.core_sync_codec.EnvelopeSyncTransport
 import my.cheysoff.core_sync_codec.RecordCodec
 import my.cheysoff.core_sync_engine.ClockObserver
 import my.cheysoff.core_sync_engine.HaltReason

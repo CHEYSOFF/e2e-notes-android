@@ -101,7 +101,7 @@ class DesktopPairingControllerTest {
         controller.start()
 
         val waiting = controller.step as PairingStep.Waiting
-        val phone = AccountDeviceSession(HkdfKeyDerivation, MonotonicClock { 0 }, bundle)
+        val phone = AccountDeviceSession(HkdfKeyDerivation, MonotonicClock { 0 }, bundle.ark, bundle.accountId)
         val accepted = phone.onScanned(waiting.code) as OfferOutcome.Accepted
         drop.deposit(phone.receivedSid!!, accepted.sealCode)
 
@@ -121,7 +121,7 @@ class DesktopPairingControllerTest {
         controller.editAddress("https://pair.example.test")
         controller.start()
 
-        val phone = AccountDeviceSession(HkdfKeyDerivation, MonotonicClock { 0 }, bundle)
+        val phone = AccountDeviceSession(HkdfKeyDerivation, MonotonicClock { 0 }, bundle.ark, bundle.accountId)
         val accepted = phone.onScanned((controller.step as PairingStep.Waiting).code) as OfferOutcome.Accepted
         drop.deposit(phone.receivedSid!!, accepted.sealCode)
         pump()
@@ -278,7 +278,7 @@ class DesktopPairingControllerTest {
         controller.editAddress("https://pair.example.test")
         controller.start()
 
-        val phone = AccountDeviceSession(HkdfKeyDerivation, MonotonicClock { 0 }, bundle)
+        val phone = AccountDeviceSession(HkdfKeyDerivation, MonotonicClock { 0 }, bundle.ark, bundle.accountId)
         val accepted = phone.onScanned((controller.step as PairingStep.Waiting).code) as OfferOutcome.Accepted
         drop.deposit(phone.receivedSid!!, accepted.sealCode)
         pump()
