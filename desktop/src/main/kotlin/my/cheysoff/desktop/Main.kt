@@ -12,6 +12,7 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import my.cheysoff.desktop.app.AppController
+import my.cheysoff.desktop.app.DesktopSyncState
 import my.cheysoff.desktop.keychain.CredentialStores
 import my.cheysoff.desktop.platform.HostOs
 import my.cheysoff.desktop.ui.CreatePassphraseScreen
@@ -55,6 +56,11 @@ fun main(args: Array<String>) {
             // The unlocked workspace opens its OWN window rather than rendering inside the gate's.
             // It restores the size, position and sidebar width the user left behind, and a window
             // sized for a passphrase prompt is the wrong shape to inherit for a two-pane editor.
+            // One pass when the vault opens, which is the moment a person is most likely to want
+            // what the other device wrote while this one was closed. Keyed on the screen so it runs
+            // once per unlock rather than on every recomposition.
+            LaunchedEffect(screen) { controller.syncNow() }
+
             MananaWindow(
                 repository = screen.repository,
                 onLock = controller::lock,
@@ -66,6 +72,9 @@ fun main(args: Array<String>) {
                         controller.rememberOnThisComputer()
                     }
                 },
+                syncLabel = syncLabelOf(controller.syncState),
+                onSync = if (controller.syncState is DesktopSyncState.Unavailable) null
+                else controller::syncNow,
                 onExit = ::exitApplication,
             )
         } else {
@@ -151,4 +160,22 @@ private fun GateScreens(vault: DesktopVault, controller: AppController) {
         // and a new screen cannot be added without deciding which side of the gate it belongs on.
         is AppController.Screen.Open -> Unit
     }
+}
+
+/**
+ * What the title bar says about syncing, or null when this device cannot sync at all.
+ *
+ * Deliberately never says "up to date". A completed pass means the server held what this device
+ * held **at that moment**, which is a fact about the past; the phrasing has to survive being read
+ * ten minutes later, when it is no longer evidence of anything.
+ */
+internal fun syncLabelOf(state: DesktopSyncState): String? = when (state) {
+    DesktopSyncState.Unavailable -> null
+    DesktopSyncState.Idle -> "Sync"
+    DesktopSyncState.Syncing -> "Syncing..."
+    is DesktopSyncState.Done ->
+        if (state.applied == 0) "Synced, nothing new" else "Synced, ${state.applied} new"
+    DesktopSyncState.Deferred -> "Server asked to wait"
+    is DesktopSyncState.Halted -> "Stopped: ${state.reason}"
+    is DesktopSyncState.Failed -> "Couldn't reach the server"
 }

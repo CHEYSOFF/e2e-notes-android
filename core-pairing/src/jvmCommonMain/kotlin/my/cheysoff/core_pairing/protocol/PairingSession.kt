@@ -14,10 +14,16 @@ import java.security.interfaces.ECPublicKey
 sealed interface OfferOutcome {
 
     /**
-     * QR1 accepted. [sealCode] is the text to render as QR2, and [sas] is the six digits to show
-     * next to it.
+     * QR1 accepted. [sas] is the six digits to show, and [AccountDeviceSession.seal] now produces
+     * QR2.
+     *
+     * The seal is **not** here, and the split is the whole point: between accepting an offer and
+     * sealing the ARK, the account device may have to reach the server to enrol the device whose key
+     * QR1 carried — a suspending call that cannot happen inside a method the camera analyser drives
+     * frame by frame. The seal has to come afterwards because the id the server assigns goes
+     * **inside** the sealed bundle; see [AccountDeviceSession.seal].
      */
-    data class Accepted(val sealCode: String, val sas: String) : OfferOutcome
+    data class Accepted(val sas: String) : OfferOutcome
 
     /** Nothing usable. [failure] says whether that is fatal. */
     data class Rejected(val failure: PairingFailure) : OfferOutcome
@@ -60,6 +66,14 @@ class NewDeviceSession(
     private val keyDerivation: KeyDerivation,
     private val clock: MonotonicClock,
     serverHint: ServerHint = ServerHint.NONE,
+    /**
+     * This device's long-lived device public key, SEC1 uncompressed, or null.
+     *
+     * Null is the phone-to-phone case and is not a degraded one: that flow has no server, so there
+     * is nothing to be enrolled on. A desktop always supplies one — it is the key the account device
+     * will vouch for, and QR1 is the only channel in this protocol that a human authenticates.
+     */
+    devicePublicKey: ByteArray? = null,
     private val ttlMillis: Long = PairingProtocol.CODE_TTL_MILLIS,
     random: SecureRandom = SecureRandom(),
 ) {
@@ -76,7 +90,7 @@ class NewDeviceSession(
     private var closedWith: PairingFailure? = null
 
     /** QR1: the text to render as a QR code. Constant for the life of the session. */
-    val offerCode: String = PairingCodec.encodeOffer(sid, encodedEb, serverHint)
+    val offerCode: String = PairingCodec.encodeOffer(sid, encodedEb, serverHint, devicePublicKey)
 
     /** Milliseconds until this session expires, floored at zero. */
     fun remainingMillis(): Long = (startedAt + ttlMillis - clock.elapsedMillis()).coerceAtLeast(0)
@@ -171,24 +185,53 @@ class NewDeviceSession(
 /**
  * Device **A**: the device that already holds the account key.
  *
- * A's half is a single step — scan QR1, produce QR2 — so this class is mostly the same guards as
- * [NewDeviceSession] pointing the other way. The one asymmetry worth knowing about is when the
- * clock starts: A cannot tell how old a QR1 is (see [PairingProtocol.CODE_TTL_MILLIS] for why no
- * timestamp travels on the wire), so A's TTL starts when it *accepts* an offer and governs how
- * long QR2 stays on screen. The binding expiry is B's, which runs from the moment B minted `sid`.
+ * A's half is two steps — [onScanned] reads QR1, [seal] produces QR2 — and the gap between them is
+ * deliberate. Everything cryptographic happens in [onScanned]: the on-curve checks, the ECDH, the
+ * session key. What [seal] adds is the `config` blob, and that blob may have to be fetched from a
+ * server first (the id the account's server assigns to the joining device), which is a suspending
+ * call that cannot happen inside a method the camera analyser drives frame by frame.
+ *
+ * The other asymmetry worth knowing about is when the clock starts: A cannot tell how old a QR1 is
+ * (see [PairingProtocol.CODE_TTL_MILLIS] for why no timestamp travels on the wire), so A's TTL
+ * starts when it *accepts* an offer and governs how long QR2 stays on screen. The binding expiry is
+ * B's, which runs from the moment B minted `sid`.
  *
  * **Not thread-safe**, for the same reason as [NewDeviceSession].
  */
 class AccountDeviceSession(
     private val keyDerivation: KeyDerivation,
     private val clock: MonotonicClock,
-    private val bundle: AccountBundle,
+    /**
+     * The Account Root Key, opaque here. The caller owns the array; this class neither copies it nor
+     * zeroes it, exactly as [AccountBundle] does not.
+     */
+    private val ark: ByteArray,
+    /** The account handle that travels with the ARK. */
+    private val accountId: String,
     private val ttlMillis: Long = PairingProtocol.CODE_TTL_MILLIS,
     private val random: SecureRandom = SecureRandom(),
 ) {
 
+    // Takes the two halves of a bundle rather than an `AccountBundle`, because the third field --
+    // `config` -- is not known when this session is constructed. It is decided between `onScanned`
+    // and `seal`, which is the whole reason those are two calls; a session holding a `config` it
+    // then ignored would be a field that lies.
+
     private var closedWith: PairingFailure? = null
     private var acceptedAt: Long? = null
+
+    /**
+     * What [onScanned] agreed, held until [seal] uses it. Null before an offer is accepted and
+     * nulled the moment the seal is produced — the session key is the key the ARK is sealed under,
+     * so it lives for exactly the window between the two calls and no longer.
+     */
+    private var accepted: AcceptedOffer? = null
+
+    private class AcceptedOffer(
+        val sid: ByteArray,
+        val sessionKey: ByteArray,
+        val encodedEa: ByteArray,
+    )
 
     /**
      * The server hint device B sent, available after a successful [onScanned].
@@ -216,6 +259,23 @@ class AccountDeviceSession(
         get() = field?.copyOf()
 
     /**
+     * The joining device's long-lived public key, as it arrived in QR1, or null when the frame
+     * carried none.
+     *
+     * **This is the only key this device may vouch for.** It came over the authenticated visual
+     * channel — a person aimed this camera at that screen — which is what makes an enrolment built
+     * on it meaningful. A key obtained any other way (asked of the server, read from the rendezvous)
+     * would be a key whoever answered got to choose.
+     *
+     * Already validated as a point on P-256 by [onScanned]; a frame carrying an off-curve one is
+     * rejected as [PairingFailure.INVALID_PEER_KEY] and never reaches here. Copied on the way out
+     * for the same reason [receivedSid] is.
+     */
+    var receivedDeviceKey: ByteArray? = null
+        private set
+        get() = field?.copyOf()
+
+    /**
      * Milliseconds until QR2 should be taken off the screen, floored at zero.
      *
      * Returns [ttlMillis] before an offer has been accepted: nothing is on screen yet, so nothing
@@ -231,8 +291,8 @@ class AccountDeviceSession(
     /**
      * Offer one decoded QR string to the session. Called for every symbol the camera resolves.
      *
-     * On success this seals the ARK. That is the moment the account key leaves this device, so
-     * every guard that could refuse has already run by the time [PairingSeal.seal] is called.
+     * On success this agrees the session key and hands back the SAS. It does **not** seal anything:
+     * see [seal], and [OfferOutcome.Accepted] for why the two are separate.
      */
     fun onScanned(text: String): OfferOutcome {
         closedWith?.let { return OfferOutcome.Rejected(PairingFailure.SESSION_CLOSED) }
@@ -259,6 +319,21 @@ class AccountDeviceSession(
             return OfferOutcome.Rejected(reject(PairingFailure.MALFORMED))
         }
 
+        // The device key takes no part in the key schedule, so an invalid one costs nothing
+        // cryptographically -- and it is still refused here rather than relayed, because the only
+        // thing this device will ever do with it is ask a server to trust it. Validating at the
+        // boundary means the vouching path never handles bytes that are not a point.
+        val deviceKey = frame.encodedDeviceKey
+        if (deviceKey != null) {
+            try {
+                P256.decodePublicKey(deviceKey)
+            } catch (e: InvalidPeerKeyException) {
+                return OfferOutcome.Rejected(reject(PairingFailure.INVALID_PEER_KEY))
+            } catch (e: RuntimeException) {
+                return OfferOutcome.Rejected(reject(PairingFailure.MALFORMED))
+            }
+        }
+
         val ephemeral = P256.generateEphemeralKeyPair(random)
         val encodedEa = P256.encodePublicKey(ephemeral.public as ECPublicKey)
         val encodedEb = frame.encodedEphemeralKey
@@ -272,14 +347,44 @@ class AccountDeviceSession(
             sid = frame.sid,
         )
 
-        val nonce = ByteArray(PairingProtocol.GCM_NONCE_SIZE_BYTES).also(random::nextBytes)
-        val seal = PairingSeal.seal(sessionKey, nonce, frame.sid, bundle)
-        val code = PairingCodec.encodeSeal(frame.sid, encodedEa, nonce, seal)
-
         acceptedAt = clock.elapsedMillis()
         receivedServerHint = frame.serverHint
         receivedSid = frame.sid
-        return OfferOutcome.Accepted(sealCode = code, sas = Sas.derive(keyDerivation, bundle.ark, frame.sid))
+        receivedDeviceKey = deviceKey
+        accepted = AcceptedOffer(sid = frame.sid, sessionKey = sessionKey, encodedEa = encodedEa)
+        return OfferOutcome.Accepted(sas = Sas.derive(keyDerivation, ark, frame.sid))
+    }
+
+    /**
+     * Seal the ARK for the accepted offer and return QR2's payload. **Callable exactly once.**
+     *
+     * This is the moment the account key leaves this device, so every guard that could refuse has
+     * already run: the offer was decoded, both points were checked against the curve, and the
+     * session key was agreed. What is added here is [config] — the authenticated half of the
+     * server configuration, carrying the address and the id the server assigned to the joining
+     * device.
+     *
+     * Once for the same reason [NewDeviceSession] closes on success: a second call would seal the
+     * ARK a second time, and a screen the user believes is showing one finished pairing would be
+     * handing the account to whatever asked next.
+     *
+     * @return the QR2 payload, or null when there is no accepted offer to seal for — which covers
+     *   both "nothing was scanned" and "this was already sealed".
+     * @throws IllegalArgumentException if [config] is longer than [AccountBundle.MAX_CONFIG_BYTES].
+     */
+    fun seal(config: String): String? {
+        val offer = accepted ?: return null
+        // Cleared before the seal is built rather than after, so a caller that somehow re-enters
+        // cannot find a live session key here.
+        accepted = null
+        val nonce = ByteArray(PairingProtocol.GCM_NONCE_SIZE_BYTES).also(random::nextBytes)
+        val sealed = PairingSeal.seal(
+            offer.sessionKey,
+            nonce,
+            offer.sid,
+            AccountBundle(ark = ark, accountId = accountId, config = config),
+        )
+        return PairingCodec.encodeSeal(offer.sid, offer.encodedEa, nonce, sealed)
     }
 
     private fun reject(failure: PairingFailure): PairingFailure {

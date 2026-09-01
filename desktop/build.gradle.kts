@@ -48,6 +48,18 @@ dependencies {
     // reimplemented in this module -- the desktop is device B of the same handshake two phones
     // run, with an HTTP source in front of the second leg instead of a camera.
     implementation(project(":core-pairing"))
+    // The record payload format, the envelope codec and the `SyncTransport` over them -- the same
+    // classes the phone uses, not a desktop reading of the same spec. This module used to carry its
+    // own copy of `RecordPayload`, `RecordPayloadCodec` and `RecordCodec`, written before the phone
+    // had any; the copy is gone. Two implementations of one wire format is a note written on the
+    // phone that the laptop reports as unreadable, and the duplicate's own contract test said in as
+    // many words that it was scaffolding to be deleted with the fork.
+    //
+    // `api` on `:core-sync-engine` and `:core-sync-net` inside that module means the engine and the
+    // HTTP client arrive with it, which is what the desktop's `SyncStore` and sync controller need.
+    implementation(project(":core-sync-codec"))
+    implementation(project(":core-sync-engine"))
+    implementation(project(":core-sync-net"))
 
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
@@ -86,18 +98,14 @@ dependencies {
 }
 
 tasks.withType<Test>().configureEach {
-    // Gradle does not pass its own -D properties down into the test JVM, so DemoVaultProvisioner
-    // -- which builds a real vault on disk to launch the app against -- would silently skip
-    // instead of running. Forwarded explicitly rather than set unconditionally so that an
-    // ordinary test run still skips it.
-    System.getProperty("manana.demoVault")?.let { systemProperty("manana.demoVault", it) }
-    // Same arrangement for the end-to-end pairing, which needs a server running at this address.
-    // See PairingAgainstRealServer for how to start one.
-    System.getProperty("manana.pairingServer")?.let { systemProperty("manana.pairingServer", it) }
-    // ...and for VaultArkFingerprint, which checks a pairing done by hand through the real UI.
-    System.getProperty("manana.inspectVault")?.let { systemProperty("manana.inspectVault", it) }
-    System.getProperty("manana.inspectPassphrase")?.let {
-        systemProperty("manana.inspectPassphrase", it)
+    // Gradle does not pass its own -D properties down into the test JVM, so the fixtures that take
+    // one -- a vault directory, a server address -- would silently SKIP rather than run, which
+    // reads as a clean pass. Forwarded by prefix rather than by name so that adding a fixture does
+    // not mean remembering to come back here; only `manana.*` is passed, so nothing else about the
+    // build leaks into a test.
+    System.getProperties().forEach { key, value ->
+        val name = key.toString()
+        if (name.startsWith("manana.")) systemProperty(name, value.toString())
     }
 }
 

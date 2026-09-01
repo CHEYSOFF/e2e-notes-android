@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext HTTP to loopback, and to nothing else.
+
+  The platform default for an app targeting API 28 or later is `cleartextTrafficPermitted="false"`
+  for every destination, loopback included. That default is right and `base-config` below keeps it.
+
+  The one exception matches a rule this app already states in two other places, and it exists so
+  that all three agree rather than so that anything becomes easier:
+
+    - `ServerEndpoint` accepts `https`, or `http` to a loopback address, and refuses everything
+      else. Its reasoning is that the sync server speaks plain HTTP behind a TLS-terminating proxy
+      and binds 127.0.0.1 by default, so loopback is the one case where no traffic leaves the
+      machine and there is nothing for TLS to protect.
+    - `PairingViewModel.sendSeal` applies the same rule before it will POST a sealed bundle.
+
+  Without this file the platform would refuse the connection those two have already agreed to
+  allow, and the failure would arrive as an unexplained "cannot reach the server" from inside
+  OkHttp. Widening it to any other host would be widening the app's own rule, not this file's.
+
+  On a device, loopback is the device itself. It is reachable from a developer machine through
+  `adb reverse tcp:8080 tcp:8080`, which forwards the phone's 127.0.0.1 to the host's, so the
+  traffic still never leaves the pair of machines the developer is holding.
+
+  (Note for anyone editing this file: an XML comment may not contain a double hyphen. The rest of
+  this codebase uses one as an em dash, and doing so here makes the resource unparseable, which
+  surfaces as a Gradle failure in `parseDebugLocalResources`, nowhere near the text that caused it.)
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

@@ -60,6 +60,15 @@ class NewDeviceRendezvous(
     clock: MonotonicClock,
     /** The server this device is asking the phone to send through. Travels in QR1. */
     server: RendezvousUrl,
+    /**
+     * This device's long-lived device public key, SEC1 uncompressed.
+     *
+     * Not optional on this path, unlike on [NewDeviceSession]. A device pairing through a server is
+     * by definition a device that intends to sync with one, and a pairing that handed over the ARK
+     * without enrolling the key would leave the new device holding an account it cannot open a
+     * session for — able to read its own notes and never able to receive another device's.
+     */
+    devicePublicKey: ByteArray,
     ttlMillis: Long = PairingProtocol.CODE_TTL_MILLIS,
     random: SecureRandom = SecureRandom(),
 ) {
@@ -67,10 +76,11 @@ class NewDeviceRendezvous(
     private val session = NewDeviceSession(
         keyDerivation = keyDerivation,
         clock = clock,
-        // The one thing that changes about QR1. It was always a field -- `ServerHint` has carried a
-        // url since the format was written -- and it has always been empty because nothing filled
-        // it. The wire format is not changing; a field is finally being used.
+        // `ServerHint` has carried a url since the format was written and it was empty until this
+        // class filled it. It is a hint, not configuration: the account device shows the host to
+        // the user and asks, and the authoritative copy is the one inside the seal.
         serverHint = ServerHint(url = server.base),
+        devicePublicKey = devicePublicKey,
         ttlMillis = ttlMillis,
         random = random,
     )

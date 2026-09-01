@@ -69,6 +69,8 @@ fun MananaWindow(
     onLock: () -> Unit,
     isRemembered: Boolean,
     onToggleRemember: () -> Unit,
+    syncLabel: String? = null,
+    onSync: (() -> Unit)? = null,
     onExit: () -> Unit,
 ) {
     val windowState = rememberWindowState(
@@ -149,6 +151,8 @@ fun MananaWindow(
                 onLock = onLock,
                 isRemembered = isRemembered,
                 onToggleRemember = onToggleRemember,
+                syncLabel = syncLabel,
+                onSync = onSync,
             )
         }
     }

@@ -1,4 +1,4 @@
-package my.cheysoff.notes.sync
+package my.cheysoff.core_sync_codec
 
 import kotlinx.coroutines.test.runTest
 import my.cheysoff.core_crypto.sync.AccountKeys
@@ -9,9 +9,6 @@ import my.cheysoff.core_domain.sync.FieldValue
 import my.cheysoff.core_domain.sync.Hlc
 import my.cheysoff.core_domain.sync.RecordType
 import my.cheysoff.core_domain.sync.SyncRecord
-import my.cheysoff.core_sync_codec.RecordCodec
-import my.cheysoff.core_sync_codec.RecordPayloadCodec
-import my.cheysoff.core_sync_codec.SyncRecords
 import my.cheysoff.core_sync_engine.IncomingRecord
 import my.cheysoff.core_sync_engine.PushAck
 import my.cheysoff.core_sync_engine.PushRequest

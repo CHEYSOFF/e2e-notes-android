@@ -81,6 +81,8 @@ fun NotesWorkspaceScreen(
     onLock: () -> Unit,
     isRemembered: Boolean,
     onToggleRemember: () -> Unit,
+    syncLabel: String?,
+    onSync: (() -> Unit)?,
 ) {
     Box(modifier = Modifier.fillMaxSize().background(AppBlack)) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -90,6 +92,8 @@ fun NotesWorkspaceScreen(
                 onLock = onLock,
                 isRemembered = isRemembered,
                 onToggleRemember = onToggleRemember,
+                syncLabel = syncLabel,
+                onSync = onSync,
             )
 
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -198,6 +202,8 @@ private fun TitleBar(
     onLock: () -> Unit,
     isRemembered: Boolean,
     onToggleRemember: () -> Unit,
+    syncLabel: String?,
+    onSync: (() -> Unit)?,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -220,6 +226,15 @@ private fun TitleBar(
 
         SearchAffordance(onOpenSearch)
         Spacer(Modifier.width(8.dp))
+        // Shown only when this device is actually enrolled on a server. A sync control on a
+        // device that cannot sync is an invitation to press something that will never work, and
+        // the reason it cannot -- not paired, or a stored address that stopped validating -- is not
+        // something a button can explain.
+        if (syncLabel != null && onSync != null) {
+            RememberAffordance(isRemembered = false, onClick = onSync, label = syncLabel)
+            Spacer(Modifier.width(8.dp))
+        }
+
         // Whether the OS credential store holds the vault key for this machine.
         //
         // Worded rather than iconographic, and shown in both states rather than only when on.
@@ -256,10 +271,14 @@ private fun TitleBar(
  * a button as well as a hint — a shortcut nobody can discover is a shortcut nobody uses.
  */
 @Composable
-private fun RememberAffordance(isRemembered: Boolean, onClick: () -> Unit) {
+private fun RememberAffordance(
+    isRemembered: Boolean,
+    onClick: () -> Unit,
+    label: String? = null,
+) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
-    val label = if (isRemembered) "Remembered" else "Remember"
+    val text = label ?: if (isRemembered) "Remembered" else "Remember"
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -275,7 +294,7 @@ private fun RememberAffordance(isRemembered: Boolean, onClick: () -> Unit) {
             .padding(start = 9.dp, end = 9.dp, top = 5.dp, bottom = 5.dp),
     ) {
         Text(
-            text = label,
+            text = text,
             color = if (isRemembered) AccentIndigo else BodyGrey,
             style = MaterialTheme.typography.labelSmall,
         )

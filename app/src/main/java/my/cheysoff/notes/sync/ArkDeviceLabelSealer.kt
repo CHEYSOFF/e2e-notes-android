@@ -41,7 +41,7 @@ class ArkDeviceLabelSealer @Inject constructor(
 ) : DeviceLabelSealer {
 
     override fun seal(devicePublicKeyB64: String, label: String): ByteArray? {
-        val trimmed = trimToSealableLength(label)
+        val trimmed = DeviceLabelCipher.trimToSealableLength(label)
         if (trimmed.isEmpty()) return null
         val ark = secureUnlock.currentArk() ?: return null
         return try {
@@ -60,23 +60,4 @@ class ArkDeviceLabelSealer @Inject constructor(
         }
     }
 
-    /**
-     * The longest prefix of [label] that fits in [DeviceLabelCipher.MAX_LABEL_UTF8_BYTES] UTF-8
-     * bytes, cut on a character boundary.
-     *
-     * `DeviceLabelCipher.seal` throws for anything longer and says why: it will not truncate,
-     * because cutting UTF-8 at an arbitrary byte can split a multi-byte character and leave a
-     * replacement glyph in somebody's device name. Capping is the caller's job, and this is the
-     * caller. It is done by dropping whole code points from the end, so a Cyrillic or emoji name
-     * comes back shorter rather than broken — and an over-long name must not be able to stop a
-     * device enrolling, which a thrown exception from a coroutine on the enrolment path would.
-     */
-    private fun trimToSealableLength(label: String): String {
-        var candidate = label
-        while (candidate.toByteArray(Charsets.UTF_8).size > DeviceLabelCipher.MAX_LABEL_UTF8_BYTES) {
-            // offsetByCodePoints backwards: drops one whole code point, surrogate pairs included.
-            candidate = candidate.substring(0, candidate.offsetByCodePoints(candidate.length, -1))
-        }
-        return candidate
-    }
 }

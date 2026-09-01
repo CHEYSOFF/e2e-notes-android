@@ -63,7 +63,40 @@ data class VaultHeader(
      * against each other at all.
      */
     val deviceId: String,
+    /**
+     * How this vault syncs, or null in all three fields on a vault that has never paired to a
+     * server.
+     *
+     * Optional rather than a version bump, and that is safe in both directions: `decode` reads the
+     * key only if it is present, and a build that predates the field parses a file containing it
+     * unchanged, because [decode] names the keys it wants rather than rejecting unknown ones. The
+     * consequence of an older build reading a newer file is a vault that opens and does not sync,
+     * which is exactly what an older build could do anyway.
+     */
+    val sync: SyncIdentity? = null,
 ) {
+
+    /**
+     * The three things a desktop needs to be a device on an account's server.
+     *
+     * All three or none. A key with no `deviceId` cannot open a session, a `deviceId` with no key
+     * cannot sign the challenge, and neither is any use without an address — so they are one nullable
+     * object rather than three nullable fields that could disagree.
+     *
+     * Only [deviceKeyWrap] is a secret. [serverUrl] is a host the user typed and [deviceId] is a
+     * public handle the server assigned; `SyncEnrolmentStore` on the phone makes the same call and
+     * gives the same reason — what proves this device is the private key, and that is the part that
+     * is sealed.
+     */
+    data class SyncIdentity(
+        val serverUrl: String,
+        val deviceId: String,
+        /** The PKCS#8 device private key, sealed under `HKDF(vaultKey, DeviceKeyCipher.INFO)`. */
+        val deviceKeyWrap: DeviceKeyWrap,
+        /** The matching SEC1 public point, in the clear. See [DeviceKeyPair]. */
+        val devicePublicKey: ByteArray,
+    )
+
     companion object {
 
         /** The only version this build writes, and the only one it reads. */
@@ -77,6 +110,11 @@ data class VaultHeader(
         private const val KEY_VAULT_KEY = "vaultKey"
         private const val KEY_ARK = "ark"
         private const val KEY_DEVICE_ID = "deviceId"
+        private const val KEY_SYNC = "sync"
+        private const val KEY_SYNC_SERVER = "server"
+        private const val KEY_SYNC_DEVICE_ID = "deviceId"
+        private const val KEY_SYNC_DEVICE_KEY = "deviceKey"
+        private const val KEY_SYNC_DEVICE_PUBLIC_KEY = "devicePublicKey"
         private const val KEY_IV = "iv"
         private const val KEY_CIPHERTEXT = "ct"
 
@@ -115,6 +153,23 @@ data class VaultHeader(
                 put(KEY_VAULT_KEY, sealedObject(header.keyWrap.iv, header.keyWrap.ciphertext))
                 put(KEY_ARK, sealedObject(header.arkWrap.iv, header.arkWrap.ciphertext))
                 put(KEY_DEVICE_ID, JsonPrimitive(header.deviceId))
+                header.sync?.let { sync ->
+                    put(
+                        KEY_SYNC,
+                        buildJsonObject {
+                            put(KEY_SYNC_SERVER, JsonPrimitive(sync.serverUrl))
+                            put(KEY_SYNC_DEVICE_ID, JsonPrimitive(sync.deviceId))
+                            put(
+                                KEY_SYNC_DEVICE_KEY,
+                                sealedObject(sync.deviceKeyWrap.iv, sync.deviceKeyWrap.ciphertext),
+                            )
+                            put(
+                                KEY_SYNC_DEVICE_PUBLIC_KEY,
+                                JsonPrimitive(encoder.encodeToString(sync.devicePublicKey)),
+                            )
+                        },
+                    )
+                }
             }
             return json.encodeToString(JsonObject.serializer(), obj).toByteArray(Charsets.UTF_8)
         }
@@ -157,6 +212,26 @@ data class VaultHeader(
                             ),
                         ),
                         deviceId = root.getValue(KEY_DEVICE_ID).jsonPrimitive.content,
+                        // `root[...]`, not `getValue`: absent is the ordinary state of a vault that
+                        // was created standalone or paired with a phone, and it must parse rather
+                        // than throw into the catch below -- which would report the whole file as
+                        // unreadable and send the caller to the "damaged vault" screen.
+                        sync = root[KEY_SYNC]?.jsonObject?.let { sync ->
+                            val deviceKey = sync.getValue(KEY_SYNC_DEVICE_KEY).jsonObject
+                            SyncIdentity(
+                                serverUrl = sync.getValue(KEY_SYNC_SERVER).jsonPrimitive.content,
+                                deviceId = sync.getValue(KEY_SYNC_DEVICE_ID).jsonPrimitive.content,
+                                deviceKeyWrap = DeviceKeyWrap(
+                                    iv = decoder.decode(deviceKey.getValue(KEY_IV).jsonPrimitive.content),
+                                    ciphertext = decoder.decode(
+                                        deviceKey.getValue(KEY_CIPHERTEXT).jsonPrimitive.content,
+                                    ),
+                                ),
+                                devicePublicKey = decoder.decode(
+                                    sync.getValue(KEY_SYNC_DEVICE_PUBLIC_KEY).jsonPrimitive.content,
+                                ),
+                            )
+                        },
                     )
                 }
             }

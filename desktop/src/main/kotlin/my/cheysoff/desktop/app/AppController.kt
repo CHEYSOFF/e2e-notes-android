@@ -1,5 +1,11 @@
 package my.cheysoff.desktop.app
 
+import my.cheysoff.core_crypto.sync.Base64Url
+import my.cheysoff.core_sync_engine.SyncOutcome
+import my.cheysoff.core_sync_net.DeviceCredentials
+import my.cheysoff.core_sync_net.http.ServerEndpoint
+import my.cheysoff.desktop.sync.DesktopSyncService
+import my.cheysoff.core_sync_codec.RecordCodec
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -8,11 +14,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import my.cheysoff.desktop.pairing.DesktopPairingController
-import my.cheysoff.desktop.store.RecordCodec
 import my.cheysoff.desktop.store.RecordNotesRepository
 import my.cheysoff.desktop.store.RecordStore
 import my.cheysoff.desktop.vault.AccountOrigin
 import my.cheysoff.desktop.vault.DesktopVault
+import my.cheysoff.desktop.vault.PairedEnrolment
 import my.cheysoff.desktop.vault.PassphrasePolicy
 import my.cheysoff.desktop.vault.SetupResult
 import my.cheysoff.desktop.vault.UnlockResult
@@ -96,7 +102,29 @@ class AppController(
      * [abandonPairing], which every path out of pairing goes through — including the successful one,
      * once `setUp` has copied it.
      */
+    /**
+     * What the last sync pass did, for the workspace to show.
+     *
+     * Held here rather than in the workspace because a pass outlives the screen that started it:
+     * the window can be resized, a note opened, the sidebar collapsed, and the answer still has to
+     * arrive somewhere that survives recomposition.
+     */
+    var syncState by mutableStateOf<DesktopSyncState>(DesktopSyncState.Unavailable)
+        private set
+
+    /** Built when the vault opens, and only when this device is actually enrolled on a server. */
+    private var syncService: DesktopSyncService? = null
+
     private var pairedArk: ByteArray? = null
+
+    /**
+     * What the pairing said about the account's server, held alongside [pairedArk].
+     *
+     * Null when the pairing agreed nothing usable — see `DesktopPairingController.enrolmentFrom`.
+     * It carries a private key, so it is dropped and zeroed on every path out of pairing, exactly
+     * as the ARK is.
+     */
+    private var pairedEnrolment: PairedEnrolment? = null
 
     /**
      * Tries the OS credential store, once, at startup.
@@ -141,6 +169,7 @@ class AppController(
             return
         }
         pairedArk = bundle.ark
+        pairedEnrolment = pairing.controller.enrolmentFrom(bundle)
         pairing.controller.cancel()
         screen = Screen.CreatePassphrase(AccountOrigin.PAIRED)
     }
@@ -177,7 +206,7 @@ class AppController(
         }
         withVault {
             try {
-                when (val result = vault.setUp(passphrase, origin, pairedArk)) {
+                when (val result = vault.setUp(passphrase, origin, pairedArk, pairedEnrolment)) {
                     is SetupResult.Created -> {
                         // The wrap on disk now holds it; this copy has no further use. NOT done in
                         // the `finally` alongside the passphrase, because a Rejected verdict puts
@@ -185,6 +214,8 @@ class AppController(
                         // "that passphrase is too short" into "start the pairing again".
                         pairedArk?.fill(0)
                         pairedArk = null
+                        pairedEnrolment?.deviceKey?.privateKeyPkcs8?.fill(0)
+                        pairedEnrolment = null
                         open(result.session)
                     }
 
@@ -252,12 +283,73 @@ class AppController(
             codec = RecordCodec(session.accountKeys),
             node = session.hlcNode,
         )
+        syncService = session.sync?.let { identity ->
+            val endpoint = try {
+                ServerEndpoint(identity.serverUrl)
+            } catch (e: IllegalArgumentException) {
+                // A stored address that no longer validates. The vault still opens and the notes
+                // are readable; it simply cannot sync, and saying so beats discovering it at the
+                // first pass.
+                syncState = DesktopSyncState.Unavailable
+                null
+            }
+            endpoint?.let {
+                DesktopSyncService(
+                    endpoint = it,
+                    deviceKey = identity.deviceKey,
+                    credentials = DeviceCredentials(
+                        accountId = Base64Url.encode(session.accountKeys.accountId),
+                        deviceId = identity.deviceId,
+                    ),
+                    codec = RecordCodec(session.accountKeys),
+                    store = store,
+                    // A copy per call: the label sealer zeroes what it is handed, and zeroing the
+                    // session's own ARK would take the vault down with it.
+                    arkProvider = { session.ark.copyOf() },
+                    clockObserver = repository.clockObserver,
+                )
+            }
+        }
+        syncState = if (syncService == null) DesktopSyncState.Unavailable else DesktopSyncState.Idle
         screen = Screen.Open(session, repository, store)
         message = repository.diagnostics.total.takeIf { it > 0 }?.let {
             // Said out loud rather than logged. These records are still on disk and still belong to
             // the user; the app has simply not been able to read them, and a silent count is how a
             // partial data loss becomes a surprise months later.
             "$it record(s) on disk could not be read and are being left untouched."
+        }
+    }
+
+    /**
+     * Runs one sync pass, if this device can sync at all.
+     *
+     * Foreground and on demand, deliberately: there is no timer and no background service, because
+     * a desktop that synced while locked would need key material available while locked, and
+     * lock-on-close is one of this app's stronger properties.
+     *
+     * Concurrent calls are refused rather than queued. Two passes at once would each push the same
+     * dirty rows and the second would take a `409` on every one of them -- correct, since the merge
+     * is idempotent, but a guaranteed round trip of conflicts for no reason.
+     */
+    fun syncNow() {
+        val service = syncService ?: return
+        if (syncState is DesktopSyncState.Syncing) return
+        syncState = DesktopSyncState.Syncing
+        scope.launch {
+            syncState = try {
+                when (val outcome = withContext(Dispatchers.IO) { service.syncOnce() }) {
+                    is SyncOutcome.Completed -> DesktopSyncState.Done(outcome.stats.applied)
+                    is SyncOutcome.Deferred -> DesktopSyncState.Deferred
+                    // A halt is persisted and does not clear itself, so this device will not sync
+                    // again until somebody deals with it. Named on screen rather than logged.
+                    is SyncOutcome.Halted -> DesktopSyncState.Halted(outcome.reason.name)
+                    // Another pass beat this one to it; its result will land through the same
+                    // state, so there is nothing to report and nothing to retry.
+                    SyncOutcome.AlreadyRunning -> DesktopSyncState.Syncing
+                }
+            } catch (e: Exception) {
+                DesktopSyncState.Failed(e.message ?: e::class.java.simpleName)
+            }
         }
     }
 
@@ -296,6 +388,8 @@ class AppController(
         (screen as? Screen.Pairing)?.controller?.cancel()
         pairedArk?.fill(0)
         pairedArk = null
+        pairedEnrolment?.deviceKey?.privateKeyPkcs8?.fill(0)
+        pairedEnrolment = null
     }
 
     private fun explain(verdict: PassphrasePolicy.Verdict): String = when (verdict) {
