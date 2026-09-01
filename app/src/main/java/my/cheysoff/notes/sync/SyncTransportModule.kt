@@ -9,6 +9,7 @@ import my.cheysoff.core_domain.sync.SyncController
 import my.cheysoff.core_domain.sync.SyncTransportStatus
 import my.cheysoff.core_sync_net.auth.DeviceLabelSealer
 import my.cheysoff.core_sync_net.auth.DeviceSigner
+import my.cheysoff.feature_pairing.identity.DeviceEnroller
 import javax.inject.Singleton
 
 /**
@@ -71,6 +72,18 @@ abstract class SyncTransportModule {
     @Binds
     @Singleton
     abstract fun bindSyncTransportStatus(impl: AppSyncTransportStatus): SyncTransportStatus
+
+    /**
+     * Vouching for a device that has just shown this phone its key.
+     *
+     * `:feature-pairing` declares the seam and cannot implement it: it can see neither the account
+     * key's owner nor the HTTP client, and giving the pairing screen either would put a server
+     * connection in the class that holds the ARK. The same argument [DeviceSigner] and
+     * [DeviceLabelSealer] already make.
+     */
+    @Binds
+    @Singleton
+    abstract fun bindDeviceEnroller(impl: SyncDeviceEnroller): DeviceEnroller
 
     /**
      * The sync engine's entry point, as the two feature modules are allowed to see it.

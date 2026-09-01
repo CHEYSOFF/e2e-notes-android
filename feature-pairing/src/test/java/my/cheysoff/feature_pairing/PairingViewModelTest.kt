@@ -5,14 +5,16 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import my.cheysoff.feature_pairing.di.PairingKeyMaterial
+import my.cheysoff.feature_pairing.identity.DeviceEnroller
 import my.cheysoff.feature_pairing.identity.DeviceIdentity
+import my.cheysoff.feature_pairing.identity.EnrolmentResult
 import my.cheysoff.core_pairing.protocol.AccountBundle
 import my.cheysoff.core_pairing.protocol.AccountDeviceSession
 import my.cheysoff.core_pairing.protocol.CollectResult
 import my.cheysoff.core_pairing.protocol.DepositResult
 import my.cheysoff.core_pairing.protocol.HkdfKeyDerivation
 import my.cheysoff.core_pairing.protocol.NewDeviceSession
-import my.cheysoff.core_pairing.protocol.OfferOutcome
+import my.cheysoff.core_pairing.protocol.PairingConfig
 import my.cheysoff.core_pairing.protocol.PairingFailure
 import my.cheysoff.core_pairing.protocol.PairingProtocol
 import my.cheysoff.core_pairing.protocol.RendezvousClient
@@ -132,7 +134,7 @@ class PairingViewModelTest {
 
         // The other phone -- a real AccountDeviceSession, not a stub -- answers.
         val accountDevice = AccountDeviceSession(HkdfKeyDerivation, clock, bundle.ark, bundle.accountId)
-        val accepted = accountDevice.onScanned(showing.code) as OfferOutcome.Accepted
+        val accepted = accountDevice.accept(showing.code)!!
 
         vm.onIntent(PairingIntent.OfferShown)
         assertTrue(vm.state.value.stage is PairingStage.ScanningSeal)
@@ -168,7 +170,7 @@ class PairingViewModelTest {
         vm.onIntent(PairingIntent.RoleChosen(PairingRole.NewDevice))
         val showing = vm.state.value.stage as PairingStage.ShowingOffer
         val accepted = AccountDeviceSession(HkdfKeyDerivation, clock, bundle.ark, bundle.accountId)
-            .onScanned(showing.code) as OfferOutcome.Accepted
+            .accept(showing.code)!!
         vm.onIntent(PairingIntent.OfferShown)
         vm.onIntent(PairingIntent.CodeScanned(accepted.sealCode))
         assertTrue(vm.state.value.stage is PairingStage.Confirming)
@@ -252,7 +254,7 @@ class PairingViewModelTest {
         // A complete pairing between two unrelated sessions, replayed at this one.
         val strangerOffer = NewDeviceSession(HkdfKeyDerivation, clock)
         val strangerSeal = AccountDeviceSession(HkdfKeyDerivation, clock, bundle.ark, bundle.accountId)
-            .onScanned(strangerOffer.offerCode) as OfferOutcome.Accepted
+            .accept(strangerOffer.offerCode)!!
 
         vm.onIntent(PairingIntent.CodeScanned(strangerSeal.sealCode))
         val stage = vm.state.value.stage as PairingStage.ScanningSeal
@@ -290,7 +292,7 @@ class PairingViewModelTest {
         vm.onIntent(PairingIntent.RoleChosen(PairingRole.NewDevice))
         val showing = vm.state.value.stage as PairingStage.ShowingOffer
         val accepted = AccountDeviceSession(HkdfKeyDerivation, clock, bundle.ark, bundle.accountId)
-            .onScanned(showing.code) as OfferOutcome.Accepted
+            .accept(showing.code)!!
         vm.onIntent(PairingIntent.OfferShown)
 
         val frame = java.util.Base64.getUrlDecoder()
@@ -424,17 +426,195 @@ class PairingViewModelTest {
     }
 
     /**
-     * **The phone-to-phone flow opens no socket.** This is the regression test for the constraint
-     * that mattered most: the rendezvous is an additional path, not a replacement.
+     * The key that gets vouched for is the key that arrived in QR1, and the id that comes back is
+     * sealed into the bundle.
+     *
+     * Both halves matter and both are silent when wrong. Enrolling a *different* key would enrol a
+     * device nobody pointed a camera at - the visual channel is the only thing authenticating this
+     * exchange, so a key from any other source is a key of the server's choosing. And an id that
+     * does not reach the joining device leaves it holding the account key and unable to open a
+     * single session, which is exactly the state this whole path exists to end.
      */
     @Test
-    fun pairingWithAnotherPhoneNeverTouchesTheNetwork() = runTest {
+    fun theKeyFromQr1IsVouchedForAndTheAssignedIdIsSealedIn() = runTest {
+        val enroller = FakeEnroller()
         val rendezvous = FakeRendezvous()
         val clock = FakeClock()
         val vm = viewModel(
             keyMaterial = FakeKeyMaterial(bound = true, bundle = bundle),
             clock = clock,
             rendezvous = rendezvous,
+            enroller = enroller,
+        )
+
+        val deviceKey = aDeviceKey()
+        val computer = NewDeviceSession(
+            HkdfKeyDerivation, clock, ServerHint(url = "https://pair.example.test"), deviceKey,
+        )
+        vm.onIntent(PairingIntent.RoleChosen(PairingRole.HasMyNotes))
+        vm.onIntent(PairingIntent.CodeScanned(computer.offerCode))
+
+        // Nothing is enrolled before the user asks, for the same reason nothing is deposited: the
+        // address arrived unauthenticated and the host is on screen waiting to be approved.
+        assertTrue(enroller.requests.isEmpty())
+
+        vm.onIntent(PairingIntent.SendSeal)
+        advanceUntilIdle()
+
+        val (server, vouchedKey, label) = enroller.requests.single()
+        assertEquals("https://pair.example.test", server.base)
+        assertArrayEquals("the vouched key must be the one QR1 carried", deviceKey, vouchedKey)
+        assertEquals("Computer", label)
+
+        // The far side opens the bundle the way it really would, and finds both values.
+        val paired = computer.onScanned(rendezvous.deposits.single().third) as SealOutcome.Paired
+        val config = PairingConfig.decode(paired.bundle.config)!!
+        assertEquals("https://pair.example.test", config.serverUrl)
+        assertEquals("srv-device-7", config.deviceId)
+    }
+
+    /**
+     * A refused enrolment stops before the bundle is deposited, and is retriable.
+     *
+     * Deliberately not "seal it anyway without an id". A bundle that names a server the joining
+     * device cannot authenticate to produces a device that pairs, looks fine, and never syncs -
+     * discovered days later, on the device that by then holds notes nothing else has.
+     */
+    @Test
+    fun aRefusedEnrolmentDepositsNothingAndCanBeRetried() = runTest {
+        var attempts = 0
+        val enroller = FakeEnroller {
+            attempts++
+            if (attempts == 1) EnrolmentResult.Refused("the server said no") else
+                EnrolmentResult.Enrolled("srv-device-7")
+        }
+        val rendezvous = FakeRendezvous()
+        val clock = FakeClock()
+        val vm = viewModel(
+            keyMaterial = FakeKeyMaterial(bound = true, bundle = bundle),
+            clock = clock,
+            rendezvous = rendezvous,
+            enroller = enroller,
+        )
+
+        vm.onIntent(PairingIntent.RoleChosen(PairingRole.HasMyNotes))
+        vm.onIntent(
+            PairingIntent.CodeScanned(
+                NewDeviceSession(
+                    HkdfKeyDerivation, clock, ServerHint(url = "https://pair.example.test"),
+                    aDeviceKey(),
+                ).offerCode
+            )
+        )
+        vm.onIntent(PairingIntent.SendSeal)
+        advanceUntilIdle()
+
+        assertTrue("nothing may be deposited after a refused vouch", rendezvous.deposits.isEmpty())
+        val stage = vm.state.value.stage as PairingStage.SendingSeal
+        assertFalse(stage.sending)
+        assertEquals("the server said no", stage.message)
+
+        vm.onIntent(PairingIntent.SendSeal)
+        advanceUntilIdle()
+        assertEquals(1, rendezvous.deposits.size)
+        assertTrue(vm.state.value.stage is PairingStage.Confirming)
+    }
+
+    /**
+     * A retry after a failed deposit re-sends the same bytes and does not vouch a second time.
+     *
+     * The server refuses a second `authorize` for a key it has already enrolled, so a retry that
+     * re-vouched would turn one dropped connection into a pairing that can never complete.
+     */
+    @Test
+    fun retryingASendDoesNotVouchAgain() = runTest {
+        var attempts = 0
+        val rendezvous = FakeRendezvous { _, _ ->
+            attempts++
+            if (attempts == 1) DepositResult.Unreachable("timeout") else DepositResult.Deposited(0L)
+        }
+        val enroller = FakeEnroller()
+        val clock = FakeClock()
+        val vm = viewModel(
+            keyMaterial = FakeKeyMaterial(bound = true, bundle = bundle),
+            clock = clock,
+            rendezvous = rendezvous,
+            enroller = enroller,
+        )
+
+        vm.onIntent(PairingIntent.RoleChosen(PairingRole.HasMyNotes))
+        vm.onIntent(
+            PairingIntent.CodeScanned(
+                NewDeviceSession(
+                    HkdfKeyDerivation, clock, ServerHint(url = "https://pair.example.test"),
+                    aDeviceKey(),
+                ).offerCode
+            )
+        )
+        vm.onIntent(PairingIntent.SendSeal)
+        advanceUntilIdle()
+        vm.onIntent(PairingIntent.SendSeal)
+        advanceUntilIdle()
+
+        assertEquals("the vouch must happen once", 1, enroller.requests.size)
+        assertEquals(2, rendezvous.deposits.size)
+        assertEquals(
+            "a retry re-sends the same bytes",
+            rendezvous.deposits[0].third,
+            rendezvous.deposits[1].third,
+        )
+        assertTrue(vm.state.value.stage is PairingStage.Confirming)
+    }
+
+    /**
+     * A QR1 that names a server but offers no device key is sealed with a server and no id.
+     *
+     * That is what a build older than the device-key field produces, and the right answer is to
+     * pair anyway: the ARK still crosses, the joining device still learns the address, and what it
+     * does not get is a session. Refusing the whole pairing would be a worse trade than a device
+     * that syncs once someone enrols it.
+     */
+    @Test
+    fun anOfferWithNoDeviceKeyEnrolsNothingAndSealsNoId() = runTest {
+        val enroller = FakeEnroller()
+        val rendezvous = FakeRendezvous()
+        val clock = FakeClock()
+        val vm = viewModel(
+            keyMaterial = FakeKeyMaterial(bound = true, bundle = bundle),
+            clock = clock,
+            rendezvous = rendezvous,
+            enroller = enroller,
+        )
+
+        val computer = NewDeviceSession(
+            HkdfKeyDerivation, clock, ServerHint(url = "https://pair.example.test"),
+        )
+        vm.onIntent(PairingIntent.RoleChosen(PairingRole.HasMyNotes))
+        vm.onIntent(PairingIntent.CodeScanned(computer.offerCode))
+        vm.onIntent(PairingIntent.SendSeal)
+        advanceUntilIdle()
+
+        assertTrue("there is no key to vouch for", enroller.requests.isEmpty())
+        val paired = computer.onScanned(rendezvous.deposits.single().third) as SealOutcome.Paired
+        val config = PairingConfig.decode(paired.bundle.config)!!
+        assertEquals("https://pair.example.test", config.serverUrl)
+        assertNull(config.deviceId)
+    }
+
+    /**
+     * **The phone-to-phone flow opens no socket.** This is the regression test for the constraint
+     * that mattered most: the rendezvous is an additional path, not a replacement.
+     */
+    @Test
+    fun pairingWithAnotherPhoneNeverTouchesTheNetwork() = runTest {
+        val rendezvous = FakeRendezvous()
+        val enroller = FakeEnroller()
+        val clock = FakeClock()
+        val vm = viewModel(
+            keyMaterial = FakeKeyMaterial(bound = true, bundle = bundle),
+            clock = clock,
+            rendezvous = rendezvous,
+            enroller = enroller,
         )
 
         vm.onIntent(PairingIntent.RoleChosen(PairingRole.HasMyNotes))
@@ -443,11 +623,13 @@ class PairingViewModelTest {
 
         assertTrue(vm.state.value.stage is PairingStage.ShowingSeal)
         assertTrue(rendezvous.deposits.isEmpty())
+        assertTrue("a phone has nothing to enrol on", enroller.requests.isEmpty())
 
         vm.onIntent(PairingIntent.SealShown)
         vm.onIntent(PairingIntent.SasConfirmed)
         advanceUntilIdle()
         assertTrue(rendezvous.deposits.isEmpty())
+        assertTrue(enroller.requests.isEmpty())
     }
 
     /**
@@ -608,11 +790,13 @@ class PairingViewModelTest {
         identity: FakeIdentity = FakeIdentity(),
         clock: FakeClock = FakeClock(),
         rendezvous: FakeRendezvous = FakeRendezvous(),
+        enroller: FakeEnroller = FakeEnroller(),
     ) = PairingViewModel(
         keyDerivation = HkdfKeyDerivation,
         keyMaterial = keyMaterial,
         clock = clock,
         deviceIdentity = identity,
+        deviceEnroller = enroller,
         rendezvousClients = rendezvous,
         // The rule's own dispatcher, so the send runs on the scheduler `runTest` advances. With
         // the real `Dispatchers.IO` here, `advanceUntilIdle()` returns before the deposit has
@@ -643,6 +827,32 @@ class PairingViewModelTest {
 
             override fun collect(sid: ByteArray): CollectResult =
                 error("the account device never collects")
+        }
+    }
+
+    /**
+     * A device enroller that records what it was asked to vouch for.
+     *
+     * [requests] being empty is the assertion that matters most about it: a phone pairing with a
+     * phone reaches no server, so nothing may ask this to enrol anything. What it *records* matters
+     * almost as much -- the key it is handed has to be the one that arrived in QR1, because a
+     * pairing screen that enrolled some other key would be enrolling a device nobody looked at.
+     */
+    private class FakeEnroller(
+        private val result: (ByteArray) -> EnrolmentResult =
+            { EnrolmentResult.Enrolled("srv-device-7") },
+    ) : DeviceEnroller {
+
+        /** Every (server, joining key, label) this was asked to enrol, in order. */
+        val requests = mutableListOf<Triple<RendezvousUrl, ByteArray, String>>()
+
+        override suspend fun enrol(
+            server: RendezvousUrl,
+            joiningDeviceKey: ByteArray,
+            label: String,
+        ): EnrolmentResult {
+            requests += Triple(server, joiningDeviceKey, label)
+            return result(joiningDeviceKey)
         }
     }
 
