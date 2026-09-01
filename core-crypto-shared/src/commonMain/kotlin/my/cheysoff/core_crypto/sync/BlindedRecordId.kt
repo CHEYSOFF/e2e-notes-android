@@ -1,7 +1,6 @@
 package my.cheysoff.core_crypto.sync
 
-import javax.crypto.Mac
-import javax.crypto.spec.SecretKeySpec
+import my.cheysoff.core_crypto.platform.hmacSha256
 
 /**
  * Turns a local record identity into the opaque handle the server files it under.
@@ -21,11 +20,10 @@ import javax.crypto.spec.SecretKeySpec
  * many orders of magnitude out of reach, and 22 base64url characters make a much better path
  * segment than 43.
  *
- * Pure `javax.crypto` — no Android, no state, unit-testable. Never logs `K_id` or the UUID.
+ * Common code over the one HMAC primitive in `platform` — no Android, no JVM, no state,
+ * unit-testable on every target. Never logs `K_id` or the UUID.
  */
 object BlindedRecordId {
-
-    private const val HMAC_ALGORITHM = "HmacSHA256"
 
     /**
      * Computes the blinded ID for ([recType], [uuid]) under [kId].
@@ -39,12 +37,13 @@ object BlindedRecordId {
      */
     fun compute(kId: ByteArray, recType: String, uuid: String): String {
         require(kId.isNotEmpty()) { "K_id must not be empty" }
+        // `encodeToByteArray()` rather than `toByteArray(Charsets.UTF_8)`: `Charsets` is a JVM
+        // type. The two agree on every string this is called with -- record types are literals
+        // and UUIDs are ASCII -- and differ only on a lone surrogate, which a UUID cannot contain.
         val message =
-            (recType + SyncProtocol.BLINDED_ID_SEPARATOR + uuid).toByteArray(Charsets.UTF_8)
+            (recType + SyncProtocol.BLINDED_ID_SEPARATOR + uuid).encodeToByteArray()
 
-        val mac = Mac.getInstance(HMAC_ALGORITHM)
-        mac.init(SecretKeySpec(kId, HMAC_ALGORITHM))
-        val tag = mac.doFinal(message)
+        val tag = hmacSha256(key = kId, message = message)
 
         val truncated = tag.copyOf(SyncProtocol.BLINDED_ID_BYTES)
         val encoded = Base64Url.encode(truncated)

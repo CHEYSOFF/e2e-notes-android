@@ -77,8 +77,8 @@ import my.cheysoff.core_crypto.sync.Hkdf
  * rotating discards the tie-breaking history, not rotating leaves a revoked device's past edits
  * attributable within the account. This file takes no position; it only makes both reachable.
  *
- * Pure JVM and stateless, so it is unit-tested in `src/test` without a Keystore. Never logs key
- * material.
+ * Pure common Kotlin and stateless, so it is unit-tested without a Keystore on every target.
+ * Never logs key material.
  */
 object HlcNode {
 
@@ -113,8 +113,11 @@ object HlcNode {
         require(deviceId.isNotEmpty()) { "deviceId must not be empty" }
         val bytes = Hkdf.derive(
             ikm = ark,
-            salt = deviceId.toByteArray(Charsets.US_ASCII),
-            info = INFO_HLC_NODE.toByteArray(Charsets.US_ASCII),
+            // `encodeToByteArray()` rather than `toByteArray(Charsets.US_ASCII)`; `Charsets` is a
+            // JVM type. `deviceId` is a base64url-encoded 128-bit random value and the info string
+            // is an ASCII literal, so the two encodings are byte-identical here.
+            salt = deviceId.encodeToByteArray(),
+            info = INFO_HLC_NODE.encodeToByteArray(),
             length = NODE_BYTES,
         )
         try {
@@ -127,7 +130,8 @@ object HlcNode {
     /**
      * Lowercase hex, hand-rolled.
      *
-     * `Long.toHexString` would drop leading zeroes and `java.util.HexFormat` is Java 17, while
+     * `Long.toHexString` would drop leading zeroes and `java.util.HexFormat` is Java 17 and JVM-only,
+ * while
      * base64url — the encoding the rest of the sync code uses — has `-` in its alphabet, and `-`
      * is the separator inside the clock's own wire form. Hex has none of those problems and keeps
      * `Hlc.parse` a two-`indexOf` function.
