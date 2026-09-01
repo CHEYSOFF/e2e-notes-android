@@ -98,18 +98,14 @@ dependencies {
 }
 
 tasks.withType<Test>().configureEach {
-    // Gradle does not pass its own -D properties down into the test JVM, so DemoVaultProvisioner
-    // -- which builds a real vault on disk to launch the app against -- would silently skip
-    // instead of running. Forwarded explicitly rather than set unconditionally so that an
-    // ordinary test run still skips it.
-    System.getProperty("manana.demoVault")?.let { systemProperty("manana.demoVault", it) }
-    // Same arrangement for the end-to-end pairing, which needs a server running at this address.
-    // See PairingAgainstRealServer for how to start one.
-    System.getProperty("manana.pairingServer")?.let { systemProperty("manana.pairingServer", it) }
-    // ...and for VaultArkFingerprint, which checks a pairing done by hand through the real UI.
-    System.getProperty("manana.inspectVault")?.let { systemProperty("manana.inspectVault", it) }
-    System.getProperty("manana.inspectPassphrase")?.let {
-        systemProperty("manana.inspectPassphrase", it)
+    // Gradle does not pass its own -D properties down into the test JVM, so the fixtures that take
+    // one -- a vault directory, a server address -- would silently SKIP rather than run, which
+    // reads as a clean pass. Forwarded by prefix rather than by name so that adding a fixture does
+    // not mean remembering to come back here; only `manana.*` is passed, so nothing else about the
+    // build leaks into a test.
+    System.getProperties().forEach { key, value ->
+        val name = key.toString()
+        if (name.startsWith("manana.")) systemProperty(name, value.toString())
     }
 }
 
