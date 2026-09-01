@@ -310,6 +310,62 @@ internal class JsonWriter {
             out.append(value.toString())
         }
 
+        fun field(name: String, value: Boolean) {
+            separate()
+            writeString(name)
+            out.append(':')
+            out.append(if (value) "true" else "false")
+        }
+
+        /**
+         * Writes `"name": { … }` from a map of string values.
+         *
+         * Added for `RecordPayload`'s `clocks`, which is the first nested object this writer has
+         * had to produce -- every request body `SyncHttpClient` sends is flat, or an array of flat
+         * objects, which is what the class KDoc means by "sized for exactly the bodies `server/`
+         * exchanges". The record payload is not one of those bodies: it is sealed before it ever
+         * reaches a request, and it is also what an Apple device writes to its own disk.
+         *
+         * Key order is the map's, so an ordered map in gives byte-stable output.
+         */
+        fun stringMapField(name: String, entries: Map<String, String>) {
+            separate()
+            writeString(name)
+            out.append(":{")
+            var firstEntry = true
+            for ((key, value) in entries) {
+                if (!firstEntry) out.append(',')
+                firstEntry = false
+                writeString(key)
+                out.append(':')
+                writeString(value)
+            }
+            out.append('}')
+        }
+
+        /**
+         * As [stringMapField], but a null value is written as JSON `null` rather than as `""`.
+         *
+         * The distinction is load-bearing rather than cosmetic: `folderId`, `colorArgb` and
+         * `deletedAt` are nullable columns, and collapsing null to the empty string would make "no
+         * folder" and "a folder whose id is the empty string" the same value. `FieldValue` makes
+         * the same point about its own parts.
+         */
+        fun nullableStringMapField(name: String, entries: Map<String, String?>) {
+            separate()
+            writeString(name)
+            out.append(":{")
+            var firstEntry = true
+            for ((key, value) in entries) {
+                if (!firstEntry) out.append(',')
+                firstEntry = false
+                writeString(key)
+                out.append(':')
+                if (value == null) out.append("null") else writeString(value)
+            }
+            out.append('}')
+        }
+
         /** Writes `"name": [ … ]`, calling [body] once per element of [items]. */
         fun <T> arrayField(name: String, items: List<T>, body: ObjectScope.(T) -> Unit) {
             separate()

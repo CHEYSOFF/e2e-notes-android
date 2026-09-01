@@ -1,0 +1,77 @@
+-- The whole schema. One table, four columns, and every one of them is either opaque or
+-- bookkeeping.
+--
+-- This is the point of the design rather than a limitation of it: a row IS a sealed
+-- `RecordEnvelope`, so what is written to this device's disk is byte-for-byte the same thing that
+-- is written to the server. At-rest security equals on-the-wire security, and the device is a sync
+-- replica by construction rather than a database that also happens to sync.
+--
+-- ## What that costs, said plainly
+--
+-- **This store cannot query.** There is no `WHERE is_deleted = 0`, no `ORDER BY updated_at`, no
+-- index on a folder, and there never can be, because every one of those values is inside the
+-- ciphertext. `RecordNotesRepository` therefore reads every row, opens it, and filters and sorts in
+-- memory. For a notes app that is a fine trade -- a thousand notes is four megabytes of AES-GCM,
+-- which is a couple of milliseconds on any device that can run Compose -- and it is a real trade
+-- that should be re-examined if this store is ever asked to hold something other than notes.
+--
+-- The Android side made the opposite trade: `:core-data`'s Room schema has real columns and real
+-- indexes, and encrypts the whole file with SQLCipher instead. Neither is wrong; they protect
+-- against different things. SQLCipher protects the file, this protects the record.
+--
+-- ## What the server can see, and what this table can see
+--
+-- Exactly the same set: a blinded ID and an opaque blob. `blinded_id` is
+-- `base64url(HMAC(K_id, recType || ":" || uuid))[0..16]`, so this table does not know a note's real
+-- UUID either, and does not know whether a row is a note or a folder.
+CREATE TABLE records (
+    -- The server-visible handle, and the primary key here for the same reason it is there: it is
+    -- the only stable name a record has that does not disclose anything.
+    blinded_id TEXT NOT NULL PRIMARY KEY,
+
+    -- `ver(1) || nonce(12) || ciphertext || tag(16)`, exactly as `RecordEnvelope.seal` produced it
+    -- and exactly as it would be pushed. Padded to a 4 KiB bucket, so a row's length says only
+    -- which bucket the note falls in.
+    envelope BLOB NOT NULL,
+
+    -- 1 when this device holds a version the server has not acknowledged. Bookkeeping, and the one
+    -- column that is legitimately different on two converged replicas.
+    dirty INTEGER NOT NULL DEFAULT 1,
+
+    -- The `seq` of the version this device last agreed with the server on; 0 = never sent. The
+    -- compare-and-set baseline for the next push.
+    last_synced_seq INTEGER NOT NULL DEFAULT 0
+);
+
+-- Every row. The only read the repository has, because nothing in the envelope is queryable.
+selectAll:
+SELECT blinded_id, envelope, dirty, last_synced_seq FROM records;
+
+-- One row by its blinded ID, for the writes that need to read-modify-write a single record.
+selectOne:
+SELECT blinded_id, envelope, dirty, last_synced_seq FROM records WHERE blinded_id = ?;
+
+-- Insert or replace.
+--
+-- `INSERT OR REPLACE` and not `ON CONFLICT(blinded_id) DO UPDATE`, and the reason is worth writing
+-- down because the second is what a modern SQLite would normally get. SQLDelight compiles against
+-- the SQLite 3.18 dialect by default and upsert syntax arrived in 3.24, so the `ON CONFLICT` form
+-- is a build error here unless a newer dialect artifact is added. It is not worth adding one: the
+-- two forms differ only in how they treat columns the statement does not name, this statement names
+-- all four, and there is no trigger and no foreign key in this schema for `REPLACE`'s
+-- delete-then-insert to disturb.
+--
+-- If a column is ever added to this table, revisit this line before adding it -- at that point the
+-- difference stops being academic.
+upsert:
+INSERT OR REPLACE INTO records(blinded_id, envelope, dirty, last_synced_seq)
+VALUES (?, ?, ?, ?);
+
+-- Destroys a row. The only caller is a purge -- an ordinary "delete" is a tombstone that stays,
+-- because the protocol has no delete and a row that vanished here would be resurrected by the next
+-- pull from a peer that still has it.
+deleteOne:
+DELETE FROM records WHERE blinded_id = ?;
+
+countAll:
+SELECT count(*) FROM records;
