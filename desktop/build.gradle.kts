@@ -48,6 +48,18 @@ dependencies {
     // reimplemented in this module -- the desktop is device B of the same handshake two phones
     // run, with an HTTP source in front of the second leg instead of a camera.
     implementation(project(":core-pairing"))
+    // The record payload format, the envelope codec and the `SyncTransport` over them -- the same
+    // classes the phone uses, not a desktop reading of the same spec. This module used to carry its
+    // own copy of `RecordPayload`, `RecordPayloadCodec` and `RecordCodec`, written before the phone
+    // had any; the copy is gone. Two implementations of one wire format is a note written on the
+    // phone that the laptop reports as unreadable, and the duplicate's own contract test said in as
+    // many words that it was scaffolding to be deleted with the fork.
+    //
+    // `api` on `:core-sync-engine` and `:core-sync-net` inside that module means the engine and the
+    // HTTP client arrive with it, which is what the desktop's `SyncStore` and sync controller need.
+    implementation(project(":core-sync-codec"))
+    implementation(project(":core-sync-engine"))
+    implementation(project(":core-sync-net"))
 
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)

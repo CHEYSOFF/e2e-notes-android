@@ -1,10 +1,10 @@
 package my.cheysoff.desktop.fixture
 
+import my.cheysoff.core_sync_codec.RecordCodec
 import kotlinx.coroutines.runBlocking
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.desktop.keychain.NoCredentialStore
-import my.cheysoff.desktop.store.RecordCodec
 import my.cheysoff.desktop.store.RecordNotesRepository
 import my.cheysoff.desktop.store.RecordStore
 import my.cheysoff.desktop.vault.AccountOrigin

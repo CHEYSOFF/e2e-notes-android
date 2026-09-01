@@ -1,5 +1,7 @@
 package my.cheysoff.desktop.store
 
+import my.cheysoff.core_sync_codec.OpenResult
+import my.cheysoff.core_sync_codec.RecordCodec
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map

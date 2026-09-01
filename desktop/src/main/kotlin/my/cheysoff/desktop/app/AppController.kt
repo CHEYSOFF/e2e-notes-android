@@ -1,5 +1,6 @@
 package my.cheysoff.desktop.app
 
+import my.cheysoff.core_sync_codec.RecordCodec
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -8,11 +9,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import my.cheysoff.desktop.pairing.DesktopPairingController
-import my.cheysoff.desktop.store.RecordCodec
 import my.cheysoff.desktop.store.RecordNotesRepository
 import my.cheysoff.desktop.store.RecordStore
 import my.cheysoff.desktop.vault.AccountOrigin
 import my.cheysoff.desktop.vault.DesktopVault
+import my.cheysoff.desktop.vault.PairedEnrolment
 import my.cheysoff.desktop.vault.PassphrasePolicy
 import my.cheysoff.desktop.vault.SetupResult
 import my.cheysoff.desktop.vault.UnlockResult
@@ -99,6 +100,15 @@ class AppController(
     private var pairedArk: ByteArray? = null
 
     /**
+     * What the pairing said about the account's server, held alongside [pairedArk].
+     *
+     * Null when the pairing agreed nothing usable — see `DesktopPairingController.enrolmentFrom`.
+     * It carries a private key, so it is dropped and zeroed on every path out of pairing, exactly
+     * as the ARK is.
+     */
+    private var pairedEnrolment: PairedEnrolment? = null
+
+    /**
      * Tries the OS credential store, once, at startup.
      *
      * Failure is silent by design — a machine that was never asked to remember anything is the
@@ -141,6 +151,7 @@ class AppController(
             return
         }
         pairedArk = bundle.ark
+        pairedEnrolment = pairing.controller.enrolmentFrom(bundle)
         pairing.controller.cancel()
         screen = Screen.CreatePassphrase(AccountOrigin.PAIRED)
     }
@@ -177,7 +188,7 @@ class AppController(
         }
         withVault {
             try {
-                when (val result = vault.setUp(passphrase, origin, pairedArk)) {
+                when (val result = vault.setUp(passphrase, origin, pairedArk, pairedEnrolment)) {
                     is SetupResult.Created -> {
                         // The wrap on disk now holds it; this copy has no further use. NOT done in
                         // the `finally` alongside the passphrase, because a Rejected verdict puts
@@ -185,6 +196,8 @@ class AppController(
                         // "that passphrase is too short" into "start the pairing again".
                         pairedArk?.fill(0)
                         pairedArk = null
+                        pairedEnrolment?.deviceKey?.privateKeyPkcs8?.fill(0)
+                        pairedEnrolment = null
                         open(result.session)
                     }
 
@@ -296,6 +309,8 @@ class AppController(
         (screen as? Screen.Pairing)?.controller?.cancel()
         pairedArk?.fill(0)
         pairedArk = null
+        pairedEnrolment?.deviceKey?.privateKeyPkcs8?.fill(0)
+        pairedEnrolment = null
     }
 
     private fun explain(verdict: PassphrasePolicy.Verdict): String = when (verdict) {
