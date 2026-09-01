@@ -7,10 +7,10 @@ import my.cheysoff.core_store.db.RecordDatabase
 /**
  * iOS and macOS: SQLDelight's native driver, over SQLiter, over the SQLite that ships in the OS.
  *
- * NOT COMPILED. It is, however, the *only* line of this module that has not been exercised: every
- * other line — `RecordStore`, `RecordNotesRepository`, `NoteRecords`, the schema and its queries —
- * runs against a real SQLite database in `jvmTest` on the machine this was written on. See the
- * build script.
+ * Compiled, never run — and it is the *only* line of this module in that position. Every other
+ * line — `RecordStore`, `RecordNotesRepository`, `NoteRecords`, the schema and its queries — runs
+ * against a real SQLite database in `jvmTest` on the machine this was written on. See the build
+ * script for why the module is arranged to make that true.
  *
  * The database lands in the app's Documents directory, which is where SQLiter puts it by default.
  * Two consequences worth knowing before the first App Store submission, neither of which this file

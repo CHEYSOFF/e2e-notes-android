@@ -82,7 +82,8 @@ class WireFieldNamesAreInOnePlaceTest {
         val offenders = mutableListOf<String>()
         mainSources().forEach { file ->
             val literals = codeStringLiterals(file.readText())
-            for (name in removed) {
+            val forbidden = removed - allowedIn(file.name)
+            for (name in forbidden) {
                 if (name in literals) offenders += "${file.name} still spells '$name'"
             }
         }
@@ -92,6 +93,26 @@ class WireFieldNamesAreInOnePlaceTest {
                 offenders.joinToString("\n"),
             offenders.isEmpty(),
         )
+    }
+
+    /**
+     * The one narrow exemption, and why it is not a hole in the check above.
+     *
+     * `recType` and `hlc` did not stop existing when they left the wire. They moved **inside the
+     * sealed payload** -- that move is what took them off the wire -- and `RecordPayload.kt` is the
+     * file that reads and writes that payload, so those two strings are exactly where they should
+     * be. See `RecordEnvelope`'s KDoc, which sets out at length why the record's type and its clock
+     * are inside the ciphertext now, and `e2e-sync-phase3-plan.md` §5.1, which specifies the payload
+     * that spells them.
+     *
+     * The exemption is by file **and** by name, not by file alone, which is the point. If
+     * `RecordPayload.kt` ever spelled `receivedAt`, `deviceLabel` or plaintext `label`, it would
+     * still fail -- those three left the protocol entirely rather than moving inward. And no other
+     * file gets either name back.
+     */
+    private fun allowedIn(fileName: String): List<String> = when (fileName) {
+        "RecordPayload.kt" -> listOf("recType", "hlc")
+        else -> emptyList()
     }
 
     @Test

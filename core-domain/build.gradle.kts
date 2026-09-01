@@ -33,17 +33,15 @@ kotlin {
     // this module's whole layout depends on.
     mingwX64()
 
-    // The Apple targets. NONE of them has ever been compiled: the Kotlin/Native Apple compilers
-    // only run on macOS, and on this machine the Kotlin Gradle plugin disables every one of them
-    // (see `kotlin.native.ignoreDisabledTargets` in gradle.properties).
+    // The Apple targets. All four COMPILE on this machine: Kotlin/Native cross-compiles Apple
+    // klibs from any host, so `compileKotlinIosArm64` and its siblings are real checks here rather
+    // than aspirations. None of them has been LINKED or RUN, which needs macOS.
     //
-    // What stands in for that evidence is the `mingwX64` canary directly above. It is a
-    // Kotlin/Native target that DOES build here, over exactly this `commonMain` and no other
-    // source, so a green canary says the module is free of the JVM and that an Apple target is
-    // compiling the same code with a different backend. That is a far stronger position than
-    // :core-crypto-shared's Apple actuals are in, where the code itself is unbuilt, and it is
-    // precisely the property the canary was added to protect before there was an Apple target to
-    // justify it. Keep it green.
+    // That does not retire the `mingwX64` canary above, and it should not be read as retiring it.
+    // The canary is what fails FAST and on every machine, in seconds, without downloading an Apple
+    // platform-library set; and it is the check that keeps working if a future Kotlin release drops
+    // Apple klib cross-compilation, which is a JetBrains implementation detail rather than a
+    // guarantee. Keep it green.
     //
     // `macosArm64` earns its place separately from the three iOS ones: it is the only Apple target
     // whose tests run without a simulator, so `./gradlew :core-domain:macosArm64Test` is the

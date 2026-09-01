@@ -25,11 +25,10 @@ kotlin {
     // yes-or-no answer on whether the Apple crypto agrees with the JVM. Run that first. See
     // docs/BUILDING-IOS.md.
     //
-    // NONE of these have ever been compiled. The Kotlin/Native Apple compilers only run on macOS
-    // and this module was written on Windows, where every one of these targets is disabled by the
-    // Kotlin Gradle plugin (see `kotlin.native.ignoreDisabledTargets` in gradle.properties). What
-    // has been verified here is the JVM and Android halves, which is a statement about the shared
-    // code and not about `appleMain`.
+    // All four COMPILE on this machine -- Kotlin/Native cross-compiles Apple klibs from any host --
+    // and none of them has been LINKED or RUN, which needs macOS. So `appleMain` is type-checked
+    // against the real CommonCrypto bindings and has never produced a byte. That distinction is
+    // the whole of what `PlatformCrypto.apple.kt` and docs/BUILDING-IOS.md are careful about.
     iosArm64()
     iosSimulatorArm64()
     iosX64()

@@ -1,0 +1,30 @@
+// Build settings the Xcode project reads, kept in a file so that the one value which is personal —
+// the signing team — is changed in one obvious place rather than hunted for in the project editor.
+//
+// See docs/BUILDING-IOS.md for how to attach this to a target ("Info" tab → Configurations →
+// pick this file for both Debug and Release).
+
+APP_NAME = Mañana
+BUNDLE_ID = my.cheysoff.manana
+
+// Your Apple Developer Team ID — the ten-character string from
+// https://developer.apple.com/account under Membership.
+//
+// LEAVE IT EMPTY to run on the SIMULATOR, which needs no signing at all. Fill it in only when
+// installing on a device. An empty value here is not a placeholder that was forgotten; it is the
+// setting that lets someone build and run this without an Apple Developer account.
+TEAM_ID =
+
+PRODUCT_BUNDLE_IDENTIFIER = $(BUNDLE_ID)
+DEVELOPMENT_TEAM = $(TEAM_ID)
+
+// iOS 15 is the floor, and it is chosen rather than inherited.
+//
+//  - Compose Multiplatform 1.12 requires iOS 13 or later.
+//  - `NativeSqliteDriver` (SQLDelight over SQLiter) needs nothing special.
+//  - The Keychain attributes in `Keychain.kt` are all long-standing.
+//
+// So 15 is not a technical minimum; it is a "do not carry compatibility code nobody will test"
+// line, and every iPhone that can install a current app is well past it. Lower it if there is a
+// real device that needs it, and expect nothing to break.
+IPHONEOS_DEPLOYMENT_TARGET = 15.0

@@ -17,10 +17,10 @@ kotlin {
     }
     jvm { compilerOptions { jvmTarget.set(JvmTarget.JVM_11) } }
 
-    // The Apple targets. NONE of them has ever been compiled -- the Kotlin/Native Apple compilers
-    // only run on macOS -- and this module is where that matters most, because `appleMain` here is
-    // not a thin adapter: it carries the certificate pin. See `SyncEngine.apple.kt`, and read
-    // docs/BUILDING-IOS.md before trusting a build of it.
+    // The Apple targets. They compile here and have never been linked or run, and this module is
+    // where that gap matters most: `appleMain` here is not a thin adapter, it carries the
+    // certificate pin, and "it compiles" says nothing about whether a bad pin is rejected. See
+    // `SyncEngine.apple.kt`, and read docs/BUILDING-IOS.md before trusting a build of it.
     iosArm64()
     iosSimulatorArm64()
     iosX64()

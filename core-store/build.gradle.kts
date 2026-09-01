@@ -23,7 +23,8 @@ kotlin {
     // with -- and it is also what makes this module testable on a machine with no Apple toolchain.
     jvm { compilerOptions { jvmTarget.set(JvmTarget.JVM_11) } }
 
-    // The Apple targets. Never compiled here.
+    // The Apple targets. They COMPILE here -- Kotlin/Native cross-compiles Apple klibs from any
+    // host -- and nothing here has ever been linked or run.
     iosArm64()
     iosSimulatorArm64()
     iosX64()
