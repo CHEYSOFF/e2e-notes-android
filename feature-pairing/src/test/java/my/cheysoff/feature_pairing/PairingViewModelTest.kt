@@ -3,6 +3,8 @@ package my.cheysoff.feature_pairing
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import my.cheysoff.feature_pairing.di.PairingKeyMaterial
 import my.cheysoff.feature_pairing.identity.DeviceEnroller
@@ -788,6 +790,13 @@ class PairingViewModelTest {
     }
 
     // -- joining an account held by a computer ------------------------------------------------
+    //
+    // Every test below tears its ViewModel down in a `finally`, and that is not tidiness. The stage
+    // this direction ends on polls the bundle slot every 1.5 s, and `runTest` does not return while
+    // a coroutine on its scheduler keeps rescheduling itself -- so a build that started that loop
+    // at the wrong moment would HANG the suite rather than fail a test, and a hang names nothing.
+    // `stopPolling` cancels the loop, and putting it in a `finally` means an assertion that has
+    // already failed still gets its name into the report.
 
     /**
      * The whole invite direction, with a real `AccountInviteSession` playing the computer.
@@ -809,56 +818,61 @@ class PairingViewModelTest {
             clock = clock,
             rendezvous = rendezvous,
         )
+        try {
 
-        val computer = AccountInviteSession(
-            keyDerivation = HkdfKeyDerivation,
-            clock = clock,
-            server = RendezvousUrl.parse("https://pair.example.test")!!,
-        )
+            val computer = AccountInviteSession(
+                keyDerivation = HkdfKeyDerivation,
+                clock = clock,
+                server = RendezvousUrl.parse("https://pair.example.test")!!,
+            )
 
-        vm.onIntent(PairingIntent.RoleChosen(PairingRole.JoinFromComputer))
-        assertTrue(vm.state.value.stage is PairingStage.ScanningInvite)
-        assertTrue("nothing is sent by reading a code", rendezvous.deposits.isEmpty())
+            vm.onIntent(PairingIntent.RoleChosen(PairingRole.JoinFromComputer))
+            assertTrue(vm.state.value.stage is PairingStage.ScanningInvite)
+            assertTrue("nothing is sent by reading a code", rendezvous.deposits.isEmpty())
 
-        vm.onIntent(PairingIntent.CodeScanned(computer.inviteCode))
-        val answering = vm.state.value.stage as PairingStage.AnsweringInvite
-        assertEquals("pair.example.test", answering.host)
-        assertTrue(answering.secure)
-        assertTrue("the send is an act, not a consequence of scanning", rendezvous.deposits.isEmpty())
+            vm.onIntent(PairingIntent.CodeScanned(computer.inviteCode))
+            val answering = vm.state.value.stage as PairingStage.AnsweringInvite
+            assertEquals("pair.example.test", answering.host)
+            assertTrue(answering.secure)
+            assertTrue("the send is an act, not a consequence of scanning", rendezvous.deposits.isEmpty())
 
-        vm.onIntent(PairingIntent.SendReply)
-        advanceUntilIdle()
+            vm.onIntent(PairingIntent.SendReply)
+            // runCurrent(), not advanceUntilIdle(): see `pumpJoining`'s note.
+            runCurrent()
 
-        assertEquals(listOf(RendezvousSlot.REPLY), rendezvous.depositedSlots)
-        val confirming = vm.state.value.stage as PairingStage.Confirming
-        assertEquals(PairingRole.JoinFromComputer, confirming.role)
+            assertEquals(listOf(RendezvousSlot.REPLY), rendezvous.depositedSlots)
+            val confirming = vm.state.value.stage as PairingStage.Confirming
+            assertEquals(PairingRole.JoinFromComputer, confirming.role)
 
-        // The computer's half, run for real against what this phone deposited.
-        val agreed = computer.onReply(rendezvous.deposits.single().third) as ReplyOutcome.Agreed
-        assertEquals("the two screens must show the same digits", confirming.sas, agreed.sas)
+            // The computer's half, run for real against what this phone deposited.
+            val agreed = computer.onReply(rendezvous.deposits.single().third) as ReplyOutcome.Agreed
+            assertEquals("the two screens must show the same digits", confirming.sas, agreed.sas)
 
-        // Nothing has been asked for yet: the account key is not even sealed on the other side.
-        assertTrue(rendezvous.collectedSlots.isEmpty())
+            // Nothing has been asked for yet: the account key is not even sealed on the other side.
+            assertTrue(rendezvous.collectedSlots.isEmpty())
 
-        val sealCode = computer.confirm()!!.seal(bundle.ark, bundle.accountId, PairingConfig.encode(
-            serverUrl = "https://pair.example.test",
-            deviceId = "srv-phone-3",
-        ))!!
-        rendezvous.collectAnswer = { _, slot ->
-            if (slot == RendezvousSlot.BUNDLE) CollectResult.Collected(sealCode)
-            else CollectResult.Pending
+            val sealCode = computer.confirm()!!.seal(bundle.ark, bundle.accountId, PairingConfig.encode(
+                serverUrl = "https://pair.example.test",
+                deviceId = "srv-phone-3",
+            ))!!
+            rendezvous.collectAnswer = { _, slot ->
+                if (slot == RendezvousSlot.BUNDLE) CollectResult.Collected(sealCode)
+                else CollectResult.Pending
+            }
+
+            vm.onIntent(PairingIntent.SasConfirmed)
+            runCurrent()
+
+            assertEquals(listOf(RendezvousSlot.BUNDLE), rendezvous.collectedSlots)
+            assertEquals(PairingStage.Finished(PairingRole.JoinFromComputer), vm.state.value.stage)
+            assertArrayEquals(bundle.ark, keyMaterial.adopted!!.ark)
+            // The config the phone needs to sync, which has no other channel to travel on.
+            val config = PairingConfig.decode(keyMaterial.adopted!!.config)!!
+            assertEquals("https://pair.example.test", config.serverUrl)
+            assertEquals("srv-phone-3", config.deviceId)
+        } finally {
+            stopPolling(vm)
         }
-
-        vm.onIntent(PairingIntent.SasConfirmed)
-        advanceUntilIdle()
-
-        assertEquals(listOf(RendezvousSlot.BUNDLE), rendezvous.collectedSlots)
-        assertEquals(PairingStage.Finished(PairingRole.JoinFromComputer), vm.state.value.stage)
-        assertArrayEquals(bundle.ark, keyMaterial.adopted!!.ark)
-        // The config the phone needs to sync, which has no other channel to travel on.
-        val config = PairingConfig.decode(keyMaterial.adopted!!.config)!!
-        assertEquals("https://pair.example.test", config.serverUrl)
-        assertEquals("srv-phone-3", config.deviceId)
     }
 
     /**
@@ -877,20 +891,29 @@ class PairingViewModelTest {
             clock = clock,
             rendezvous = rendezvous,
         )
-        val computer = AccountInviteSession(
-            HkdfKeyDerivation, clock, RendezvousUrl.parse("https://pair.example.test")!!,
-        )
+        try {
+            val computer = AccountInviteSession(
+                HkdfKeyDerivation, clock, RendezvousUrl.parse("https://pair.example.test")!!,
+            )
 
-        vm.onIntent(PairingIntent.RoleChosen(PairingRole.JoinFromComputer))
-        vm.onIntent(PairingIntent.CodeScanned(computer.inviteCode))
-        vm.onIntent(PairingIntent.SendReply)
-        advanceUntilIdle()
+            vm.onIntent(PairingIntent.RoleChosen(PairingRole.JoinFromComputer))
+            vm.onIntent(PairingIntent.CodeScanned(computer.inviteCode))
+            vm.onIntent(PairingIntent.SendReply)
+            // runCurrent(), not advanceUntilIdle(). A build that started collecting here would poll
+            // every 1.5 s for ever, and advanceUntilIdle() would spin virtual time rather than return
+            // -- so the mutant would hang the suite instead of failing this test by name. Draining only
+            // what is scheduled now is also exactly the question being asked: what has this phone done
+            // by the time the digits are on screen?
+            runCurrent()
 
-        assertTrue(vm.state.value.stage is PairingStage.Confirming)
-        assertTrue(
-            "the bundle slot must not be polled before the user confirms",
-            rendezvous.collectedSlots.isEmpty(),
-        )
+            assertTrue(vm.state.value.stage is PairingStage.Confirming)
+            assertTrue(
+                "the bundle slot must not be polled before the user confirms",
+                rendezvous.collectedSlots.isEmpty(),
+            )
+        } finally {
+            stopPolling(vm)
+        }
     }
 
     /** Saying the digits differ discards everything and asks the server for nothing. */
@@ -903,17 +926,21 @@ class PairingViewModelTest {
         val computer = AccountInviteSession(
             HkdfKeyDerivation, clock, RendezvousUrl.parse("https://pair.example.test")!!,
         )
+        try {
 
-        vm.onIntent(PairingIntent.RoleChosen(PairingRole.JoinFromComputer))
-        vm.onIntent(PairingIntent.CodeScanned(computer.inviteCode))
-        vm.onIntent(PairingIntent.SendReply)
-        advanceUntilIdle()
-        vm.onIntent(PairingIntent.SasRejected)
-        advanceUntilIdle()
+            vm.onIntent(PairingIntent.RoleChosen(PairingRole.JoinFromComputer))
+            vm.onIntent(PairingIntent.CodeScanned(computer.inviteCode))
+            vm.onIntent(PairingIntent.SendReply)
+            runCurrent()
+            vm.onIntent(PairingIntent.SasRejected)
+            runCurrent()
 
-        assertTrue(vm.state.value.stage is PairingStage.Failed)
-        assertTrue(rendezvous.collectedSlots.isEmpty())
-        assertNull("nothing may be adopted after a rejection", keyMaterial.adopted)
+            assertTrue(vm.state.value.stage is PairingStage.Failed)
+            assertTrue(rendezvous.collectedSlots.isEmpty())
+            assertNull("nothing may be adopted after a rejection", keyMaterial.adopted)
+        } finally {
+            stopPolling(vm)
+        }
     }
 
     /**
@@ -934,17 +961,21 @@ class PairingViewModelTest {
             clock = clock,
             rendezvous = rendezvous,
         )
-        val computer = AccountInviteSession(
-            HkdfKeyDerivation, clock, RendezvousUrl.parse("https://pair.example.test")!!,
-        )
+        try {
+            val computer = AccountInviteSession(
+                HkdfKeyDerivation, clock, RendezvousUrl.parse("https://pair.example.test")!!,
+            )
 
-        vm.onIntent(PairingIntent.RoleChosen(PairingRole.JoinFromComputer))
-        vm.onIntent(PairingIntent.CodeScanned(computer.inviteCode))
-        vm.onIntent(PairingIntent.SendReply)
-        advanceUntilIdle()
+            vm.onIntent(PairingIntent.RoleChosen(PairingRole.JoinFromComputer))
+            vm.onIntent(PairingIntent.CodeScanned(computer.inviteCode))
+            vm.onIntent(PairingIntent.SendReply)
+            runCurrent()
 
-        computer.onReply(rendezvous.deposits.single().third) as ReplyOutcome.Agreed
-        assertArrayEquals(identity.publicKey, computer.receivedDeviceKey)
+            computer.onReply(rendezvous.deposits.single().third) as ReplyOutcome.Agreed
+            assertArrayEquals(identity.publicKey, computer.receivedDeviceKey)
+        } finally {
+            stopPolling(vm)
+        }
     }
 
     /**
@@ -963,30 +994,44 @@ class PairingViewModelTest {
             clock = clock,
             rendezvous = rendezvous,
         )
-        val computer = AccountInviteSession(
-            HkdfKeyDerivation, clock, RendezvousUrl.parse("http://notes.example.test")!!,
-        )
+        try {
+            val computer = AccountInviteSession(
+                HkdfKeyDerivation, clock, RendezvousUrl.parse("http://notes.example.test")!!,
+            )
 
-        vm.onIntent(PairingIntent.RoleChosen(PairingRole.JoinFromComputer))
-        vm.onIntent(PairingIntent.CodeScanned(computer.inviteCode))
-        vm.onIntent(PairingIntent.SendReply)
-        advanceUntilIdle()
+            vm.onIntent(PairingIntent.RoleChosen(PairingRole.JoinFromComputer))
+            vm.onIntent(PairingIntent.CodeScanned(computer.inviteCode))
+            vm.onIntent(PairingIntent.SendReply)
+            runCurrent()
 
-        val stage = vm.state.value.stage as PairingStage.AnsweringInvite
-        assertFalse(stage.secure)
-        assertTrue(stage.message!!.contains("https://"))
-        assertTrue(rendezvous.deposits.isEmpty())
+            val stage = vm.state.value.stage as PairingStage.AnsweringInvite
+            assertFalse(stage.secure)
+            assertTrue(stage.message!!.contains("https://"))
+            assertTrue(rendezvous.deposits.isEmpty())
+        } finally {
+            stopPolling(vm)
+        }
     }
 
     /** A QR that is not an invite is a hint, not a failure: the camera sees a lot of the world. */
     @Test
     fun anUnrelatedCodeLeavesTheInviteScannerRunning() = runTest {
         val vm = viewModel(keyMaterial = FakeKeyMaterial(bound = true))
-        vm.onIntent(PairingIntent.RoleChosen(PairingRole.JoinFromComputer))
-        vm.onIntent(PairingIntent.CodeScanned("WIFI:S=Cafe;T=WPA;P=hunter2;;"))
+        try {
+            vm.onIntent(PairingIntent.RoleChosen(PairingRole.JoinFromComputer))
+            vm.onIntent(PairingIntent.CodeScanned("WIFI:S=Cafe;T=WPA;P=hunter2;;"))
 
-        val stage = vm.state.value.stage as PairingStage.ScanningInvite
-        assertNull(stage.lastHint)
+            val stage = vm.state.value.stage as PairingStage.ScanningInvite
+            assertNull(stage.lastHint)
+        } finally {
+            stopPolling(vm)
+        }
+    }
+
+    /** Cancels whatever the run left in flight, so `runTest` can return. See the note above. */
+    private fun TestScope.stopPolling(vm: PairingViewModel) {
+        vm.onIntent(PairingIntent.StartOver)
+        runCurrent()
     }
 
     // -- fakes --------------------------------------------------------------------------------

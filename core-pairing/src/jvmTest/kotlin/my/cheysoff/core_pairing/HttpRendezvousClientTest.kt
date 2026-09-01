@@ -175,6 +175,70 @@ class HttpRendezvousClientTest {
      * takes a fresh ephemeral port, the handler is a closure over the assertions that call wants,
      * and a stop() that races the client's own connection teardown is a flaky test for no benefit.
      */
+    // -----------------------------------------------------------------------------------------
+    // The two slots
+    // -----------------------------------------------------------------------------------------
+
+    /**
+     * The reply slot is a **different URL**, and this is the test that says so.
+     *
+     * Nothing else pins it: an in-memory drop keyed on the slot behaves correctly whatever the
+     * suffix is, and both ends of a pairing would still agree with each other if the two slots
+     * collapsed onto one path. What would break is the pairing itself -- the account device's
+     * bundle would land where the phone's reply already is and the deposit would come back as a
+     * conflict -- and it would break only against a real server, which is exactly the kind of
+     * failure that is expensive to find later.
+     */
+    @Test
+    fun theReplySlotIsASeparateResource() = withServer { exchange ->
+        assertEquals("POST", exchange.requestMethod)
+        assertEquals("${RendezvousProtocol.PATH_PREFIX}$sidPath/reply", exchange.requestURI.path)
+        respond(exchange, 201, """{"expiresAt":1}""")
+    }.let { client ->
+        assertTrue(
+            client.deposit(sid, RendezvousSlot.REPLY, sealCode("eb-and-db")) is DepositResult.Deposited
+        )
+    }
+
+    @Test
+    fun collectingTheReplySlotAsksTheSamePath() = withServer { exchange ->
+        assertEquals("GET", exchange.requestMethod)
+        assertEquals("${RendezvousProtocol.PATH_PREFIX}$sidPath/reply", exchange.requestURI.path)
+        respond(exchange, 200, """{"sealed":"${blob("answer")}"}""")
+    }.let { client ->
+        val result = client.collect(sid, RendezvousSlot.REPLY)
+        assertEquals(sealCode("answer"), (result as CollectResult.Collected).sealCode)
+    }
+
+    /**
+     * The bundle slot keeps the bare path it has always had.
+     *
+     * Stated as its own assertion rather than left implicit in the deposit tests above, because the
+     * scanned direction's requests must be byte-identical to what they were: a server that already
+     * speaks this protocol has to keep working against a client that has learned a second slot.
+     */
+    @Test
+    fun theTwoSlotsDoNotShareAPath() {
+        assertEquals("", RendezvousSlot.BUNDLE.pathSuffix)
+        assertEquals("/reply", RendezvousSlot.REPLY.pathSuffix)
+        assertTrue(RendezvousSlot.BUNDLE.pathSuffix != RendezvousSlot.REPLY.pathSuffix)
+    }
+
+    /**
+     * A reply body is bounded far more tightly than a bundle body.
+     *
+     * The reply slot is the one an unauthenticated stranger writes to on the account device's
+     * behalf, so its cap is the one worth being exact about; a bundle-sized body arriving there is
+     * refused before anything downstream allocates it.
+     */
+    @Test
+    fun anOversizedReplyIsRefusedByTheClient() = withServer { exchange ->
+        respond(exchange, 200, """{"sealed":"${blob("x".repeat(4096))}"}""")
+    }.let { client ->
+        val result = client.collect(sid, RendezvousSlot.REPLY)
+        assertTrue("a bundle-sized body is not a reply", result is CollectResult.Unusable)
+    }
+
     private fun withServer(handler: (HttpExchange) -> Unit): HttpRendezvousClient {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/") { exchange ->
