@@ -39,6 +39,20 @@ class PinWrap(
  */
 object PassphraseCipher {
 
+    /**
+     * The Android app's iteration count, and the default for [wrapWithPin].
+     *
+     * A *default* rather than the only value, because the products this class serves have different
+     * threat models. On Android the wrap sits inside `EncryptedSharedPreferences` behind a
+     * non-exportable Keystore key, so the only way at the PIN is on the device through
+     * `LockoutPolicy` and the iteration count is a second line of defence. On the desktop the wrap
+     * is an ordinary file and the iteration count is the *only* cost an offline guess pays;
+     * `PassphrasePolicy` picks a higher one and shows its arithmetic.
+     *
+     * Raising this constant re-wraps nothing: [PinWrap] records the count it was created with and
+     * [unwrapWithPin] derives with `wrap.iterations`, so every existing wrap keeps opening at its
+     * own cost. Which is also what makes the parameter safe to have.
+     */
     const val ITERATIONS = 210_000
 
     private const val KEY_BITS = 256
@@ -47,16 +61,27 @@ object PassphraseCipher {
     private const val TAG_BITS = 128
 
 
-    /** Wrap [passphrase] under a PBKDF2(pin)-derived AES-256-GCM key. The caller owns/zeroes [pin]. */
-    fun wrapWithPin(passphrase: ByteArray, pin: CharArray): PinWrap {
+    /**
+     * Wrap [passphrase] under a PBKDF2(pin)-derived AES-256-GCM key. The caller owns/zeroes [pin].
+     *
+     * [iterations] defaults to [ITERATIONS]; a caller whose wrap is not protected by a hardware key
+     * passes a higher one. It is recorded in the returned [PinWrap] and is what [unwrapWithPin]
+     * derives with, so the two never have to agree out of band.
+     */
+    fun wrapWithPin(
+        passphrase: ByteArray,
+        pin: CharArray,
+        iterations: Int = ITERATIONS,
+    ): PinWrap {
+        require(iterations > 0) { "iterations must be positive, was $iterations" }
         val salt = secureRandomBytes(SALT_BYTES)
         val iv = secureRandomBytes(IV_BYTES)
 
-        val key = deriveKey(pin, salt, ITERATIONS)
+        val key = deriveKey(pin, salt, iterations)
         try {
             val ciphertext =
                 aesGcmSeal(key = key, nonce = iv, aad = null, plaintext = passphrase)
-            return PinWrap(salt = salt, iv = iv, ciphertext = ciphertext, iterations = ITERATIONS)
+            return PinWrap(salt = salt, iv = iv, ciphertext = ciphertext, iterations = iterations)
         } finally {
             key.fill(0)
         }

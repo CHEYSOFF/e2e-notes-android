@@ -68,3 +68,13 @@ include(":core-store")
 // only Apple targets, so on a non-Mac host it configures and builds nothing. See its build script
 // and docs/BUILDING-IOS.md.
 include(":ios-app")
+// The record payload format and the envelope around it -- the layer between `SyncRecord` and the
+// opaque blob the server stores. It is its own module because BOTH apps need it and neither of the
+// modules it sits between can host it: :core-domain must stay free of crypto, :core-crypto-shared
+// must stay free of the merge vocabulary, and :core-data is Room and therefore invisible to the
+// desktop. A byte-level disagreement here is a note one device can write and the other cannot open.
+include(":core-sync-codec")
+
+// The Compose Desktop app. Plain Kotlin/JVM -- it is the same binary on Windows, macOS and
+// Linux, and jpackage builds whichever installer the host OS supports.
+include(":desktop")

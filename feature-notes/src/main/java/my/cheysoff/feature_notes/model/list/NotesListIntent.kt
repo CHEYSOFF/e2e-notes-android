@@ -29,6 +29,16 @@ sealed interface NotesListIntent {
      */
     data class CalendarDaySelected(val day: LocalDate) : NotesListIntent
 
+    /**
+     * The user pulled the notes list down.
+     *
+     * The only sync trigger a person can reach on purpose. The other one is the unlock, which is
+     * automatic and invisible; this is the gesture someone makes when they are standing next to
+     * their other device wondering why a note has not appeared yet, so it runs a real pass and
+     * waits for it rather than re-reading the local database.
+     */
+    data object RefreshRequested : NotesListIntent
+
     /** Open Trash. Deliberately not a bottom-bar item — those four slots are already spoken for. */
     data object TrashClicked : NotesListIntent
 }

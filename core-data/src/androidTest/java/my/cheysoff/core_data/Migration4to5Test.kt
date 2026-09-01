@@ -114,6 +114,7 @@ class Migration4to5Test {
                 // class still compiled, so nothing surfaced it until the suite was next executed.
                 NoteDatabase.MIGRATION_5_6,
                 NoteDatabase.MIGRATION_6_7,
+                NoteDatabase.MIGRATION_7_8,
             )
             .build()
 
