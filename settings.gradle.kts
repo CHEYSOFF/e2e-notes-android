@@ -59,3 +59,7 @@ include(":core-sync-net")
 // Android, no Room, no HTTP -- so that the N-replica convergence harness can drive the real engine
 // on the JVM in milliseconds. See core-sync-engine/build.gradle.kts.
 include(":core-sync-engine")
+// The record-shaped store: one table of sealed `RecordEnvelope` blobs, and a `NotesRepository` over
+// it. It is what the Apple build persists notes with, and it is deliberately NOT an Android module
+// -- Android already implements that interface over Room and SQLCipher. See its build script.
+include(":core-store")

@@ -47,6 +47,18 @@ kotlin {
                 // project has already shipped once.
                 implementation(project(":core-crypto-shared"))
 
+                // `SyncRecord`, `Hlc` and `FieldClocks`, for `RecordPayload` -- the sealed record
+                // payload, which is a wire format and therefore this module's business.
+                //
+                // A new edge, and worth a sentence about why it is not scope creep. This module
+                // already speaks the sync protocol, and the protocol's unit is a record;
+                // :core-sync-engine's `SyncTransport` is written in terms of `SyncRecord` and it is
+                // this module that will implement it. So the edge is where the design was already
+                // heading, not a shortcut taken to find a JSON writer.
+                //
+                // `api` because `RecordPayload.Decoded` hands a `SyncRecord` back to callers.
+                api(project(":core-domain"))
+
                 // The multiplatform half of the HTTP client. The ENGINE is per-target and lives in
                 // the source sets below; nothing in `commonMain` names one.
                 implementation(libs.ktor.client.core)
