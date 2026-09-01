@@ -1,116 +1,115 @@
 package my.cheysoff.core_crypto.platform
 
 import kotlinx.cinterop.ByteVar
-import kotlinx.cinterop.CPointer
+import kotlinx.cinterop.CValuesRef
+import kotlinx.cinterop.UByteVar
 import kotlinx.cinterop.ExperimentalForeignApi
-import kotlinx.cinterop.addressOf
+import kotlinx.cinterop.alloc
 import kotlinx.cinterop.convert
-import kotlinx.cinterop.reinterpret
-import kotlinx.cinterop.usePinned
-import platform.CoreCrypto.CCCryptorGCMOneshotDecrypt
-import platform.CoreCrypto.CCCryptorGCMOneshotEncrypt
+import kotlinx.cinterop.memScoped
+import kotlinx.cinterop.ptr
+import kotlinx.cinterop.refTo
+import kotlinx.cinterop.value
+import platform.CoreCrypto.CCCrypt
 import platform.CoreCrypto.CCHmac
 import platform.CoreCrypto.CCKeyDerivationPBKDF
+import platform.CoreCrypto.CCRandomGenerateBytes
 import platform.CoreCrypto.kCCAlgorithmAES
+import platform.CoreCrypto.kCCEncrypt
 import platform.CoreCrypto.kCCHmacAlgSHA256
+import platform.CoreCrypto.kCCOptionECBMode
 import platform.CoreCrypto.kCCPBKDF2
 import platform.CoreCrypto.kCCPRFHmacAlgSHA256
 import platform.CoreCrypto.kCCSuccess
-import platform.Security.SecRandomCopyBytes
-import platform.Security.errSecSuccess
-import platform.Security.kSecRandomDefault
+import platform.posix.size_tVar
 
 /**
- * iOS and macOS: CommonCrypto and Security.framework.
+ * iOS and macOS: CommonCrypto.
  *
- * ## NOT COMPILED. NOT RUN. NOT VERIFIED.
+ * ## What has and has not been verified
  *
- * Every line of this file was written on a Windows machine. The Kotlin/Native Apple compilers only
- * run on macOS, so nothing here has been through a compiler, a linker or a test. Treat it as a
- * carefully argued first draft, and treat the first `xcodebuild test` as the moment it becomes
- * evidence. `ProtocolVectorsTest` in `commonTest` is what turns that run into a yes-or-no answer:
- * if it passes, this file agrees with the JVM byte for byte and an iPhone can read a note the phone
- * or the laptop wrote; if it fails, the failing test names the primitive that disagrees.
+ * **This file compiles.** Kotlin/Native can cross-compile Apple *klibs* from any host, so
+ * `./gradlew :core-crypto-shared:compileKotlinIosSimulatorArm64` runs on the Windows machine this
+ * was written on and does type-check every line below against the real CommonCrypto bindings. That
+ * is a much better position than this file started in, and it is how the GCM problem below was
+ * found rather than guessed at.
  *
- * `docs/BUILDING-IOS.md` lists what is most likely to break here and what to do about each.
+ * **It has never been run.** Linking a framework and executing a test both need macOS, so nothing
+ * here has produced a byte. The suites that decide whether it is *correct* —
+ * `PlatformCryptoKnownAnswerTest` and `ProtocolVectorsTest`, both `commonTest` — are waiting on a
+ * Mac. See `docs/BUILDING-IOS.md`.
  *
- * ## Why CommonCrypto and not CryptoKit
+ * ## CommonCrypto has no GCM, and that is not a mistake in this file
  *
- * CryptoKit is the framework Apple points at, and for AES-GCM it is the better API -- `AES.GCM.seal`
- * and `AES.GCM.open` are hard to misuse and `open` throws rather than handing back unverified
- * plaintext. It is also **Swift-only**. Kotlin/Native's interop reaches Objective-C and C, not
- * Swift, so using it would mean an Objective-C-visible Swift shim living in the Xcode project,
- * injected down into this module -- which would make the crypto a dependency the *app* supplies, and
- * a library that cannot decrypt its own storage without the app handing it a cipher is a worse
- * design than the one below. CommonCrypto is C, ships in the OS on every supported version, and
- * needs no shim.
+ * The `platform.CoreCrypto` bindings expose ECB, CBC, CFB, CFB8, CTR, OFB and RC4. There is no
+ * `kCCModeGCM`, no `CCCryptorGCM`, and no `CCCryptorGCMOneshotEncrypt`/`Decrypt` — verified by
+ * reading the klib's symbol table, not inferred. So [aesGcmSeal] and [aesGcmOpen] are
+ * [GaloisCounterMode] — GHASH and the counter arithmetic in portable Kotlin — over CommonCrypto's
+ * AES. [GaloisCounterMode]'s KDoc argues why that is the least-bad of the available options and
+ * `GaloisCounterModeTest` is what makes it safe: it checks that code against the published GCM
+ * vectors and differentially against the JVM's own AES-GCM over hundreds of random inputs, on a
+ * machine that has a reference implementation.
  *
- * If the one-shot GCM symbols below turn out not to be exposed by the `platform.CoreCrypto`
- * bindings on the SDK in use, the fallback is the deprecated `CCCryptorGCM` plus a hand-written
- * constant-time tag comparison. `docs/BUILDING-IOS.md` carries that code, and the reason it is the
- * fallback rather than the default is directly below.
- *
- * ## The GCM footgun this file is written to avoid
- *
- * CommonCrypto's older GCM interface does **not** verify the authentication tag on decrypt. The
- * deprecated one-shot `CCCryptorGCM` takes the tag buffer as an *output* parameter in both
- * directions: on decrypt it writes the tag it computed and returns success regardless of whether
- * that matches the tag that arrived. Code that passes the received tag in and ignores the result
- * has quietly turned AES-GCM into AES-CTR with no integrity at all, and it round-trips perfectly
- * against itself, so no test that only seals and opens will ever notice.
- *
- * [CCCryptorGCMOneshotDecrypt] takes the tag as a `const` **input** and returns a failure status
- * when it does not match, which is why it is what this file calls. If it is ever replaced, whatever
- * replaces it must compare the tags itself, in constant time, and return null on mismatch.
+ * The upshot is worth stating plainly, because it is the difference between this port being
+ * trustworthy and not. The unverified Apple surface is no longer "an AEAD"; it is **four thin
+ * calls** — an RNG, an HMAC, a PBKDF2 and an AES-ECB — each of which either matches a published
+ * vector on the first run or does not.
  *
  * Never logs key material.
  */
 
 /**
- * Zero-length arrays cannot be pinned and addressed -- `addressOf(0)` on an empty [ByteArray]
- * throws -- so an empty input becomes a null pointer with a zero length, which is what the C API
- * expects for "no associated data" and "no salt".
+ * A pointer for a native call, or null for an empty array.
  *
- * Inline so the pinning stays inside the caller's frame and the pointer never escapes it.
+ * `refTo(0)` pins the array for the duration of the call it is passed to, which is exactly the
+ * lifetime needed here and is why none of these functions has to nest `usePinned` blocks. It throws
+ * on an empty array, hence the guard: an empty associated data, an empty salt and an empty
+ * plaintext are all legal inputs, and every C function below takes a null pointer with a zero
+ * length to mean the same thing.
  */
 @OptIn(ExperimentalForeignApi::class)
-private inline fun <R> ByteArray.withPointer(block: (CPointer<ByteVar>?) -> R): R =
-    if (isEmpty()) block(null) else usePinned { block(it.addressOf(0)) }
+private fun ByteArray.ref(): CValuesRef<ByteVar>? = if (isEmpty()) null else refTo(0)
+
+/**
+ * The same, as `unsigned char *`.
+ *
+ * CommonCrypto's headers are inconsistent about this -- `CCHmac` and `CCCrypt` take `const void *`,
+ * which the bindings render as `CValuesRef<ByteVar>`, while `CCKeyDerivationPBKDF` takes
+ * `const uint8_t *` for its salt and `uint8_t *` for its output. `asUByteArray()` is a view over
+ * the same storage rather than a copy, so the derived key is written into the caller's array.
+ */
+@OptIn(ExperimentalForeignApi::class, ExperimentalUnsignedTypes::class)
+private fun ByteArray.uref(): CValuesRef<UByteVar>? =
+    if (isEmpty()) null else asUByteArray().refTo(0)
 
 @OptIn(ExperimentalForeignApi::class)
 internal actual fun secureRandomBytes(size: Int): ByteArray {
     require(size > 0) { "cannot draw $size random bytes" }
     val out = ByteArray(size)
-    val status = out.withPointer { pointer ->
-        SecRandomCopyBytes(kSecRandomDefault, size.convert(), pointer)
-    }
-    // Throwing is the correct response and the KDoc on the `expect` says why: a GCM nonce drawn
-    // from a failed RNG would be zeros, every note on the device would be sealed under the same
-    // (key, nonce) pair for its record, and the break is total rather than partial. A crash here
-    // is recoverable; that is not.
-    check(status == errSecSuccess) { "SecRandomCopyBytes failed with status $status" }
+    // CommonCrypto's own RNG rather than Security.framework's `SecRandomCopyBytes`. Both read the
+    // same kernel CSPRNG; this one is in the framework already imported here and reports failure
+    // through the same `kCCSuccess` convention as everything else in this file.
+    val status = CCRandomGenerateBytes(out.refTo(0), size.convert())
+    // Throwing is correct and the `expect`'s KDoc says why: a GCM nonce drawn from a failed RNG
+    // would be zeros, every record on the device would be sealed under the same (key, nonce) pair,
+    // and the break is total rather than partial. A crash is recoverable; that is not.
+    check(status == kCCSuccess) { "CCRandomGenerateBytes failed with status $status" }
     return out
 }
 
 @OptIn(ExperimentalForeignApi::class)
 internal actual fun hmacSha256(key: ByteArray, message: ByteArray): ByteArray {
     val out = ByteArray(SHA256_DIGEST_BYTES)
-    key.withPointer { keyPointer ->
-        message.withPointer { messagePointer ->
-            out.usePinned { outPinned ->
-                CCHmac(
-                    algorithm = kCCHmacAlgSHA256,
-                    key = keyPointer,
-                    keyLength = key.size.convert(),
-                    data = messagePointer,
-                    dataLength = message.size.convert(),
-                    macOut = outPinned.addressOf(0),
-                )
-            }
-        }
-    }
-    // CCHmac returns void: there is no status to check. A zero-length key is legal per RFC 2104
-    // and CommonCrypto handles it, which is what RFC 5869 case A.3 exercises through `Hkdf`.
+    // CCHmac returns void; there is no status to check. A zero-length key is excluded by the
+    // seam's contract, so `key.ref()` is never null in practice -- see the `expect`'s KDoc.
+    CCHmac(
+        algorithm = kCCHmacAlgSHA256,
+        key = key.ref(),
+        keyLength = key.size.convert(),
+        data = message.ref(),
+        dataLength = message.size.convert(),
+        macOut = out.refTo(0),
+    )
     return out
 }
 
@@ -121,31 +120,27 @@ internal actual fun pbkdf2HmacSha256(
     iterations: Int,
     keyBytes: Int,
 ): ByteArray {
-    // UTF-8, matching what OpenJDK's PBKDF2 does with a char[]. See the `expect`'s KDoc: the only
-    // password this app derives from is a numeric PIN, where every encoding agrees, and a PIN wrap
-    // never leaves the device -- so this is the one primitive here whose cross-platform parity is
-    // a nicety rather than a requirement.
-    val passwordBytes = password.concatToString().encodeToByteArray()
     val out = ByteArray(keyBytes)
-    val status = passwordBytes.withPointer { passwordPointer ->
-        salt.withPointer { saltPointer ->
-            out.usePinned { outPinned ->
-                CCKeyDerivationPBKDF(
-                    algorithm = kCCPBKDF2,
-                    password = passwordPointer,
-                    passwordLen = passwordBytes.size.convert(),
-                    salt = saltPointer?.reinterpret(),
-                    saltLen = salt.size.convert(),
-                    prf = kCCPRFHmacAlgSHA256,
-                    rounds = iterations.convert(),
-                    derivedKey = outPinned.addressOf(0).reinterpret(),
-                    derivedKeyLen = keyBytes.convert(),
-                )
-            }
-        }
-    }
-    // The password is the user's PIN; it does not stay on the heap a moment longer than it must.
-    passwordBytes.fill(0)
+    // The binding types `const char *password` as a Kotlin `String?`, so the conversion to UTF-8 is
+    // Kotlin/Native's rather than this file's -- which means the PIN cannot be zeroed after use the
+    // way the JVM side's `PBEKeySpec.clearPassword` zeroes its copy. That is a real difference and
+    // it is small: a Kotlin `String` is immutable and the PIN it came from is a handful of digits
+    // the user just typed. It is recorded here rather than left to be noticed.
+    //
+    // `passwordLen` is the length in BYTES, so it is measured after encoding and not from
+    // `password.size` -- a non-ASCII PIN would otherwise derive a key from a truncated password.
+    val text = password.concatToString()
+    val status = CCKeyDerivationPBKDF(
+        algorithm = kCCPBKDF2,
+        password = text,
+        passwordLen = text.encodeToByteArray().size.convert(),
+        salt = salt.uref(),
+        saltLen = salt.size.convert(),
+        prf = kCCPRFHmacAlgSHA256,
+        rounds = iterations.convert(),
+        derivedKey = out.uref(),
+        derivedKeyLen = keyBytes.convert(),
+    )
     check(status == kCCSuccess) { "CCKeyDerivationPBKDF failed with status $status" }
     return out
 }
@@ -156,52 +151,12 @@ internal actual fun aesGcmSeal(
     nonce: ByteArray,
     aad: ByteArray?,
     plaintext: ByteArray,
-): ByteArray {
-    val associated = aad ?: ByteArray(0)
-    val ciphertext = ByteArray(plaintext.size)
-    val tag = ByteArray(TAG_BYTES)
-
-    val status = key.withPointer { keyPointer ->
-        nonce.withPointer { noncePointer ->
-            associated.withPointer { aadPointer ->
-                plaintext.withPointer { plaintextPointer ->
-                    // `ciphertext` is empty whenever the plaintext is, and an empty payload is a
-                    // legal thing to seal, so it goes through the same null-pointer path.
-                    ciphertext.withPointer { ciphertextPointer ->
-                        tag.usePinned { tagPinned ->
-                            CCCryptorGCMOneshotEncrypt(
-                                alg = kCCAlgorithmAES,
-                                key = keyPointer,
-                                keyLength = key.size.convert(),
-                                iv = noncePointer,
-                                ivLen = nonce.size.convert(),
-                                aData = aadPointer,
-                                aDataLen = associated.size.convert(),
-                                dataIn = plaintextPointer,
-                                dataInLength = plaintext.size.convert(),
-                                dataOut = ciphertextPointer,
-                                tagOut = tagPinned.addressOf(0),
-                                tagLength = TAG_BYTES.convert(),
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-    // Unlike the decrypt path, a failure here is not "this input was bad" -- the caller controls
-    // every argument and they have already been size-checked. It is a broken assumption, and
-    // returning a partially-written buffer would put unencrypted-looking garbage into the store.
-    check(status == kCCSuccess) { "CCCryptorGCMOneshotEncrypt failed with status $status" }
-
-    // ciphertext ‖ tag, the layout every existing envelope on every existing device already has.
-    // CommonCrypto hands the tag back separately; the JCA does not. This is the whole of the
-    // difference between the two platforms' AEAD APIs.
-    val out = ByteArray(ciphertext.size + tag.size)
-    ciphertext.copyInto(out)
-    tag.copyInto(out, destinationOffset = ciphertext.size)
-    return out
-}
+): ByteArray = GaloisCounterMode.seal(
+    cipher = aesBlockCipher(key),
+    nonce = nonce,
+    aad = aad ?: ByteArray(0),
+    plaintext = plaintext,
+)
 
 @OptIn(ExperimentalForeignApi::class)
 internal actual fun aesGcmOpen(
@@ -209,60 +164,59 @@ internal actual fun aesGcmOpen(
     nonce: ByteArray,
     aad: ByteArray?,
     sealed: ByteArray,
-): ByteArray? {
-    // A blob too short to hold a tag cannot be split, let alone authenticated. The JVM's
-    // `Cipher.doFinal` reports this as an AEADBadTagException, which the JVM actual maps to null;
-    // matching that here keeps "cannot open" one answer on both platforms.
-    if (sealed.size < TAG_BYTES) return null
+): ByteArray? = GaloisCounterMode.open(
+    cipher = aesBlockCipher(key),
+    nonce = nonce,
+    aad = aad ?: ByteArray(0),
+    sealed = sealed,
+)
 
-    val ciphertext = sealed.copyOfRange(0, sealed.size - TAG_BYTES)
-    val tag = sealed.copyOfRange(sealed.size - TAG_BYTES, sealed.size)
-    val associated = aad ?: ByteArray(0)
-    val plaintext = ByteArray(ciphertext.size)
-
-    val status = key.withPointer { keyPointer ->
-        nonce.withPointer { noncePointer ->
-            associated.withPointer { aadPointer ->
-                ciphertext.withPointer { ciphertextPointer ->
-                    plaintext.withPointer { plaintextPointer ->
-                        tag.withPointer { tagPointer ->
-                            // `tagIn`, not `tagOut`. This function compares the tag and reports a
-                            // mismatch through its return value; the deprecated `CCCryptorGCM` it
-                            // replaces does not. See the file KDoc -- getting this backwards
-                            // removes every integrity guarantee in the protocol and no seal/open
-                            // round-trip test would notice.
-                            CCCryptorGCMOneshotDecrypt(
-                                alg = kCCAlgorithmAES,
-                                key = keyPointer,
-                                keyLength = key.size.convert(),
-                                iv = noncePointer,
-                                ivLen = nonce.size.convert(),
-                                aData = aadPointer,
-                                aDataLen = associated.size.convert(),
-                                dataIn = ciphertextPointer,
-                                dataInLength = ciphertext.size.convert(),
-                                dataOut = plaintextPointer,
-                                tagIn = tagPointer,
-                                tagLength = TAG_BYTES.convert(),
-                            )
-                        }
-                    }
-                }
-            }
+/**
+ * AES in ECB over a whole number of blocks — the one primitive [GaloisCounterMode] needs.
+ *
+ * ECB is safe here and only here: every buffer this encrypts is a counter block or the all-zero
+ * block, both of which this code chose and neither of which is user data. It is never applied to a
+ * note.
+ *
+ * `kCCOptionECBMode` **without** `kCCOptionPKCS7Padding`. With padding, CommonCrypto would append a
+ * whole extra block and the keystream would be right followed by sixteen wrong bytes — which every
+ * vector in `GaloisCounterModeTest` catches, but only once someone runs it.
+ */
+@OptIn(ExperimentalForeignApi::class)
+private fun aesBlockCipher(key: ByteArray) = GaloisCounterMode.BlockCipher { input ->
+    require(input.size % AES_BLOCK_BYTES == 0) {
+        "ECB input must be a whole number of blocks, was ${input.size}"
+    }
+    val out = ByteArray(input.size)
+    val status = memScoped {
+        val moved = alloc<size_tVar>()
+        val result = CCCrypt(
+            op = kCCEncrypt,
+            alg = kCCAlgorithmAES,
+            options = kCCOptionECBMode,
+            key = key.refTo(0),
+            keyLength = key.size.convert(),
+            // No IV in ECB. Passing one would be ignored; passing null says so.
+            iv = null,
+            dataIn = input.refTo(0),
+            dataInLength = input.size.convert(),
+            dataOut = out.refTo(0),
+            dataOutAvailable = out.size.convert(),
+            dataOutMoved = moved.ptr,
+        )
+        // A short write would leave the tail of `out` as zeros, and a zero keystream block is a
+        // plaintext block passed straight through. Checked rather than trusted.
+        if (result == kCCSuccess && moved.value.toInt() != out.size) {
+            error("CCCrypt wrote ${moved.value} of ${out.size} bytes")
         }
+        result
     }
-
-    if (status != kCCSuccess) {
-        // Whatever was written into `plaintext` before the tag check failed is unauthenticated
-        // output. It must not be returned and it must not be left readable on the heap.
-        plaintext.fill(0)
-        return null
-    }
-    return plaintext
+    check(status == kCCSuccess) { "CCCrypt failed with status $status" }
+    out
 }
 
-/** SHA-256 output length. Not read from `SyncProtocol`: that file holds wire constants, this is a hash. */
+/** SHA-256 output length. Not from `SyncProtocol`: that file holds wire constants, this is a hash. */
 private const val SHA256_DIGEST_BYTES = 32
 
-/** The full 128-bit GCM tag, never truncated. Matches `SyncProtocol.TAG_BYTES`. */
-private const val TAG_BYTES = 16
+/** AES's block size, in bytes. The same on every key length. */
+private const val AES_BLOCK_BYTES = 16

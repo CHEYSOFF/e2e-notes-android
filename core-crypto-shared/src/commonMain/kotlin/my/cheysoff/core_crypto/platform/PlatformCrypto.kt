@@ -28,10 +28,13 @@ package my.cheysoff.core_crypto.platform
  * known-answer vectors beside it are what hold each platform to that; they are the first thing to
  * run on a platform whose actuals are new.
  *
- * ## Not verified on Apple
+ * ## What is verified on Apple, and what is not
  *
- * The Apple actuals in `appleMain` have never been compiled, linked or executed -- the Kotlin/Native
- * Apple compilers only run on macOS and this branch was written on Windows. See
+ * The Apple actuals in `appleMain` **compile**: Kotlin/Native cross-compiles Apple klibs from any
+ * host, so they are type-checked against the real CommonCrypto bindings on the Windows machine this
+ * was written on. They have never been **linked or run**, because both need macOS. So the four
+ * functions below are the untested surface of the whole port, and the two vector suites in
+ * `commonTest` are what turn the first `xcodebuild test` into a yes-or-no answer about them. See
  * `docs/BUILDING-IOS.md`.
  */
 

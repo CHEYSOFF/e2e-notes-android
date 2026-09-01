@@ -72,7 +72,7 @@ class PlatformCryptoKnownAnswerTest {
     }
 
     @Test
-    fun `RFC 4231 case 6 - a key longer than the SHA-256 block, which must be hashed first`() {
+    fun `RFC 4231 case 6 - a key longer than the SHA-256 block - which must be hashed first`() {
         // 131 bytes of 0xaa, i.e. longer than SHA-256's 64-byte block. RFC 2104 says such a key is
         // replaced by its own hash. An implementation that truncated or padded instead would still
         // produce 32 plausible bytes, and `Hkdf` would still round-trip against itself — this is
@@ -87,7 +87,7 @@ class PlatformCryptoKnownAnswerTest {
     }
 
     @Test
-    fun `a 32-byte zero key is the one HKDF-Extract falls back to, and it is not special`() {
+    fun `a 32-byte zero key is the one HKDF-Extract falls back to - and it is not special`() {
         // Not an RFC 4231 case; it is here because it is the key `Hkdf.extract` substitutes when
         // there is no salt, which is EVERY derivation in this protocol -- the whole key hierarchy
         // runs through it. RFC 5869 case A.3 in `HkdfTest` pins the answer; this pins that the
@@ -175,7 +175,7 @@ class PlatformCryptoKnownAnswerTest {
     private val gcmNonce = hex("cafebabefacedbaddecaf888")
 
     @Test
-    fun `GCM test case 15 - 64 bytes of plaintext, no associated data`() {
+    fun `GCM test case 15 - 64 bytes of plaintext - no associated data`() {
         val plaintext = hex(
             "d9313225f88406e5a55909c5aff5269a" +
                 "86a7a9531534f7da2e4c303d8a318a72" +
@@ -196,7 +196,7 @@ class PlatformCryptoKnownAnswerTest {
     }
 
     @Test
-    fun `GCM test case 16 - 60 bytes of plaintext, 20 bytes of associated data`() {
+    fun `GCM test case 16 - 60 bytes of plaintext - 20 bytes of associated data`() {
         val plaintext = hex(
             "d9313225f88406e5a55909c5aff5269a" +
                 "86a7a9531534f7da2e4c303d8a318a72" +
@@ -227,7 +227,7 @@ class PlatformCryptoKnownAnswerTest {
     }
 
     @Test
-    fun `case 16 decrypts back, and its ciphertext agrees with case 15 on the bytes they share`() {
+    fun `case 16 decrypts back - and its ciphertext agrees with case 15 on the bytes they share`() {
         val plaintext = hex(
             "d9313225f88406e5a55909c5aff5269a" +
                 "86a7a9531534f7da2e4c303d8a318a72" +

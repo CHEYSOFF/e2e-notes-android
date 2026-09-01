@@ -13,7 +13,7 @@ import platform.Foundation.timeIntervalSince1970
  * precision, which nothing here has ever had or wanted, and stays exact for milliseconds until well
  * past the year 200,000: a `Double` has 53 bits of mantissa and epoch milliseconds needs 41.
  *
- * NOT COMPILED — see `docs/BUILDING-IOS.md`.
+ * Compiled, never run — see `docs/BUILDING-IOS.md`.
  */
 internal actual fun currentTimeMillis(): Long =
     (NSDate().timeIntervalSince1970 * 1000.0).toLong()

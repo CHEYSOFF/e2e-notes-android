@@ -9,11 +9,13 @@ import my.cheysoff.core_sync_net.wire.Base64Codec
 /**
  * iOS and macOS: Ktor over `NSURLSession`, through Ktor's Darwin engine.
  *
- * ## NOT COMPILED. NOT RUN. NOT VERIFIED.
+ * ## COMPILED. NOT RUN. NOT VERIFIED.
  *
- * Written on Windows, where the Kotlin/Native Apple compilers do not exist. See
- * `docs/BUILDING-IOS.md` — and read the section on this file before shipping anything built from
- * it, because of what the next heading says.
+ * This file type-checks against Ktor's real Darwin bindings: Kotlin/Native cross-compiles Apple
+ * klibs from any host, so `compileKotlinIosSimulatorArm64` runs on the Windows machine it was
+ * written on. That is worth exactly what it is worth — the symbols exist and the types line up.
+ * Nothing here has opened a socket. Read `docs/BUILDING-IOS.md`, and the next heading, before
+ * shipping anything built from it.
  *
  * ## This is the most security-sensitive unverified file in the port
  *

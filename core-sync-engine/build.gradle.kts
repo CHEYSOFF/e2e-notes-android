@@ -25,10 +25,10 @@ kotlin {
     // check here would be losing it where it matters most.
     mingwX64()
 
-    // The Apple targets, for the reasons :core-domain's build script sets out at length. None of
-    // them has been compiled here; the canary above is what says this module's `commonMain` can
-    // be. This module is the sync coordinator and touches no platform API at all, so it is the one
-    // with the least to go wrong on a new backend and the most to lose if the canary is dropped.
+    // The Apple targets, for the reasons :core-domain's build script sets out at length. They
+    // compile here and have never been linked or run. This module is the sync coordinator and
+    // touches no platform API at all, so it is the one with the least to go wrong on a new backend
+    // and the most to lose if the mingw canary above is ever dropped.
     iosArm64()
     iosSimulatorArm64()
     iosX64()

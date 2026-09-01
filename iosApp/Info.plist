@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The app's Info.plist.
+
+  Two entries here are security decisions rather than boilerplate, and both are easy to lose to an
+  Xcode template that overwrites this file:
+
+    - UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace are both absent, and must stay
+      absent. Either one exposes the app's Documents directory in the Files app, and Documents is
+      where `:core-store` puts `manana-records.db`. The rows in it are sealed envelopes, so the
+      exposure would not disclose note text -- but it would let anyone with the phone delete or
+      replace the database, and there is no reason to offer that.
+
+    - ITSAppUsesNonExemptEncryption is declared false, which is the standard declaration for an app
+      whose only cryptography is standard algorithms used for the app's own data. It is here so the
+      first TestFlight upload does not stop and ask.
+
+  There is no NSFaceIDUsageDescription because there is no biometric unlock yet. Adding one before
+  the feature exists would put a permission prompt in the app that never fires.
+-->
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>$(DEVELOPMENT_LANGUAGE)</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>$(PRODUCT_NAME)</string>
+    <key>CFBundleDisplayName</key>
+    <string>$(APP_NAME)</string>
+    <key>CFBundlePackageType</key>
+    <string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$(MARKETING_VERSION)</string>
+    <key>CFBundleVersion</key>
+    <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>LSRequiresIPhoneOS</key>
+    <true/>
+    <key>UILaunchScreen</key>
+    <dict>
+        <!--
+          A black launch screen, so the app does not flash white before Compose paints. The Kotlin
+          side paints black too (see `App.kt`); this covers the moment before it runs.
+        -->
+        <key>UIColorName</key>
+        <string>LaunchBackground</string>
+    </dict>
+    <key>UIRequiredDeviceCapabilities</key>
+    <array>
+        <string>armv7</string>
+    </array>
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <!--
+          Portrait only, and that is an admission rather than a design choice: no screen in this app
+          has been looked at in landscape, or at all. Locking the orientation means the first person
+          to run it sees one layout that may need work instead of two.
+        -->
+        <string>UIInterfaceOrientationPortrait</string>
+    </array>
+    <key>UIUserInterfaceStyle</key>
+    <string>Dark</string>
+    <key>ITSAppUsesNonExemptEncryption</key>
+    <false/>
+</dict>
+</plist>

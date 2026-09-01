@@ -63,3 +63,8 @@ include(":core-sync-engine")
 // it. It is what the Apple build persists notes with, and it is deliberately NOT an Android module
 // -- Android already implements that interface over Room and SQLCipher. See its build script.
 include(":core-store")
+
+// The iOS app: Compose Multiplatform screens over :core-store and the shared core. It declares
+// only Apple targets, so on a non-Mac host it configures and builds nothing. See its build script
+// and docs/BUILDING-IOS.md.
+include(":ios-app")
