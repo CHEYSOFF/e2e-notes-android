@@ -23,6 +23,20 @@ object VaultLocation {
     /** The directory name on Windows and macOS, where application-data folders are capitalised. */
     private const val DISPLAY_NAME = "Manana"
 
+    /**
+     * The Windows directory name, which is deliberately NOT [DISPLAY_NAME].
+     *
+     * jpackage's per-user installer puts the application itself in `%LOCALAPPDATA%\Manana`, so a
+     * vault under that name would sit in the install directory -- and an uninstall or a major
+     * upgrade takes the whole tree with it. That is not a theoretical risk: a marker file written
+     * there and then uninstalled came back gone, directory and all. The user's notes and their
+     * account root key would go the same way, silently.
+     *
+     * Still under LOCALAPPDATA rather than APPDATA, for the reason [defaultDirectory] gives: the
+     * roaming profile would copy a DPAPI blob to machines that cannot decrypt it.
+     */
+    private const val WINDOWS_DIRECTORY_NAME = "Manana-vault"
+
     /** The directory name on Linux, where they are not. */
     private const val LOWERCASE_NAME = "manana"
 
@@ -47,9 +61,9 @@ object VaultLocation {
                 // A Windows session without LOCALAPPDATA is not a normal one, but a null here
                 // would crash at startup before the user could be told anything. The home
                 // directory is always defined and is the same profile the variable points into.
-                Paths.get(userHome, "AppData", "Local", DISPLAY_NAME)
+                Paths.get(userHome, "AppData", "Local", WINDOWS_DIRECTORY_NAME)
             } else {
-                Paths.get(localAppData, DISPLAY_NAME)
+                Paths.get(localAppData, WINDOWS_DIRECTORY_NAME)
             }
         }
 
