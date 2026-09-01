@@ -27,28 +27,43 @@ import androidx.compose.ui.unit.dp
 /**
  * The first-run choice.
  *
- * ## Why pairing leads and standalone does not
+ * ## Three answers, because there are three situations
  *
  * The Account Root Key is created once, on the first device, and reaches every other device by
- * pairing. A desktop that mints its own ARK has not joined the user's account — it has started a
- * second one. The two never merge and cannot be merged afterwards: records are sealed under keys
- * derived from the ARK, the two `accountId`s do not even name the same bucket on the server, and
- * neither half's plaintext is recoverable from the other's key. `AccountRootKey.generateArk`'s KDoc
- * spells this out.
+ * pairing. What a first run has to establish is **which device that first one is**, and until this
+ * screen offered both directions it could only ever be the phone — which left a person who set the
+ * desktop up first with no option but to start a second account.
+ *
+ *  - **Pair with my phone.** The account already exists on the phone; this computer joins it. This
+ *    is listed first and given the larger card because it is both the commonest case and the
+ *    stronger handshake: the phone reads this computer's key off a camera, so a man in the middle
+ *    is structurally impossible. See `PairingScreen`.
+ *  - **Start a new account here.** This computer is the first device, and a phone joins it
+ *    afterwards. It needs a server address, because the phone's answer has nowhere else to travel;
+ *    the exchange that follows is authenticated by six digits a person compares, which is a weaker
+ *    guarantee than the one above and is stated as such where it applies (`AccountInviteScreen`).
+ *  - **Use this computer on its own.** No server, no other device, ever.
+ *
+ * ## Why standalone is a text link and costs a dialog
+ *
+ * A desktop that mints its own ARK and never names a server has not joined the user's account — it
+ * has started a second one. The two never merge and cannot be merged afterwards: records are sealed
+ * under keys derived from the ARK, the two `accountId`s do not even name the same bucket on a
+ * server, and neither half's plaintext is recoverable from the other's key.
+ * `AccountRootKey.generateArk`'s KDoc spells this out.
  *
  * A user cannot be expected to know that, and "the notes on my laptop never showed up on my phone"
- * is what the mistake feels like from outside. So the layout is the argument: pairing is the card,
- * standalone is a text link, and taking the link costs a dialog that says what it does in the
- * plainest words available. This is not a nag — it is the only moment at which the choice is
- * reversible, because after the ARK exists there is nothing to undo.
- *
- * Pairing fills the seam it was always going to fill: `DesktopVault.setUp(passphrase,
- * AccountOrigin.PAIRED, ark)`, which already existed and already refused to mint a key of its own.
- * The ARK reaches it from the phone, through the rendezvous — see `PairingScreen`.
+ * is what the mistake feels like from outside. So the layout is the argument, and taking the link
+ * costs a dialog that says what it does in the plainest words available. This is not a nag — it is
+ * the only moment at which the choice is reversible, because after the ARK exists there is nothing
+ * to undo. **The middle option is not an escape from that dialog**: it also mints a fresh ARK, and
+ * it is a different answer only because a phone can afterwards be admitted to the account it
+ * creates.
  */
 @Composable
 fun FirstRunScreen(
     onPair: () -> Unit,
+    onCreateAccountHere: () -> Unit,
     onUseStandalone: () -> Unit,
 ) {
     var confirming by remember { mutableStateOf(false) }
@@ -80,8 +95,8 @@ fun FirstRunScreen(
                     color = MananaColors.TitleGrey,
                 )
                 Text(
-                    "Your account key already exists on your phone. Pairing copies it here, so " +
-                        "the same notes open on both.",
+                    "Choose this if your notes are already on your phone. Pairing copies the " +
+                        "account key here, so the same notes open on both.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MananaColors.BodyGrey,
                 )
@@ -93,6 +108,38 @@ fun FirstRunScreen(
                     ),
                 ) {
                     Text("Pair with my phone")
+                }
+            }
+        }
+
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MananaColors.Surface),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(
+                modifier = Modifier.padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    "Start a new account here",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MananaColors.TitleGrey,
+                )
+                Text(
+                    "Choose this if this computer is your first device. It creates the account " +
+                        "key here, and you can add your phone to it straight afterwards. You will " +
+                        "need the address of the server your devices sync through.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MananaColors.BodyGrey,
+                )
+                Button(
+                    onClick = onCreateAccountHere,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MananaColors.AccentIndigo,
+                        disabledContainerColor = MananaColors.Outline,
+                    ),
+                ) {
+                    Text("Start a new account")
                 }
             }
         }

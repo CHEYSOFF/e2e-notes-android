@@ -83,6 +83,8 @@ fun NotesWorkspaceScreen(
     onToggleRemember: () -> Unit,
     syncLabel: String?,
     onSync: (() -> Unit)?,
+    /** Null when this computer has no server and therefore cannot authorise another device. */
+    onAddDevice: (() -> Unit)? = null,
 ) {
     Box(modifier = Modifier.fillMaxSize().background(AppBlack)) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -94,6 +96,7 @@ fun NotesWorkspaceScreen(
                 onToggleRemember = onToggleRemember,
                 syncLabel = syncLabel,
                 onSync = onSync,
+                onAddDevice = onAddDevice,
             )
 
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -204,6 +207,7 @@ private fun TitleBar(
     onToggleRemember: () -> Unit,
     syncLabel: String?,
     onSync: (() -> Unit)?,
+    onAddDevice: (() -> Unit)?,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -232,6 +236,14 @@ private fun TitleBar(
         // something a button can explain.
         if (syncLabel != null && onSync != null) {
             RememberAffordance(isRemembered = false, onClick = onSync, label = syncLabel)
+            Spacer(Modifier.width(8.dp))
+        }
+
+        // Shown only where it can work, on the same argument as the sync control: authorising
+        // another device is a signature the server checks against this computer's own device row,
+        // so a computer with no row cannot do it and a button offering to would lead nowhere.
+        if (onAddDevice != null) {
+            RememberAffordance(isRemembered = false, onClick = onAddDevice, label = "Add a phone")
             Spacer(Modifier.width(8.dp))
         }
 

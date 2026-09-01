@@ -15,6 +15,7 @@ import my.cheysoff.core_pairing.protocol.OfferOutcome
 import my.cheysoff.core_pairing.protocol.PairingProtocol
 import my.cheysoff.core_pairing.protocol.RendezvousClient
 import my.cheysoff.core_pairing.protocol.RendezvousProtocol
+import my.cheysoff.core_pairing.protocol.RendezvousSlot
 import my.cheysoff.core_pairing.protocol.RendezvousUrl
 import org.junit.Test
 import org.junit.Assert.assertArrayEquals
@@ -106,7 +107,7 @@ class DesktopPairingControllerTest {
         // `onScanned` accepts the offer and yields the SAS; sealing is a second, separate step, so
         // that a device cannot hand over the account root key before its user has had the chance to
         // compare digits. `""` is the empty config, exactly as `PairingViewModel` sends it.
-        drop.deposit(phone.receivedSid!!, phone.seal("")!!)
+        drop.deposit(phone.receivedSid!!, RendezvousSlot.BUNDLE, phone.seal("")!!)
 
         pump()
 
@@ -126,7 +127,7 @@ class DesktopPairingControllerTest {
 
         val phone = AccountDeviceSession(HkdfKeyDerivation, MonotonicClock { 0 }, bundle.ark, bundle.accountId)
         val accepted = phone.onScanned((controller.step as PairingStep.Waiting).code) as OfferOutcome.Accepted
-        drop.deposit(phone.receivedSid!!, phone.seal("")!!)
+        drop.deposit(phone.receivedSid!!, RendezvousSlot.BUNDLE, phone.seal("")!!)
         pump()
 
         val collectsAtSuccess = drop.collects
@@ -283,7 +284,7 @@ class DesktopPairingControllerTest {
 
         val phone = AccountDeviceSession(HkdfKeyDerivation, MonotonicClock { 0 }, bundle.ark, bundle.accountId)
         val accepted = phone.onScanned((controller.step as PairingStep.Waiting).code) as OfferOutcome.Accepted
-        drop.deposit(phone.receivedSid!!, phone.seal("")!!)
+        drop.deposit(phone.receivedSid!!, RendezvousSlot.BUNDLE, phone.seal("")!!)
         pump()
         check(controller.step is PairingStep.Confirming) { "setup failed: ${controller.step}" }
         return controller
@@ -329,16 +330,19 @@ class DesktopPairingControllerTest {
         /** When set, every collect returns this instead of looking at [rows]. */
         var answer: CollectResult? = null
 
-        override fun deposit(sid: ByteArray, sealCode: String): DepositResult {
-            rows[RendezvousProtocol.encodeSid(sid)] = RendezvousProtocol.toBlob(sealCode)
+        override fun deposit(sid: ByteArray, slot: RendezvousSlot, code: String): DepositResult {
+            rows[key(sid, slot)] = RendezvousProtocol.toBlob(code)
             return DepositResult.Deposited(0L)
         }
 
-        override fun collect(sid: ByteArray): CollectResult {
+        override fun collect(sid: ByteArray, slot: RendezvousSlot): CollectResult {
             collects++
             answer?.let { return it }
-            val blob = rows.remove(RendezvousProtocol.encodeSid(sid)) ?: return CollectResult.Pending
+            val blob = rows.remove(key(sid, slot)) ?: return CollectResult.Pending
             return CollectResult.Collected(RendezvousProtocol.fromBlob(blob))
         }
+
+        private fun key(sid: ByteArray, slot: RendezvousSlot): String =
+            RendezvousProtocol.encodeSid(sid) + slot.pathSuffix
     }
 }

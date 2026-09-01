@@ -31,13 +31,19 @@ class VaultSession(
     /** This device's HLC node pseudonym: `HlcNode.derive(ark, deviceId)`. */
     val hlcNode: String,
     /**
-     * How this vault syncs, or null when it has never been paired to a server.
+     * How this vault syncs, or null when it has no server.
      *
      * Null is an ordinary state, not a failure: a vault created standalone, or paired with a phone
      * that named no server, has an account and nowhere to sync it. The UI says so; nothing here
      * treats it as an error.
+     *
+     * Settable only from this module, and only by [DesktopVault.recordEnrolment]. It is a `var`
+     * because a vault created on this computer is enrolled *after* it exists — the account handle
+     * the server is asked to open an account for is derived from the ARK, which does not exist
+     * until the vault does. The alternative was to close and reopen the vault after a claim, which
+     * would mean unwrapping the ARK twice and holding a second live copy of it for no reason.
      */
-    val sync: SyncSession? = null,
+    var sync: SyncSession? = null,
 ) : AutoCloseable {
     override fun close() {
         vaultKey.fill(0)
@@ -61,14 +67,22 @@ class SyncSession(
 )
 
 /**
- * What a pairing agreed about the account's server, on its way into a new vault.
+ * How this computer is known to a sync server, on its way into a vault header.
  *
  * All three travel together because they are useless apart: the key signs the session challenge,
- * the id names which device row the server checks it against, and the address says where. Two of
- * the three came out of the **sealed** pairing bundle (`PairingConfig`), so they are the account
- * device's authenticated statement rather than the unauthenticated hint this computer put in QR1.
+ * the id names which device row the server checks it against, and the address says where.
+ *
+ * Two ways to obtain one, and they differ in who vouched:
+ *
+ *  - **A pairing** produced it, in which case the address and the id came out of the **sealed**
+ *    bundle (`PairingConfig`) — the account device's authenticated statement rather than the
+ *    unauthenticated hint this computer put in QR1.
+ *  - **This computer claimed the account itself**, in which case the address is what the user
+ *    typed and the id is what the server assigned to the claim. Nobody vouched, because there was
+ *    nobody to vouch: a claim is trust on first use, and it is only legitimate for an account this
+ *    computer just created.
  */
-class PairedEnrolment(
+class ServerEnrolment(
     val serverUrl: String,
     val deviceId: String,
     val deviceKey: DeviceKeyPair,
@@ -174,7 +188,7 @@ class DesktopVault(
          * Only [AccountOrigin.PAIRED] can supply one: a standalone vault has not been enrolled
          * anywhere, and an id it invented for itself would be an id no server has ever heard of.
          */
-        enrolment: PairedEnrolment? = null,
+        enrolment: ServerEnrolment? = null,
     ): SetupResult {
         // The account-forking guard, and it is checked FIRST: on a directory that already holds a
         // vault, "a vault already exists here" is the answer whatever the passphrase looks like,
@@ -281,6 +295,53 @@ class DesktopVault(
 
     /** Drops the stored vault key. The vault still opens with the passphrase; it always did. */
     fun forgetOnThisComputer() = credentialStore.forget()
+
+    /**
+     * Records how [session]'s vault reaches a sync server, and rewrites `vault.json`.
+     *
+     * The path a vault created **on this computer** takes: the ARK has to exist before the account
+     * handle can be derived, and the handle has to exist before a server can be asked to open an
+     * account for it, so the enrolment is necessarily learned after `setUp` has already written the
+     * header. The write goes through the same atomic publish [setUp] uses, so an interrupted
+     * rewrite leaves the old header rather than half of a new one.
+     *
+     * **Refuses to overwrite an existing enrolment.** A vault already carries one device row's id
+     * and the key the server has on file for it; replacing them would leave a device the server
+     * still trusts, still able to write to the account, that nothing on this machine can revoke —
+     * and the notes would stay readable throughout, so nothing would look wrong.
+     *
+     * @return false when the vault already has an enrolment or the header cannot be read or
+     *   written. The vault is untouched in every false case, and the caller says so rather than
+     *   retrying: a computer that could not be enrolled has an account it cannot sync, which is a
+     *   sentence a user can act on.
+     */
+    fun recordEnrolment(session: VaultSession, enrolment: ServerEnrolment): Boolean {
+        if (session.sync != null) return false
+        val header = readHeader() ?: return false
+        if (header.sync != null) return false
+        val updated = header.copy(
+            sync = VaultHeader.SyncIdentity(
+                serverUrl = enrolment.serverUrl,
+                deviceId = enrolment.deviceId,
+                deviceKeyWrap = DeviceKeyCipher.wrap(
+                    enrolment.deviceKey.privateKeyPkcs8,
+                    session.vaultKey,
+                ),
+                devicePublicKey = enrolment.deviceKey.publicKeySec1,
+            )
+        )
+        return try {
+            writeHeader(updated)
+            session.sync = SyncSession(
+                serverUrl = enrolment.serverUrl,
+                deviceId = enrolment.deviceId,
+                deviceKey = enrolment.deviceKey,
+            )
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
 
     private fun openWithVaultKey(vaultKey: ByteArray, header: VaultHeader): UnlockResult {
         val ark = ArkCipher.unwrap(header.arkWrap, vaultKey)

@@ -21,7 +21,7 @@ import my.cheysoff.core_pairing.protocol.PairingConfig
 import my.cheysoff.core_pairing.protocol.RendezvousClient
 import my.cheysoff.core_pairing.protocol.RendezvousUrl
 import my.cheysoff.desktop.vault.DeviceKeyPair
-import my.cheysoff.desktop.vault.PairedEnrolment
+import my.cheysoff.desktop.vault.ServerEnrolment
 import kotlin.math.ceil
 
 /** Where a pairing attempt has got to. Everything [PairingScreen] draws comes from this. */
@@ -310,10 +310,10 @@ class DesktopPairingController(
      * [takeBundle] has already consumed it and a second read would be null. The caller passes back
      * what it was handed.
      */
-    fun enrolmentFrom(bundle: AccountBundle): PairedEnrolment? {
+    fun enrolmentFrom(bundle: AccountBundle): ServerEnrolment? {
         val config = PairingConfig.decode(bundle.config) ?: return null
         val deviceId = config.deviceId ?: return null
-        return PairedEnrolment(
+        return ServerEnrolment(
             serverUrl = config.serverUrl,
             deviceId = deviceId,
             deviceKey = deviceKey,
