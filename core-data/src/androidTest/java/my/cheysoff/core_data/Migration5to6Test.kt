@@ -115,6 +115,7 @@ class Migration5to6Test {
                 // both steps, which is strictly the stronger claim — MIGRATION_6_7 must not
                 // disturb anything MIGRATION_5_6 established.
                 NoteDatabase.MIGRATION_6_7,
+                NoteDatabase.MIGRATION_7_8,
             )
             .build()
 

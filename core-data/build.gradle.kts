@@ -63,6 +63,10 @@ android {
 dependencies {
     implementation(project(":core-domain"))
     implementation(project(":core-crypto"))
+    // `SyncStore` and the types it exchanges. `api`, not `implementation`: `RoomSyncStore` IS a
+    // `SyncStore`, so anything that constructs one -- the app's sync wiring -- needs the interface
+    // on its compile classpath too.
+    api(project(":core-sync-engine"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)

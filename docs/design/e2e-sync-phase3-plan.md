@@ -178,6 +178,22 @@ CREATE TABLE IF NOT EXISTS sync_state (
 )
 ```
 
+> **[SHIPPED, plus two columns this table does not have — schema v8.]** Every column above is in
+> v7 and behaves as written, `dirty DEFAULT 1` included. `MIGRATION_7_8` adds two more, both with
+> an inert default:
+>
+>  - **`notes.contentSyncedHlc TEXT NOT NULL DEFAULT ''`** — the `content` clock of the newest
+>    version this device and the server have agreed on. This is **decision D7, closed**. Without it
+>    the merge cannot tell "both devices edited the body" from "I pinned it and they edited the
+>    body", and the second case costs a duplicate note. `''` means *no agreement is recorded* and
+>    is not the same as `Hlc.ZERO`: a zero clock would claim an agreement at the beginning of time,
+>    and the merge would then discard an unpushed body believing it was already published.
+>    `Migration7to8Test.everyMigratedRowHasNoRecordedContentBaseline` asserts the distinction
+>    through `RoomSyncStore.load`, which is where it matters.
+>  - **`sync_state.haltReason TEXT NOT NULL DEFAULT ''`** — the engine's halt, which has to outlive
+>    the process or a restart resumes syncing against the server it refused to trust. Empty is
+>    healthy; a value this build does not recognise is still a halt.
+
 `deviceId` lives **outside the database**, in `secret_shared_prefs` next to the existing keys
 (`EncryptedPrefsStore.kt:90`, `PREFS_NAME = "secret_shared_prefs"`), because the HLC needs it while the app is locked and
 the database is not open. It is a locally generated random string and is **not** the server's
@@ -277,6 +293,25 @@ Three rules, each of which corresponds to a bug that is otherwise guaranteed:
    the same code path as a pulled record — do not add a second, subtly different merge path for the
    conflict case. `RecordsTest.aStaleBaseSeqIsRejectedWithTheConflictingEnvelopeInline` shows the
    exact response shape.
+
+> **[SHIPPED, and rules 1 and 2 are one SQL statement — `NoteDao.acknowledgeNotePush`.]**
+> Not two statements in a transaction. The distinction is the point of the whole section and it is
+> the thing no engine-side test can reach: an implementation that runs
+> `UPDATE … WHERE the clock matches` and then `UPDATE … SET lastSyncedSeq` satisfies both rules as
+> written, passes every behavioural assertion about them, and is still wrong, because between the
+> two the row can move and `dirty` has then been cleared for a version `lastSyncedSeq` does not
+> describe.
+>
+> `RoomSyncStoreTest.the acknowledgement is one statement when the clock matches` is the check, and
+> it is a real one rather than a reading of the SQL: an `AFTER UPDATE` trigger fires once per row
+> per statement, so it counts update events. Breaking the rule into a `@Transaction` default method
+> over two `@Query`s fails that test **and nothing else in the suite** — which is exactly the
+> mutation the section warns about.
+>
+> One deviation, upwards: the guard compares all three clock components, not the two this section's
+> example SQL names. The row clock *is* `(ms, counter, node)`, the counter is per-generator, and two
+> nodes reaching the same `(ms, counter)` is not exotic — so comparing a prefix would read another
+> device's write as "unchanged".
 
 ### 3.3 Crash points, and what each costs
 
@@ -412,6 +447,25 @@ Field names for a note: `title`, `content`, `contentFormat`, `checklist`, `isPin
 `folderId`, `createdAt`, `updatedAt`, `isDeleted`, `deletedAt`. For a folder: `name`, `colorArgb`,
 `createdAt`, `updatedAt`, `isDeleted`, `deletedAt`.
 
+> **[SHIPPED as `:core-sync-codec`, and it is ONE implementation for both apps.]** The payload
+> format was written first on the desktop (`desktop/store/RecordPayloadCodec.kt`, PR #87) and moved
+> into a shared module unchanged, because a note written on the phone has to be readable on the
+> laptop **byte for byte** and two implementations of one format is the failure this project keeps
+> meeting. `RecordPayloadWireFormatTest` pins the exact bytes of a note and a folder, so a change to
+> either end is a red test rather than an account nobody can open. The desktop's copy should be
+> deleted in favour of this module when `desktop-integration` lands.
+>
+> The module also owns `SyncRecords`, the payload ⇄ `SyncRecord` conversion, and it is **lossy in
+> one direction**: the payload carries `createdAt` (this section lists it, and the desktop's decoder
+> refuses a payload without it) and `SyncRecord` does not, because `FieldClocks.NOTE_FIELDS`
+> deliberately excludes it. A device receiving a record for the first time therefore has to choose a
+> `createdAt`, and it chooses the record's `updatedAt` — the convention `ConflictCopies` already
+> settled for the same problem. **This is a real gap, not a resolved one**: a note created on one
+> device and edited before it reaches a second one carries a later `createdAt` there, so the two
+> devices disagree about the "newest created" order. Closing it means giving `createdAt` a clock and
+> a place in `RecordType.fields`, which is a change to the merge's field set and to every fixture
+> that builds a record. See `RecordRows.createdAtFor`.
+
 Decode with `ignoreUnknownKeys = false` and **refuse the record** on a `v` this build does not know,
 rather than silently dropping fields — the "silent field loss when an older app re-serialises a
 newer payload" risk in the architecture doc's table. A refused record must not advance `dirty` or
@@ -487,6 +541,28 @@ Write a dedicated `applyRemoteNote` / `applyRemoteFolder` that writes **every** 
 sync columns, and make it the only path a merged record takes. Also delete the dead
 `insertNote` (`NoteDao.kt:60`): it is `@Insert(REPLACE)`, REPLACE is DELETE-then-INSERT, it has
 no callers, and it would wipe `createdAt`, both tombstone columns and every sync column.
+
+> **[SHIPPED — `RoomSyncStore.applyMerged` is the only caller of `applyRemoteNote`.]** `insertNote`
+> was already gone. The merged row and its conflict copy go in one `withTransaction`, because a
+> winner written without the copy holding the body it displaced is the one outcome the whole
+> conflict-copy design exists to prevent.
+>
+> **A second, symmetrical problem was found by running two devices, and it is in `saveNote`.**
+> `upsertNote` writes six values on every save because it is one statement, and the repository was
+> claiming a fresh clock for all six — including the ones it merely copied back out of its own stale
+> row. That is the mirror image of the bug this section describes: not a write path that refuses a
+> field it should write, but a write path that *asserts authorship* of a field it did not change.
+> The consequence is the same shape and worse: pin a note on the phone, type into it on the tablet
+> before the tablet has seen the pin, and the tablet's save carries `isPinned = false` at a newer
+> clock and the pin is discarded. `RoomNotesRepository.savedNoteFields` now compares the row against
+> the note being saved and stamps only what actually changed; `savedFolderFields` does the same for
+> a rename racing a recolour. It costs one full-row read per autosave, taken deliberately —
+> comparing only the cheap columns would leave `content` always claimed and re-open the same hole
+> for the mirror gesture.
+>
+> `SAVE_NOTE_FIELDS`'s own KDoc already stated the rule ("listing a field here claims a clock for a
+> value this write never set") and applied it only to the fields the statement omits. This applies
+> it to the fields the statement writes unchanged, which is the same rule.
 
 ### 5.7 Idempotence, and how to be sure of it
 
@@ -582,6 +658,28 @@ So:
   that note has an open editor. **This is unresolved and is decision D5.**
 - Background sync via a ciphertext outbox is Phase 5 and is explicitly out of scope. Do not
   half-build it.
+
+> **[SHIPPED, minus the timer.]** `AppScopeModule` provides the
+> `CoroutineScope(SupervisorJob() + Dispatchers.IO)` this section asks for, `SyncOnUnlock` collects
+> `SecureUnlockManager.unlocked` on it and starts a pass on every unlock, and pull-to-refresh on the
+> notes list runs one and waits for it. `DefaultSyncController` holds the gate (five separate
+> preconditions, each with its own sentence for the user), the `Mutex`, and the account keys for
+> exactly one pass — `AccountRootKey.derive` per pass, `destroy()` in a `finally`, rather than a
+> `K_content` living in a `@Singleton` across every lock.
+>
+> **The 60-second foreground timer is deliberately not built.** Two triggers is enough to make sync
+> real, and a timer is the piece most likely to be wrong in a way nobody notices — a pass every
+> minute against a server that is rate-limiting, on a device whose screen is on but idle. It is one
+> `while (isActive) { delay(60_000); requestSync() }` on the scope that already exists, and it
+> should be added with a decision about what pauses it.
+>
+> **Nothing here relaxes the lock.** `MainApplication.onStop` still locks; a pass that starts after
+> a background event finds no keys and reports `SyncPassState.Unavailable`.
+>
+> **D5 is still open and is still the one most likely to be discovered the expensive way.** A remote
+> record applied to a note that is currently open goes straight into the row behind the editor's
+> live state, exactly as this section warns. Nothing defers it and nothing routes it through the
+> editor's merge path.
 
 ---
 
@@ -717,3 +815,16 @@ column, is open.
 > **total** order and therefore cannot express concurrency. "Both devices edited since their last
 > common ancestor" is not derivable from two clocks, however carefully they are compared. It needs
 > the ancestor written down, and one clock per record is the smallest form of that.
+
+> **[CLOSED — `notes.contentSyncedHlc`, schema v8.]** The column is written by
+> `RoomSyncStore.applyMerged`, `recordSeen` and `acknowledgePush`, from `Baselines.advance`, and
+> read back by `load`. Nothing in the merge changed, as this section predicted.
+>
+> The decision to close it rather than ship the conservative fallback is a noise decision made
+> against a concrete case: `TwoDeviceSyncTest.a pin does not cost a duplicate note` pins a note on
+> one device while the other edits the body, over two real Room databases, and asserts one note
+> rather than two. Without the column that test produces a duplicate — which is the exact gesture
+> §5.2 names as the reason the design is field-level at all.
+>
+> `''` is the recorded absence and is **not** `Hlc.ZERO`; see the §2 block above for why the
+> difference is the whole safety of the migration.

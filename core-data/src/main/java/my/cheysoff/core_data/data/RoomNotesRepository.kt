@@ -6,7 +6,9 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import my.cheysoff.core_data.data.local.FolderDao
+import my.cheysoff.core_data.data.local.FolderEntity
 import my.cheysoff.core_data.data.local.NoteDao
+import my.cheysoff.core_data.data.local.NoteEntity
 import my.cheysoff.core_data.data.local.NoteDatabase
 import my.cheysoff.core_data.data.local.RowClock
 import my.cheysoff.core_data.data.local.toDomain
@@ -132,7 +134,7 @@ class RoomNotesRepository @Inject constructor(
         // transaction is here because the field clocks are read-modify-write and the read must not
         // be able to see a different row than the write updates.
         database.withTransaction {
-            val prior = noteDao.rowClock(note.id)
+            val prior = noteDao.noteRow(note.id)
             noteDao.upsertNote(
                 id = note.id,
                 title = note.title,
@@ -145,9 +147,62 @@ class RoomNotesRepository @Inject constructor(
                 hlcMs = stamp.hlc.ms,
                 hlcCounter = stamp.hlc.counter,
                 hlcNode = stamp.hlc.node,
-                fieldHlc = noteFieldHlc(prior, SAVE_NOTE_FIELDS, stamp),
+                fieldHlc = noteFieldHlc(prior?.clocks(), savedNoteFields(prior, note), stamp),
             )
         }
+    }
+
+    /**
+     * Which of `upsertNote`'s fields this particular save actually **changed**.
+     *
+     * ## Why "wrote" is not the same as "changed"
+     *
+     * `upsertNote` writes six values every time, because it is one statement and a statement cannot
+     * choose its columns. Claiming a clock for all six is what `SAVE_NOTE_FIELDS` used to do, and it
+     * makes the note's most recent save assert that *this device decided* every one of those values
+     * at that moment — including the ones it merely copied back out of its own stale row.
+     *
+     * That assertion is false, and the merge believes it. Pin a note on the phone; type a sentence
+     * into it on the tablet before the tablet has seen the pin; the tablet's save carries
+     * `isPinned = false` at a newer clock and the pin is discarded. That is precisely the gesture
+     * §5.2 of the phase-3 plan names as the reason the design is field-level at all, so getting it
+     * wrong costs the feature its whole justification. `TwoDeviceSyncTest.a pin on one device and
+     * an edit on the other both survive` is the check, and it failed before this existed.
+     *
+     * `SAVE_NOTE_FIELDS`'s own KDoc already stated the rule — *listing a field here claims a clock
+     * for a value this write never set* — and applied it only to the fields the statement omits.
+     * This applies it to the fields the statement writes unchanged, which is the same rule.
+     *
+     * ## The cost
+     *
+     * One full-row read per save, where there used to be a read of four small columns. It is inside
+     * the transaction that is about to write the same row, so it is one extra scan of a page the
+     * database has just had to find anyway, and `content` can be large. That is a real cost on the
+     * editor's autosave path and it is accepted deliberately: the alternative is comparing only the
+     * cheap columns, which would leave `content` always claimed and re-open the same hole for the
+     * mirror-image gesture — edit on the phone, save-without-typing on the tablet.
+     *
+     * `updatedAt` is always in the result. The statement sets it to now unconditionally, and unlike
+     * the other five that genuinely is a new value every time.
+     */
+    private fun savedNoteFields(prior: NoteEntity?, note: Note): Set<String> {
+        // A row that does not exist yet has every field at this write's clock, which
+        // `FieldClocks.stamp` spells as the empty string whatever it is told; naming them all here
+        // keeps the two answers from having to agree by accident.
+        if (prior == null) return SAVE_NOTE_FIELDS
+
+        val touched = mutableSetOf(FieldClocks.UPDATED_AT)
+        if (prior.title != note.title) touched += FieldClocks.TITLE
+        // `content` and `contentFormat` are one value with one clock, so either changing is the
+        // value changing. Comparing them separately would be the first step towards clocking them
+        // separately, which both `FieldClocks` and `NoteDao.upsertNote` call silent corruption.
+        if (prior.content != note.content || prior.contentFormat != note.contentFormat.storageValue) {
+            touched += FieldClocks.CONTENT
+        }
+        if (prior.checklist != note.checklist) touched += FieldClocks.CHECKLIST
+        if (prior.isPinned != note.isPinned) touched += FieldClocks.PINNED
+        if (prior.folderId != note.folderId) touched += FieldClocks.FOLDER
+        return touched
     }
 
     override suspend fun deleteNote(id: String) {
@@ -259,7 +314,7 @@ class RoomNotesRepository @Inject constructor(
         // those fields would arrive at their defaults and wipe the stored values.
         val stamp = stamp()
         database.withTransaction {
-            val prior = folderDao.rowClock(folder.id)
+            val prior = folderDao.folderRow(folder.id)
             folderDao.upsertFolder(
                 id = folder.id,
                 name = folder.name,
@@ -268,9 +323,25 @@ class RoomNotesRepository @Inject constructor(
                 hlcMs = stamp.hlc.ms,
                 hlcCounter = stamp.hlc.counter,
                 hlcNode = stamp.hlc.node,
-                fieldHlc = folderFieldHlc(prior, SAVE_FOLDER_FIELDS, stamp),
+                fieldHlc = folderFieldHlc(prior?.clocks(), savedFolderFields(prior, folder), stamp),
             )
         }
+    }
+
+    /**
+     * `savedNoteFields` for a folder — read that method; the rule and the reason are identical.
+     *
+     * The gesture it protects here is renaming a folder on one device while recolouring it on
+     * another: two independent values, one statement that writes both, and without this the later
+     * save silently reverts the other device's edit.
+     */
+    private fun savedFolderFields(prior: FolderEntity?, folder: Folder): Set<String> {
+        if (prior == null) return SAVE_FOLDER_FIELDS
+
+        val touched = mutableSetOf(FieldClocks.UPDATED_AT)
+        if (prior.name != folder.name) touched += FieldClocks.NAME
+        if (prior.colorArgb != folder.colorArgb) touched += FieldClocks.COLOR
+        return touched
     }
 
     override suspend fun deleteFolder(id: String) {
