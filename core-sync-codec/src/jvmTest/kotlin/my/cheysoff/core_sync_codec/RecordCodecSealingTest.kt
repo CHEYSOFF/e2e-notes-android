@@ -1,4 +1,4 @@
-package my.cheysoff.desktop.store
+package my.cheysoff.core_sync_codec
 
 import my.cheysoff.core_crypto.sync.AccountRootKey
 import my.cheysoff.core_crypto.sync.BlindedRecordId
@@ -11,7 +11,7 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-class RecordCodecTest {
+class RecordCodecSealingTest {
 
     private val keys = AccountRootKey.derive(AccountRootKey.generateArk())
     private val other = AccountRootKey.derive(AccountRootKey.generateArk())
