@@ -19,8 +19,12 @@
   OkHttp. Widening it to any other host would be widening the app's own rule, not this file's.
 
   On a device, loopback is the device itself. It is reachable from a developer machine through
-  `adb reverse tcp:8080 tcp:8080`, which forwards the phone's 127.0.0.1 to the host's -- so the
+  `adb reverse tcp:8080 tcp:8080`, which forwards the phone's 127.0.0.1 to the host's, so the
   traffic still never leaves the pair of machines the developer is holding.
+
+  (Note for anyone editing this file: an XML comment may not contain a double hyphen. The rest of
+  this codebase uses one as an em dash, and doing so here makes the resource unparseable, which
+  surfaces as a Gradle failure in `parseDebugLocalResources`, nowhere near the text that caused it.)
 -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="false" />

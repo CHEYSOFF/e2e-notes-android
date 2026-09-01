@@ -250,6 +250,38 @@ class RecordStore private constructor(private val connection: Connection) : Auto
     }
 
     /**
+     * Runs [block] inside one database transaction, committing at the end and rolling back if it
+     * throws.
+     *
+     * There is exactly one operation that needs this, and it is not a performance concern: applying
+     * a merge that produced a **conflict copy** writes two rows — the merged record, which takes
+     * the winning body, and the copy, which is the only remaining home of the losing one. Written
+     * separately, a crash between them leaves the winner stored and the loser gone, which is
+     * precisely the outcome conflict copies exist to prevent. Either both rows land or neither
+     * does.
+     *
+     * Nested calls are not supported; nothing here needs them, and SQLite has no nested
+     * transactions without savepoints.
+     */
+    fun <T> inTransaction(block: () -> T): T {
+        val previous = connection.autoCommit
+        connection.autoCommit = false
+        try {
+            val result = block()
+            connection.commit()
+            return result
+        } catch (e: Throwable) {
+            // Rolled back on ANY throwable, not just SQLException: a failure inside `block` that is
+            // not the database's fault (a codec refusing to seal, say) leaves the transaction just
+            // as half-written, and a half-applied merge is the thing worth preventing.
+            connection.rollback()
+            throw e
+        } finally {
+            connection.autoCommit = previous
+        }
+    }
+
+    /**
      * Writes a record the sync engine decided on: the envelope and all three bookkeeping columns,
      * in one statement.
      *
