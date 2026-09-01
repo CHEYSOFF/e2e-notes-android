@@ -17,6 +17,15 @@ kotlin {
     }
     jvm { compilerOptions { jvmTarget.set(JvmTarget.JVM_11) } }
 
+    // The Apple targets. NONE of them has ever been compiled -- the Kotlin/Native Apple compilers
+    // only run on macOS -- and this module is where that matters most, because `appleMain` here is
+    // not a thin adapter: it carries the certificate pin. See `SyncEngine.apple.kt`, and read
+    // docs/BUILDING-IOS.md before trusting a build of it.
+    iosArm64()
+    iosSimulatorArm64()
+    iosX64()
+    macosArm64()
+
     // No `mingwX64()` canary, unlike :core-domain, and for a concrete reason rather than by
     // omission: `commonMain` here needs an HTTP engine, and Ktor ships none for mingw. A canary
     // target would have to be satisfied by an engine that ships in no product, which would prove
@@ -53,9 +62,7 @@ kotlin {
         // `jvmMain` would be two copies of the one piece of code where a mistake means an unpinned
         // connection through a pinned-looking client.
         //
-        // This is also where an Apple target does NOT go: `appleMain` would sit beside this one,
-        // depend on `commonMain`, and provide the same two actuals over `ktor-client-darwin`
-        // (`libs.ktor.client.darwin`, already in the version catalog).
+        // The Apple half sits beside this one rather than under it -- see `appleMain` below.
         val jvmCommonMain by creating {
             dependsOn(commonMain)
             dependencies {
@@ -68,6 +75,27 @@ kotlin {
         }
         val androidMain by getting { dependsOn(jvmCommonMain) }
         val jvmMain by getting { dependsOn(jvmCommonMain) }
+
+        // The Apple half: the same two actuals over Ktor's Darwin engine, which is
+        // `NSURLSession`. It is a sibling of `jvmCommonMain` rather than a child of it -- there is
+        // nothing the OkHttp code and the `NSURLSession` code could usefully share, since the
+        // whole reason those two functions are `expect` is that pinning has no portable spelling.
+        //
+        // `maybeCreate` rather than `by creating` so this keeps working if a future Kotlin version
+        // does apply the default hierarchy template to this module, in which case `appleMain`
+        // already exists and creating it again would fail the build.
+        val appleMain = maybeCreate("appleMain").apply {
+            dependsOn(commonMain)
+            dependencies {
+                // The engine. Declared here and nowhere else: `commonMain` names no engine, which
+                // is the property that keeps this "one client, swappable engines" rather than two
+                // clients.
+                implementation(libs.ktor.client.darwin)
+            }
+        }
+        listOf("iosArm64", "iosSimulatorArm64", "iosX64", "macosArm64").forEach { target ->
+            getByName("${target}Main").dependsOn(appleMain)
+        }
 
         val jvmTest by getting {
             dependencies {
