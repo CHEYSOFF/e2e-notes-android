@@ -103,7 +103,10 @@ class DesktopPairingControllerTest {
         val waiting = controller.step as PairingStep.Waiting
         val phone = AccountDeviceSession(HkdfKeyDerivation, MonotonicClock { 0 }, bundle.ark, bundle.accountId)
         val accepted = phone.onScanned(waiting.code) as OfferOutcome.Accepted
-        drop.deposit(phone.receivedSid!!, accepted.sealCode)
+        // `onScanned` accepts the offer and yields the SAS; sealing is a second, separate step, so
+        // that a device cannot hand over the account root key before its user has had the chance to
+        // compare digits. `""` is the empty config, exactly as `PairingViewModel` sends it.
+        drop.deposit(phone.receivedSid!!, phone.seal("")!!)
 
         pump()
 
@@ -123,7 +126,7 @@ class DesktopPairingControllerTest {
 
         val phone = AccountDeviceSession(HkdfKeyDerivation, MonotonicClock { 0 }, bundle.ark, bundle.accountId)
         val accepted = phone.onScanned((controller.step as PairingStep.Waiting).code) as OfferOutcome.Accepted
-        drop.deposit(phone.receivedSid!!, accepted.sealCode)
+        drop.deposit(phone.receivedSid!!, phone.seal("")!!)
         pump()
 
         val collectsAtSuccess = drop.collects
@@ -280,7 +283,7 @@ class DesktopPairingControllerTest {
 
         val phone = AccountDeviceSession(HkdfKeyDerivation, MonotonicClock { 0 }, bundle.ark, bundle.accountId)
         val accepted = phone.onScanned((controller.step as PairingStep.Waiting).code) as OfferOutcome.Accepted
-        drop.deposit(phone.receivedSid!!, accepted.sealCode)
+        drop.deposit(phone.receivedSid!!, phone.seal("")!!)
         pump()
         check(controller.step is PairingStep.Confirming) { "setup failed: ${controller.step}" }
         return controller

@@ -1,4 +1,4 @@
-package my.cheysoff.desktop.store
+package my.cheysoff.core_sync_codec
 
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.Note
@@ -6,8 +6,6 @@ import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.core_domain.sync.Hlc
 import my.cheysoff.core_domain.sync.RecordType
 import my.cheysoff.core_domain.sync.SyncValues
-import my.cheysoff.core_sync_codec.PayloadFields
-import my.cheysoff.core_sync_codec.RecordPayload
 
 /**
  * A note as this device holds it: the domain object plus the clocks that decide a merge.

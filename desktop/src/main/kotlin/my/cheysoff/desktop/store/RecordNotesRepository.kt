@@ -1,5 +1,9 @@
 package my.cheysoff.desktop.store
 
+import my.cheysoff.core_sync_codec.FolderRecords
+import my.cheysoff.core_sync_codec.FolderRow
+import my.cheysoff.core_sync_codec.NoteRecords
+import my.cheysoff.core_sync_codec.NoteRow
 import my.cheysoff.core_sync_codec.OpenResult
 import my.cheysoff.core_sync_codec.RecordCodec
 import kotlinx.coroutines.flow.Flow

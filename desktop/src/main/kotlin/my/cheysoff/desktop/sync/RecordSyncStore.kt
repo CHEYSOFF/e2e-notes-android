@@ -85,13 +85,17 @@ class RecordSyncStore(
         .mapNotNull { open(it.blindedId) }
         .sortedWith(compareBy({ it.record.rowClock }, { it.record.type }, { it.record.uuid }))
 
-    override suspend fun applyMerged(write: MergedWrite) = store.inTransaction {
-        put(write.record, dirty = write.dirty, seq = write.seq, baseline = write.contentBaseline)
-        write.conflictCopy?.let { copy ->
-            // `dirty = true` and no `seq`: the copy has never been on the server, which the server
-            // reads as "this record must not exist". The engine only sets it when no record with
-            // that uuid is present, so there is nothing here to preserve.
-            put(copy, dirty = true, seq = null, baseline = null)
+    // A block body rather than an expression one: the last statement below is a `?.let`, so an
+    // expression body would infer `Unit?` and fail to override `SyncStore.applyMerged`.
+    override suspend fun applyMerged(write: MergedWrite) {
+        store.inTransaction {
+            put(write.record, dirty = write.dirty, seq = write.seq, baseline = write.contentBaseline)
+            write.conflictCopy?.let { copy ->
+                // `dirty = true` and no `seq`: the copy has never been on the server, which the
+                // server reads as "this record must not exist". The engine only sets it when no
+                // record with that uuid is present, so there is nothing here to preserve.
+                put(copy, dirty = true, seq = null, baseline = null)
+            }
         }
     }
 

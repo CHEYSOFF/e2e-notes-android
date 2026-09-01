@@ -71,7 +71,10 @@ class RecordStoreTest {
     @Test
     fun `marking a record synced clears dirty and records the sequence`() {
         store.put("abc", envelope(1))
-        store.markSynced("abc", 42)
+        // The envelope is passed back verbatim: `acknowledgePush` only clears `dirty` when the row
+        // still holds the bytes that were actually sent, so handing it anything else here would
+        // test the guard rather than the acknowledgement.
+        store.acknowledgePush("abc", envelope(1), 42, null)
 
         val row = store.readAll().single()
         assertFalse(row.dirty)
@@ -86,7 +89,7 @@ class RecordStoreTest {
     @Test
     fun `an update marks the record dirty again but keeps its synced sequence`() {
         store.put("abc", envelope(1))
-        store.markSynced("abc", 42)
+        store.acknowledgePush("abc", envelope(1), 42, null)
         store.put("abc", envelope(9))
 
         val row = store.readAll().single()
@@ -115,7 +118,7 @@ class RecordStoreTest {
         val path = folder.root.toPath().resolve("records.db")
         RecordStore.open(path).use { first ->
             first.put("abc", envelope(7, 7, 7))
-            first.markSynced("abc", 3)
+            first.acknowledgePush("abc", envelope(7, 7, 7), 3, null)
         }
         RecordStore.open(path).use { second ->
             val row = second.readAll().single()
