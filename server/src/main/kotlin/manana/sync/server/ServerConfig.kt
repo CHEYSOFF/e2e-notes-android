@@ -73,9 +73,13 @@ class ServerConfig(
      *
      * The answer to storage exhaustion, and the reason it is a *global* number rather than another
      * per-IP one: per-IP limits are per-IP, and an attacker with a botnet has as many of those as
-     * they like. With this cap the table cannot exceed roughly
-     * `maxLivePairings * maxPairingBlobBytes` -- about 8 MB at the defaults -- whoever is writing
-     * to it.
+     * they like. A pairing occupies at most two rows -- one per rendezvous slot -- so the table
+     * cannot exceed roughly `2 * maxLivePairings * maxPairingBlobBytes`, about 16 MB at the
+     * defaults, whoever is writing to it.
+     *
+     * Two rather than one because the cap counts *pairings*: a `sid` that is already live may fill
+     * its second slot without being turned away, since refusing the second leg of a handshake in
+     * progress would let pairings start and never finish.
      *
      * The cost of hitting it is that a legitimate pairing is refused with a `503` and the user
      * starts over, which is a far better failure than a full disk on a machine that also holds the
