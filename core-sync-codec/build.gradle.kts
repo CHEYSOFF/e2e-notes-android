@@ -38,6 +38,17 @@ kotlin {
                 // `RecordEnvelope`, `BlindedRecordId`, `AccountKeys` -- all of them JCA-backed and
                 // therefore in that module's `jvmCommonMain`, which is why this source set exists.
                 implementation(project(":core-crypto-shared"))
+
+                // `EnvelopeSyncTransport` is the codec pointed at a server: it implements the
+                // engine's `SyncTransport` over the net module's `SyncApi`. Both types are in its
+                // constructor and its return types, so both are `api` rather than `implementation`.
+                //
+                // This is the one place in the build where the engine and the client meet, and it
+                // is deliberately NOT either app: an Android application module cannot lend a class
+                // to a JVM desktop one, so the alternative to this dependency is two readings of
+                // what a 409 means and which failure is fatal.
+                api(project(":core-sync-engine"))
+                api(project(":core-sync-net"))
             }
         }
         val androidMain by getting { dependsOn(jvmCommonMain) }
@@ -45,6 +56,7 @@ kotlin {
         val jvmTest by getting {
             dependencies {
                 implementation(libs.junit)
+                implementation(libs.kotlinx.coroutines.test)
                 implementation(project(":core-crypto-shared"))
             }
         }

@@ -95,24 +95,39 @@ internal class PairingWireException(
  * `base64url_nopad` is RFC 4648 §5 (alphabet `A-Z a-z 0-9 - _`) with padding `=` omitted.
  * Base64url rather than raw bytes in QR byte-mode because the alphabet is URL- and log-safe and
  * survives every text pipeline a QR library might put it through; the ~33% size cost is affordable
- * at these payload sizes (QR1 ≈ 200 chars, QR2 ≈ 300 chars — both well inside a version-13 symbol
+ * at these payload sizes (QR1 ≈ 300 chars, QR2 ≈ 300 chars — both well inside a version-13 symbol
  * at error-correction level M, which is what [my.cheysoff.core_pairing.qr.QrCodes] emits).
  *
- * The `MNP1:` prefix (Mañana Pairing, version 1) is a fast reject: a camera pointed at the world
- * resolves QR codes constantly, and a five-character string comparison is what keeps the decoder
- * from base64-decoding a Wi-Fi credential on every frame. It is **not** a security boundary; the
- * version byte inside the frame is the authoritative version.
+ * The `MNP1:` prefix is a fast reject: a camera pointed at the world resolves QR codes constantly,
+ * and a five-character string comparison is what keeps the decoder from base64-decoding a Wi-Fi
+ * credential on every frame. It is **not** a security boundary and it is **not** the version: the
+ * version byte inside the frame is authoritative, and the prefix deliberately did not change when
+ * that byte went from `0x01` to `0x02`. Keeping it means a build that speaks only v1 reports a v2
+ * code as [PairingFailure.UNSUPPORTED_VERSION] — "the other device is running a different version",
+ * which a person can act on — instead of [PairingFailure.NOT_A_PAIRING_CODE], which is silent.
  *
  * ## Frame header — both kinds
  *
  * ```
  *   off  len  field
- *   0    1    ver     = 0x01   protocol version. A frame with any other value is UNSUPPORTED_VERSION.
+ *   0    1    ver     = 0x02   protocol version. A frame with any other value is UNSUPPORTED_VERSION.
  *   1    1    kind    = 0x01 for QR1 (the offer, emitted by the new device)
  *                     = 0x02 for QR2 (the seal,  emitted by the device that holds the ARK)
  *   2    16   sid              session id: 16 bytes from SecureRandom, minted by the new device
  *   18   ..   body             kind-specific, below
  * ```
+ *
+ * ### Why v2 exists
+ *
+ * v1's QR1 body ended after the SPKI pin. v2 appends the new device's **long-lived device public
+ * key**, and that is the whole difference; QR2 is byte-identical apart from its version byte, and
+ * the key schedule, the seal and the SAS are unchanged.
+ *
+ * The version is bumped rather than the field being made optional, even though the decoder could
+ * have tolerated its absence. A frame whose trailing bytes are optional is a frame two builds can
+ * read differently, and [ByteReader.requireExhausted] refuses trailing bytes for exactly that
+ * reason. The cost is that a v1 build and a v2 build cannot pair — which is the honest outcome,
+ * because a v1 device offers no key and therefore cannot be enrolled on the account it is joining.
  *
  * `sid` appears in QR1 and is echoed verbatim in QR2. It is also the HKDF salt **and** part of the
  * GCM AAD, which is what binds a seal to exactly one pairing attempt: a QR2 captured from an
@@ -129,13 +144,33 @@ internal class PairingWireException(
  *   86   urlLen    url      server base URL, UTF-8. MAY be empty (length 0).
  *   ..   1         pinLen   0 or 32
  *   ..   pinLen    spkiPin  SHA-256 of the server's SubjectPublicKeyInfo. Absent when pinLen = 0.
+ *   ..   1         dkLen    0 or 65
+ *   ..   dkLen     DB       the new device's LONG-LIVED device public key, SEC1 uncompressed.
+ *                          Absent when dkLen = 0.
  * ```
  *
  * `url` and `spkiPin` are a *hint*, not a decision: they carry a server the new device has already
  * been pointed at, so the user does not have to type it twice. They are unauthenticated at this
  * point (nothing has been agreed yet), and the authoritative server configuration is the `cfg`
- * field inside the seal, which is authenticated. Both may be empty, and on this branch always are —
- * nothing in the app configures a server yet. That is Phase 3's job.
+ * field inside the seal, which is authenticated. Both may be empty, and both are on the
+ * phone-to-phone path, where no server is involved at all.
+ *
+ * ### `DB`, and why it travels here rather than being fetched
+ *
+ * `DB` is **not** an ephemeral key and takes no part in the key schedule. It is the P-256 public key
+ * the new device will sign its server sessions with, and it is in QR1 so that the account device
+ * vouches for a key **a human pointed a camera at**. That is the property worth the 88 characters:
+ * the only alternative — the account device asking the server which key to authorise — would let
+ * whoever runs the server nominate the key, and enrolling an attacker-supplied device is precisely
+ * what `POST /v1/devices/authorize` exists to make impossible.
+ *
+ * It is validated as a point on decode ([P256.decodePublicKey]) rather than relayed as opaque
+ * bytes, for the reason [PairingFailure.INVALID_PEER_KEY] gives: a QR symbol that decodes decoded
+ * correctly, so an off-curve point in a well-formed frame was put there deliberately.
+ *
+ * `dkLen = 0` is legal and means "this device is not asking to be enrolled" — which is every phone,
+ * because the phone-to-phone flow never touches a server. Nothing about the handshake depends on
+ * `DB`; a frame without it pairs exactly as v1 did.
  *
  * ## QR2 body — `kind = 0x02`, emitted by device A (the device that holds the ARK)
  *
@@ -203,8 +238,13 @@ object PairingProtocol {
     /** ASCII marker on the front of every pairing QR. Not a security boundary — a fast reject. */
     const val QR_PREFIX = "MNP1:"
 
-    /** The only frame version this build produces or accepts. */
-    const val VERSION: Byte = 0x01
+    /**
+     * The only frame version this build produces or accepts.
+     *
+     * `0x02` since QR1 started carrying the joining device's long-lived public key. See the wire
+     * format above for why that was a version bump rather than an optional trailing field.
+     */
+    const val VERSION: Byte = 0x02
 
     /** Frame kind: QR1, the offer from the new device. */
     const val KIND_OFFER: Byte = 0x01
@@ -346,6 +386,13 @@ internal class OfferFrame(
     val sid: ByteArray,
     val encodedEphemeralKey: ByteArray,
     val serverHint: ServerHint,
+    /**
+     * The new device's long-lived device public key, SEC1 uncompressed, or null when the frame
+     * carried none. Not validated here — [PairingCodec] only checks the length, and
+     * [AccountDeviceSession] runs it through [P256.decodePublicKey] alongside the ephemeral key so
+     * that both on-curve checks are in one place.
+     */
+    val encodedDeviceKey: ByteArray?,
 )
 
 /** A decoded QR2. */
@@ -370,12 +417,21 @@ internal object PairingCodec {
     private val base64Encoder: Base64.Encoder = Base64.getUrlEncoder().withoutPadding()
     private val base64Decoder: Base64.Decoder = Base64.getUrlDecoder()
 
-    fun encodeOffer(sid: ByteArray, encodedEphemeralKey: ByteArray, hint: ServerHint): String {
+    fun encodeOffer(
+        sid: ByteArray,
+        encodedEphemeralKey: ByteArray,
+        hint: ServerHint,
+        encodedDeviceKey: ByteArray? = null,
+    ): String {
+        require(encodedDeviceKey == null || encodedDeviceKey.size == P256.POINT_SIZE_BYTES) {
+            "a device key is a ${P256.POINT_SIZE_BYTES}-byte SEC1 uncompressed P-256 point"
+        }
         val writer = ByteWriter()
         writeHeader(writer, PairingProtocol.KIND_OFFER, sid)
         writer.writeLengthPrefixed8(encodedEphemeralKey)
         writer.writeLengthPrefixed16(hint.url.toByteArray(Charsets.UTF_8))
         writer.writeLengthPrefixed8(hint.spkiPinSha256 ?: ByteArray(0))
+        writer.writeLengthPrefixed8(encodedDeviceKey ?: ByteArray(0))
         return wrap(writer.toByteArray())
     }
 
@@ -400,11 +456,18 @@ internal object PairingCodec {
         val point = reader.readLengthPrefixed8()
         val url = reader.readLengthPrefixed16()
         val pin = reader.readLengthPrefixed8()
+        val deviceKey = reader.readLengthPrefixed8()
         reader.requireExhausted()
 
         if (url.size > ServerHint.MAX_URL_BYTES) fail(PairingFailure.MALFORMED, "url too long")
         if (pin.isNotEmpty() && pin.size != ServerHint.SPKI_PIN_SIZE_BYTES) {
             fail(PairingFailure.MALFORMED, "spki pin is not a SHA-256 digest")
+        }
+        // MALFORMED rather than INVALID_PEER_KEY: a field of the wrong length is a frame that does
+        // not parse, and nothing has been read as a point yet. The on-curve check — the one that is
+        // terminal — happens where the key is used, in `AccountDeviceSession`.
+        if (deviceKey.isNotEmpty() && deviceKey.size != P256.POINT_SIZE_BYTES) {
+            fail(PairingFailure.MALFORMED, "device key is not a SEC1 uncompressed P-256 point")
         }
         return OfferFrame(
             sid = sid,
@@ -413,6 +476,7 @@ internal object PairingCodec {
                 url = String(url, Charsets.UTF_8),
                 spkiPinSha256 = pin.takeIf { it.isNotEmpty() },
             ),
+            encodedDeviceKey = deviceKey.takeIf { it.isNotEmpty() },
         )
     }
 

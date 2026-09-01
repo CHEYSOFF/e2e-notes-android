@@ -131,7 +131,7 @@ class PairingViewModelTest {
         assertEquals(120, showing.secondsRemaining)
 
         // The other phone -- a real AccountDeviceSession, not a stub -- answers.
-        val accountDevice = AccountDeviceSession(HkdfKeyDerivation, clock, bundle)
+        val accountDevice = AccountDeviceSession(HkdfKeyDerivation, clock, bundle.ark, bundle.accountId)
         val accepted = accountDevice.onScanned(showing.code) as OfferOutcome.Accepted
 
         vm.onIntent(PairingIntent.OfferShown)
@@ -167,7 +167,7 @@ class PairingViewModelTest {
 
         vm.onIntent(PairingIntent.RoleChosen(PairingRole.NewDevice))
         val showing = vm.state.value.stage as PairingStage.ShowingOffer
-        val accepted = AccountDeviceSession(HkdfKeyDerivation, clock, bundle)
+        val accepted = AccountDeviceSession(HkdfKeyDerivation, clock, bundle.ark, bundle.accountId)
             .onScanned(showing.code) as OfferOutcome.Accepted
         vm.onIntent(PairingIntent.OfferShown)
         vm.onIntent(PairingIntent.CodeScanned(accepted.sealCode))
@@ -251,7 +251,7 @@ class PairingViewModelTest {
 
         // A complete pairing between two unrelated sessions, replayed at this one.
         val strangerOffer = NewDeviceSession(HkdfKeyDerivation, clock)
-        val strangerSeal = AccountDeviceSession(HkdfKeyDerivation, clock, bundle)
+        val strangerSeal = AccountDeviceSession(HkdfKeyDerivation, clock, bundle.ark, bundle.accountId)
             .onScanned(strangerOffer.offerCode) as OfferOutcome.Accepted
 
         vm.onIntent(PairingIntent.CodeScanned(strangerSeal.sealCode))
@@ -289,7 +289,7 @@ class PairingViewModelTest {
 
         vm.onIntent(PairingIntent.RoleChosen(PairingRole.NewDevice))
         val showing = vm.state.value.stage as PairingStage.ShowingOffer
-        val accepted = AccountDeviceSession(HkdfKeyDerivation, clock, bundle)
+        val accepted = AccountDeviceSession(HkdfKeyDerivation, clock, bundle.ark, bundle.accountId)
             .onScanned(showing.code) as OfferOutcome.Accepted
         vm.onIntent(PairingIntent.OfferShown)
 

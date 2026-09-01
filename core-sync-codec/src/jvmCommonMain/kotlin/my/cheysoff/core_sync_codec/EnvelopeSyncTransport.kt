@@ -1,10 +1,7 @@
-package my.cheysoff.notes.sync
+package my.cheysoff.core_sync_codec
 
 import my.cheysoff.core_domain.sync.FieldClocks
 import my.cheysoff.core_domain.sync.RecordType
-import my.cheysoff.core_sync_codec.OpenResult
-import my.cheysoff.core_sync_codec.RecordCodec
-import my.cheysoff.core_sync_codec.SyncRecords
 import my.cheysoff.core_sync_engine.ChangePage
 import my.cheysoff.core_sync_engine.IncomingRecord
 import my.cheysoff.core_sync_engine.PushAck
@@ -26,9 +23,15 @@ import my.cheysoff.core_sync_net.SyncException
  *
  * This is the seam `:core-sync-engine` was written not to cross. The engine deals in `SyncRecord`s
  * and never sees an envelope; the client deals in opaque blobs and never sees a note. Both halves
- * meet here, in `:app`, because this is the only module that can see the HTTP client, the account
- * keys and the merge vocabulary at once — the same argument `KeystoreDeviceSigner` and
- * `ArkDeviceLabelSealer` already make for living here.
+ * meet here, in the module that already owns the conversion between the two — [RecordCodec] turns a
+ * record into a blob and [SyncRecords] turns a payload into a record, and this class is those two
+ * pointed at a `SyncApi`.
+ *
+ * It lives here rather than in either app because **both** apps need exactly this object and neither
+ * can lend it to the other: `:app` is an Android application and `:desktop` is a JVM one. A second
+ * copy on the desktop would be a second reading of what a `409` means, what an unopenable record
+ * means, and which `SyncException` is fatal — the class of divergence that produces a note one
+ * device can write and the other cannot see, which is the failure this whole module exists to stop.
  *
  * ## A record that will not open is data, not an exception
  *

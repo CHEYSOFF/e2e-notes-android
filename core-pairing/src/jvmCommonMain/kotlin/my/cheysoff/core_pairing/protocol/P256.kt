@@ -163,7 +163,17 @@ object P256 {
      * device's *long-lived* identity key is a separate object entirely and lives in the Keystore —
      * see `my.cheysoff.feature_pairing.identity.DeviceIdentityKey` in `:feature-pairing`.
      */
-    fun generateEphemeralKeyPair(random: SecureRandom = SecureRandom()): KeyPair {
+    fun generateEphemeralKeyPair(random: SecureRandom = SecureRandom()): KeyPair = generateKeyPair(random)
+
+    /**
+     * A P-256 key pair, with no claim about how long it lives.
+     *
+     * [generateEphemeralKeyPair] is this function under a name that documents its one use; this one
+     * exists for the desktop's **long-lived** device signing key, which is generated once and then
+     * wrapped into the vault. Sharing the generator rather than writing a second one is the same
+     * rule the rest of this module follows: there is one place that names the curve.
+     */
+    fun generateKeyPair(random: SecureRandom = SecureRandom()): KeyPair {
         val generator = KeyPairGenerator.getInstance("EC")
         generator.initialize(ECGenParameterSpec(CURVE_NAME), random)
         return generator.generateKeyPair()

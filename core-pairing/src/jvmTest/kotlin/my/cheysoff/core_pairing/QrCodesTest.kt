@@ -70,10 +70,10 @@ class QrCodesTest {
         val clock = FakeClock()
         val newDevice = NewDeviceSession(HkdfKeyDerivation, clock)
         val accountDevice = AccountDeviceSession(
-            HkdfKeyDerivation, clock,
-            AccountBundle(ByteArray(32) { it.toByte() }, "acct-abcdefgh", """{"url":"https://a.example/"}"""),
+            HkdfKeyDerivation, clock, ByteArray(32) { it.toByte() }, "acct-abcdefgh",
         )
-        val accepted = accountDevice.onScanned(newDevice.offerCode) as OfferOutcome.Accepted
+        val accepted =
+            accountDevice.accept(newDevice.offerCode, """{"url":"https://a.example/"}""")!!
 
         val recovered = decodeThrough(QrCodes.encode(accepted.sealCode))
         assertEquals(accepted.sealCode, recovered)
