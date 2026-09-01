@@ -10,6 +10,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -114,6 +119,9 @@ class AppController(
 
     /** Built when the vault opens, and only when this device is actually enrolled on a server. */
     private var syncService: DesktopSyncService? = null
+
+    /** Cancelled and replaced whenever a vault opens, so a locked vault stops pushing. */
+    private var localEditJob: Job? = null
 
     private var pairedArk: ByteArray? = null
 
@@ -311,6 +319,19 @@ class AppController(
             }
         }
         syncState = if (syncService == null) DesktopSyncState.Unavailable else DesktopSyncState.Idle
+
+        // Push what was just typed, without pushing on every keystroke.
+        //
+        // A pass previously ran only on unlock and on the title-bar control, so a note written and
+        // left alone stayed on this machine indefinitely while the app cheerfully reported its last
+        // successful sync. Debounced rather than immediate because the editor autosaves as you
+        // type, and a pass per character would be absurd.
+        localEditJob?.cancel()
+        localEditJob = repository.localWrites
+            .drop(1)
+            .debounce(LOCAL_EDIT_SYNC_DELAY_MS)
+            .onEach { syncNow() }
+            .launchIn(scope)
         screen = Screen.Open(session, repository, store)
         message = repository.diagnostics.total.takeIf { it > 0 }?.let {
             // Said out loud rather than logged. These records are still on disk and still belong to
@@ -338,16 +359,30 @@ class AppController(
         scope.launch {
             syncState = try {
                 when (val outcome = withContext(Dispatchers.IO) { service.syncOnce() }) {
-                    is SyncOutcome.Completed -> DesktopSyncState.Done(outcome.stats.applied)
+                    is SyncOutcome.Completed -> {
+                        // The engine wrote straight into the record store, which the repository's
+                        // in-memory snapshot knows nothing about. Without this the screen keeps
+                        // showing what it held before the pass -- and a message saying twenty-six
+                        // notes arrived, over an empty list, is worse than no message at all.
+                        (screen as? Screen.Open)?.repository?.refreshFromStore()
+                        DesktopSyncState.Done(outcome.stats.applied)
+                    }
                     is SyncOutcome.Deferred -> DesktopSyncState.Deferred
                     // A halt is persisted and does not clear itself, so this device will not sync
                     // again until somebody deals with it. Named on screen rather than logged.
                     is SyncOutcome.Halted -> DesktopSyncState.Halted(outcome.reason.name)
-                    // Another pass beat this one to it; its result will land through the same
-                    // state, so there is nothing to report and nothing to retry.
-                    SyncOutcome.AlreadyRunning -> DesktopSyncState.Syncing
+                    // Another pass beat this one to it and will report its own result. Resolved
+                    // to Idle rather than left at Syncing: with the guard at the top of this
+                    // method, a state that stays Syncing means every later call returns
+                    // immediately and this device never syncs again until it restarts.
+                    SyncOutcome.AlreadyRunning -> DesktopSyncState.Idle
                 }
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
+                // Throwable, not Exception. A NoClassDefFoundError from a runtime missing a module
+                // is an Error, and catching only Exception left `syncState` stuck at Syncing --
+                // which the guard above then reads as "a pass is in flight", disabling sync for
+                // the rest of the session with no message and nothing in the UI to explain it.
+                // That is exactly how a packaged build failed here once already.
                 DesktopSyncState.Failed(e.message ?: e::class.java.simpleName)
             }
         }
@@ -402,3 +437,11 @@ class AppController(
                 "minute. Add words or other characters."
     }
 }
+
+/**
+ * How long to wait after the last local edit before pushing.
+ *
+ * Long enough to cover the editor's 600 ms autosave and an ordinary pause in typing, short enough
+ * that a note written and left alone reaches the other device while the person still expects it to.
+ */
+private const val LOCAL_EDIT_SYNC_DELAY_MS = 2_500L
