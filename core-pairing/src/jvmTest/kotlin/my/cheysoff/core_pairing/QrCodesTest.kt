@@ -1,12 +1,12 @@
-package my.cheysoff.feature_pairing
+package my.cheysoff.core_pairing
 
-import my.cheysoff.feature_pairing.protocol.AccountBundle
-import my.cheysoff.feature_pairing.protocol.AccountDeviceSession
-import my.cheysoff.feature_pairing.protocol.HkdfKeyDerivation
-import my.cheysoff.feature_pairing.protocol.NewDeviceSession
-import my.cheysoff.feature_pairing.protocol.OfferOutcome
-import my.cheysoff.feature_pairing.protocol.SealOutcome
-import my.cheysoff.feature_pairing.qr.QrCodes
+import my.cheysoff.core_pairing.protocol.AccountBundle
+import my.cheysoff.core_pairing.protocol.AccountDeviceSession
+import my.cheysoff.core_pairing.protocol.HkdfKeyDerivation
+import my.cheysoff.core_pairing.protocol.NewDeviceSession
+import my.cheysoff.core_pairing.protocol.OfferOutcome
+import my.cheysoff.core_pairing.protocol.SealOutcome
+import my.cheysoff.core_pairing.qr.QrCodes
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull

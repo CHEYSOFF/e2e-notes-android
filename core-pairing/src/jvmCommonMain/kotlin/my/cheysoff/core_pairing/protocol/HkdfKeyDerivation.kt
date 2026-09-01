@@ -1,4 +1,4 @@
-package my.cheysoff.feature_pairing.protocol
+package my.cheysoff.core_pairing.protocol
 
 import my.cheysoff.core_crypto.sync.Hkdf
 

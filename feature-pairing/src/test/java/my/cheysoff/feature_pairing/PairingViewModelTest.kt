@@ -6,13 +6,20 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import my.cheysoff.feature_pairing.di.PairingKeyMaterial
 import my.cheysoff.feature_pairing.identity.DeviceIdentity
-import my.cheysoff.feature_pairing.protocol.AccountBundle
-import my.cheysoff.feature_pairing.protocol.AccountDeviceSession
-import my.cheysoff.feature_pairing.protocol.HkdfKeyDerivation
-import my.cheysoff.feature_pairing.protocol.NewDeviceSession
-import my.cheysoff.feature_pairing.protocol.OfferOutcome
-import my.cheysoff.feature_pairing.protocol.PairingFailure
-import my.cheysoff.feature_pairing.protocol.PairingProtocol
+import my.cheysoff.core_pairing.protocol.AccountBundle
+import my.cheysoff.core_pairing.protocol.AccountDeviceSession
+import my.cheysoff.core_pairing.protocol.CollectResult
+import my.cheysoff.core_pairing.protocol.DepositResult
+import my.cheysoff.core_pairing.protocol.HkdfKeyDerivation
+import my.cheysoff.core_pairing.protocol.NewDeviceSession
+import my.cheysoff.core_pairing.protocol.OfferOutcome
+import my.cheysoff.core_pairing.protocol.PairingFailure
+import my.cheysoff.core_pairing.protocol.PairingProtocol
+import my.cheysoff.core_pairing.protocol.RendezvousClient
+import my.cheysoff.core_pairing.protocol.RendezvousClientFactory
+import my.cheysoff.core_pairing.protocol.RendezvousUrl
+import my.cheysoff.core_pairing.protocol.SealOutcome
+import my.cheysoff.core_pairing.protocol.ServerHint
 import my.cheysoff.feature_pairing.ui.CameraPermission
 import my.cheysoff.feature_pairing.ui.PairingIntent
 import my.cheysoff.feature_pairing.ui.PairingRole
@@ -199,7 +206,7 @@ class PairingViewModelTest {
         assertEquals(120, showing.secondsRemaining)
 
         // The code on screen really is one the new device can open.
-        assertTrue(newDevice.onScanned(showing.code) is my.cheysoff.feature_pairing.protocol.SealOutcome.Paired)
+        assertTrue(newDevice.onScanned(showing.code) is my.cheysoff.core_pairing.protocol.SealOutcome.Paired)
 
         vm.onIntent(PairingIntent.SealShown)
         val confirming = vm.state.value.stage as PairingStage.Confirming
@@ -368,18 +375,276 @@ class PairingViewModelTest {
         assertEquals(PairingStage.ChoosingRole, vm.state.value.stage)
     }
 
+    // -- pairing with a computer ---------------------------------------------------------------
+
+    /**
+     * A QR1 carrying a server address routes the seal to the rendezvous instead of to a QR code.
+     *
+     * The whole of the new branch. Note what is asserted about *when* the request happens: nothing
+     * is sent on scanning, only on [PairingIntent.SendSeal], because the address arrived
+     * unauthenticated inside the code that was just scanned.
+     */
+    @Test
+    fun anOfferNamingAServerSendsTheSealInsteadOfShowingIt() = runTest {
+        val material = FakeKeyMaterial(bound = true, bundle = bundle)
+        val rendezvous = FakeRendezvous()
+        val clock = FakeClock()
+        val vm = viewModel(keyMaterial = material, clock = clock, rendezvous = rendezvous)
+
+        vm.onIntent(PairingIntent.RoleChosen(PairingRole.HasMyNotes))
+        val computer = NewDeviceSession(
+            HkdfKeyDerivation, clock, ServerHint(url = "https://pair.example.test"),
+        )
+        vm.onIntent(PairingIntent.CodeScanned(computer.offerCode))
+
+        val sending = vm.state.value.stage as PairingStage.SendingSeal
+        assertEquals("pair.example.test", sending.host)
+        assertTrue(sending.secure)
+        assertFalse(sending.sending)
+        assertTrue("nothing may be sent before the user asks", rendezvous.deposits.isEmpty())
+
+        vm.onIntent(PairingIntent.SendSeal)
+        advanceUntilIdle()
+
+        assertEquals(1, rendezvous.deposits.size)
+        val (server, sid, sealCode) = rendezvous.deposits.single()
+        assertEquals("https://pair.example.test", server.base)
+        // Filed under the *computer's* sid, which is the name it will ask for and the value bound
+        // into both the HKDF salt and the GCM AAD.
+        assertArrayEquals(computer.sid, sid)
+
+        // What travels is exactly the QR2 payload -- the computer feeds it to the same
+        // `onScanned` a camera would have.
+        assertTrue(sealCode.startsWith(PairingProtocol.QR_PREFIX))
+        assertTrue(computer.onScanned(sealCode) is SealOutcome.Paired)
+
+        val confirming = vm.state.value.stage as PairingStage.Confirming
+        assertEquals(sending.sas, confirming.sas)
+        assertEquals(PairingRole.HasMyNotes, confirming.role)
+    }
+
+    /**
+     * **The phone-to-phone flow opens no socket.** This is the regression test for the constraint
+     * that mattered most: the rendezvous is an additional path, not a replacement.
+     */
+    @Test
+    fun pairingWithAnotherPhoneNeverTouchesTheNetwork() = runTest {
+        val rendezvous = FakeRendezvous()
+        val clock = FakeClock()
+        val vm = viewModel(
+            keyMaterial = FakeKeyMaterial(bound = true, bundle = bundle),
+            clock = clock,
+            rendezvous = rendezvous,
+        )
+
+        vm.onIntent(PairingIntent.RoleChosen(PairingRole.HasMyNotes))
+        // A phone's QR1 carries ServerHint.NONE, which is what NewDeviceSession still defaults to.
+        vm.onIntent(PairingIntent.CodeScanned(NewDeviceSession(HkdfKeyDerivation, clock).offerCode))
+
+        assertTrue(vm.state.value.stage is PairingStage.ShowingSeal)
+        assertTrue(rendezvous.deposits.isEmpty())
+
+        vm.onIntent(PairingIntent.SealShown)
+        vm.onIntent(PairingIntent.SasConfirmed)
+        advanceUntilIdle()
+        assertTrue(rendezvous.deposits.isEmpty())
+    }
+
+    /**
+     * A plain `http://` address is refused with a sentence rather than left to fail in the socket.
+     *
+     * Android has blocked cleartext HTTP by default since it started targeting API 28, so this
+     * would otherwise surface as an unexplained "cannot reach the server" that no amount of
+     * retrying fixes.
+     */
+    @Test
+    fun aCleartextServerIsRefusedBeforeAnyRequestIsMade() = runTest {
+        val rendezvous = FakeRendezvous()
+        val clock = FakeClock()
+        val vm = viewModel(
+            keyMaterial = FakeKeyMaterial(bound = true, bundle = bundle),
+            clock = clock,
+            rendezvous = rendezvous,
+        )
+
+        vm.onIntent(PairingIntent.RoleChosen(PairingRole.HasMyNotes))
+        vm.onIntent(
+            PairingIntent.CodeScanned(
+                NewDeviceSession(HkdfKeyDerivation, clock, ServerHint(url = "http://10.0.0.5:8080")).offerCode
+            )
+        )
+
+        val stage = vm.state.value.stage as PairingStage.SendingSeal
+        assertFalse(stage.secure)
+
+        vm.onIntent(PairingIntent.SendSeal)
+        advanceUntilIdle()
+
+        assertTrue(rendezvous.deposits.isEmpty())
+        val after = vm.state.value.stage as PairingStage.SendingSeal
+        assertTrue(after.message!!.contains("https://"))
+    }
+
+    /** A failed send is retriable and does not kill the attempt: a phone's connection drops. */
+    @Test
+    fun aFailedSendKeepsTheAttemptAliveAndCanBeRetried() = runTest {
+        var attempts = 0
+        val rendezvous = FakeRendezvous { _, _ ->
+            attempts++
+            if (attempts == 1) DepositResult.Unreachable("timeout") else DepositResult.Deposited(0L)
+        }
+        val clock = FakeClock()
+        val vm = viewModel(
+            keyMaterial = FakeKeyMaterial(bound = true, bundle = bundle),
+            clock = clock,
+            rendezvous = rendezvous,
+        )
+
+        vm.onIntent(PairingIntent.RoleChosen(PairingRole.HasMyNotes))
+        vm.onIntent(
+            PairingIntent.CodeScanned(
+                NewDeviceSession(HkdfKeyDerivation, clock, ServerHint(url = "https://pair.example.test")).offerCode
+            )
+        )
+
+        vm.onIntent(PairingIntent.SendSeal)
+        advanceUntilIdle()
+        val failed = vm.state.value.stage as PairingStage.SendingSeal
+        assertFalse(failed.sending)
+        assertTrue(failed.message!!.contains("timeout"))
+
+        vm.onIntent(PairingIntent.SendSeal)
+        advanceUntilIdle()
+        assertTrue(vm.state.value.stage is PairingStage.Confirming)
+    }
+
+    /**
+     * A `409` moves on rather than stopping.
+     *
+     * Either a previous attempt landed and its response was lost — in which case the computer has
+     * the bundle and comparing digits is exactly right — or somebody else got there first, in which
+     * case the computer collects something it cannot open and aborts loudly. The SAS comparison is
+     * the check for both, which is what it is for.
+     */
+    @Test
+    fun anAlreadyDepositedResponseProceedsToTheSasComparison() = runTest {
+        val rendezvous = FakeRendezvous { _, _ -> DepositResult.AlreadyDeposited }
+        val clock = FakeClock()
+        val vm = viewModel(
+            keyMaterial = FakeKeyMaterial(bound = true, bundle = bundle),
+            clock = clock,
+            rendezvous = rendezvous,
+        )
+
+        vm.onIntent(PairingIntent.RoleChosen(PairingRole.HasMyNotes))
+        vm.onIntent(
+            PairingIntent.CodeScanned(
+                NewDeviceSession(HkdfKeyDerivation, clock, ServerHint(url = "https://pair.example.test")).offerCode
+            )
+        )
+        vm.onIntent(PairingIntent.SendSeal)
+        advanceUntilIdle()
+
+        assertTrue(vm.state.value.stage is PairingStage.Confirming)
+    }
+
+    /** An unusable address in QR1 falls back to the QR code rather than to a broken send. */
+    @Test
+    fun anUnparseableServerHintFallsBackToShowingTheCode() = runTest {
+        val rendezvous = FakeRendezvous()
+        val clock = FakeClock()
+        val vm = viewModel(
+            keyMaterial = FakeKeyMaterial(bound = true, bundle = bundle),
+            clock = clock,
+            rendezvous = rendezvous,
+        )
+
+        vm.onIntent(PairingIntent.RoleChosen(PairingRole.HasMyNotes))
+        vm.onIntent(
+            PairingIntent.CodeScanned(
+                NewDeviceSession(HkdfKeyDerivation, clock, ServerHint(url = "file:///etc/passwd")).offerCode
+            )
+        )
+
+        assertTrue(vm.state.value.stage is PairingStage.ShowingSeal)
+        assertTrue(rendezvous.deposits.isEmpty())
+
+        // `ShowingSeal` starts the countdown, which is a `delay` loop on the test dispatcher.
+        // `runTest` drains the scheduler when the body returns, and a loop that reschedules itself
+        // forever means it never finishes draining -- so the test hangs rather than fails. Every
+        // other test in this file that ends on a stage with a live countdown does the same thing.
+        vm.onIntent(PairingIntent.StartOver)
+    }
+
+    /** Starting over drops the sealed bundle rather than leaving it available to a later send. */
+    @Test
+    fun startingOverDiscardsTheUnsentSeal() = runTest {
+        val rendezvous = FakeRendezvous()
+        val clock = FakeClock()
+        val vm = viewModel(
+            keyMaterial = FakeKeyMaterial(bound = true, bundle = bundle),
+            clock = clock,
+            rendezvous = rendezvous,
+        )
+
+        vm.onIntent(PairingIntent.RoleChosen(PairingRole.HasMyNotes))
+        vm.onIntent(
+            PairingIntent.CodeScanned(
+                NewDeviceSession(HkdfKeyDerivation, clock, ServerHint(url = "https://pair.example.test")).offerCode
+            )
+        )
+        vm.onIntent(PairingIntent.StartOver)
+        vm.onIntent(PairingIntent.SendSeal)
+        advanceUntilIdle()
+
+        assertTrue(rendezvous.deposits.isEmpty())
+        assertEquals(PairingStage.ChoosingRole, vm.state.value.stage)
+    }
+
     // -- fakes --------------------------------------------------------------------------------
 
     private fun viewModel(
         keyMaterial: PairingKeyMaterial,
         identity: FakeIdentity = FakeIdentity(),
         clock: FakeClock = FakeClock(),
+        rendezvous: FakeRendezvous = FakeRendezvous(),
     ) = PairingViewModel(
         keyDerivation = HkdfKeyDerivation,
         keyMaterial = keyMaterial,
         clock = clock,
         deviceIdentity = identity,
+        rendezvousClients = rendezvous,
+        // The rule's own dispatcher, so the send runs on the scheduler `runTest` advances. With
+        // the real `Dispatchers.IO` here, `advanceUntilIdle()` returns before the deposit has
+        // happened and every assertion about its result reads a value that has not been written
+        // yet -- which is how this parameter came to exist.
+        ioDispatcher = mainDispatcherRule.dispatcher,
     )
+
+    /**
+     * A rendezvous that records what it was asked to send.
+     *
+     * [deposits] being empty is the assertion that matters most in this file: the phone-to-phone
+     * tests must never touch it, because that flow opens no socket.
+     */
+    private class FakeRendezvous(
+        private val result: (ByteArray, String) -> DepositResult =
+            { _, _ -> DepositResult.Deposited(expiresAt = 0L) },
+    ) : RendezvousClientFactory {
+
+        /** Every (server, sid, sealCode) this was asked to deposit, in order. */
+        val deposits = mutableListOf<Triple<RendezvousUrl, ByteArray, String>>()
+
+        override fun create(server: RendezvousUrl): RendezvousClient = object : RendezvousClient {
+            override fun deposit(sid: ByteArray, sealCode: String): DepositResult {
+                deposits += Triple(server, sid, sealCode)
+                return result(sid, sealCode)
+            }
+
+            override fun collect(sid: ByteArray): CollectResult =
+                error("the account device never collects")
+        }
+    }
 
     private class FakeKeyMaterial(
         bound: Boolean,

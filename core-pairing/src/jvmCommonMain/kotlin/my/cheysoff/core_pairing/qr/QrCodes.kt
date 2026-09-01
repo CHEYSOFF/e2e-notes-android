@@ -1,4 +1,4 @@
-package my.cheysoff.feature_pairing.qr
+package my.cheysoff.core_pairing.qr
 
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.BinaryBitmap

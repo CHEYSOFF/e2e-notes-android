@@ -43,6 +43,11 @@ dependencies {
     // written in this module; every primitive comes from here so that a desktop record and a
     // phone record are the same bytes.
     implementation(project(":core-crypto-shared"))
+    // The pairing protocol, shared verbatim with the phone: the P-256 agreement, the wire format,
+    // the seal, the SAS, the QR encoder and the rendezvous client. Nothing about pairing is
+    // reimplemented in this module -- the desktop is device B of the same handshake two phones
+    // run, with an HTTP source in front of the second leg instead of a camera.
+    implementation(project(":core-pairing"))
 
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
@@ -86,6 +91,14 @@ tasks.withType<Test>().configureEach {
     // instead of running. Forwarded explicitly rather than set unconditionally so that an
     // ordinary test run still skips it.
     System.getProperty("manana.demoVault")?.let { systemProperty("manana.demoVault", it) }
+    // Same arrangement for the end-to-end pairing, which needs a server running at this address.
+    // See PairingAgainstRealServer for how to start one.
+    System.getProperty("manana.pairingServer")?.let { systemProperty("manana.pairingServer", it) }
+    // ...and for VaultArkFingerprint, which checks a pairing done by hand through the real UI.
+    System.getProperty("manana.inspectVault")?.let { systemProperty("manana.inspectVault", it) }
+    System.getProperty("manana.inspectPassphrase")?.let {
+        systemProperty("manana.inspectPassphrase", it)
+    }
 }
 
 compose.desktop {

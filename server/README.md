@@ -98,6 +98,11 @@ Every value is optional; an unparseable one stops start-up rather than silently 
 | `MANANA_SESSION_TTL_MS` | `86400000` | bearer token lifetime |
 | `MANANA_RATE_LIMIT_PER_MINUTE` | `120` | token-bucket refill rate |
 | `MANANA_RATE_LIMIT_BURST` | `120` | token-bucket capacity |
+| `MANANA_PAIRING_TTL_MS` | `120000` | how long a deposited pairing bundle stays collectable |
+| `MANANA_MAX_PAIRING_BLOB_BYTES` | `8192` | hard cap on one pairing bundle, decoded |
+| `MANANA_MAX_LIVE_PAIRINGS` | `1000` | unexpired pairings allowed at once, across every caller |
+| `MANANA_PAIRING_DEPOSIT_PER_MINUTE` | `6` | deposit-only bucket, per IP. An honest pairing uses one |
+| `MANANA_PAIRING_DEPOSIT_BURST` | `6` | deposit-only bucket capacity |
 | `MANANA_DEBUG` | unset | `1` enables `DEBUG` log lines |
 
 ### Backups
@@ -173,10 +178,57 @@ fields (public keys, signatures, envelopes) are all unpadded base64url, RFC 4648
 | `GET` | `/v1/changes?since=&limit=` | bearer | incremental pull, ordered by `seq` |
 | `POST` | `/v1/records` | bearer | batch upsert with per-item `baseSeq` CAS |
 | `GET` | `/v1/records/{id}/history?limit=` | bearer | the last N versions of one record |
+| `POST` | `/v1/pair/{sid}` | none | leave one sealed pairing bundle. `201`, or `409 pairing_exists` |
+| `GET` | `/v1/pair/{sid}` | none | collect it, once. `200`, or `404 no_pairing` |
 
 `POST /v1/session` is two round trips rather than one because a challenge/response handshake needs
 two; the design document's single `POST /v1/session` line is implemented as
 `/v1/session/challenge` followed by `/v1/session`.
+
+### The pairing rendezvous
+
+The two `/v1/pair/{sid}` routes are a dead drop with a two-minute lease, and they are the only
+unauthenticated routes that store anything. They exist because a **laptop has no camera**.
+
+Two phones pair entirely offline: the new device shows a QR code, the device holding the account key
+scans it and shows a second QR code carrying the sealed account key, and the new device scans that.
+No server is involved and none of it reaches this file. That flow is unchanged.
+
+A laptop breaks the second scan. So the second leg — and only the second leg — comes through here:
+the phone POSTs the **byte-for-byte payload of the second QR code** under `sid`, and the laptop
+polls for it. The first leg is untouched, which matters more than it sounds: the QR code remains an
+authenticated visual channel, and it is the reason a man in the middle is structurally impossible.
+The only key the phone has to authenticate is the laptop's ephemeral public key, and it gets it by a
+human pointing a camera at the laptop's screen.
+
+What this server holds in between is AES-256-GCM ciphertext under a key derived from an ECDH between
+two ephemeral P-256 keys, one of which was only ever displayed on a screen. **There is no code here
+that could open it and no key here that would help.** What it does learn is in "Can see" below, and
+it is not nothing.
+
+Rules, all of them enforced and each with a named test in `PairingRendezvousTest`:
+
+| Rule | Value | Why |
+|---|---|---|
+| TTL | `MANANA_PAIRING_TTL_MS`, 120 s | Matches the client's own `CODE_TTL_MILLIS`. Measured from the deposit; the client refuses a late bundle on its own monotonic clock regardless. |
+| Single use | collect deletes in the same transaction | Closes the window at the first successful read rather than at the TTL. Costs a retry: a collect whose *response* is lost has still consumed the blob, and the pairing restarts. |
+| First write wins | `409` on a second deposit | Stops someone who guessed a `sid` from replacing a real bundle with a decoy, which would make a legitimate pairing die with the protocol's most alarming message. |
+| Size cap | `MANANA_MAX_PAIRING_BLOB_BYTES`, 8 KiB | Deliberately looser than the ~4.5 KiB a maximal frame encodes to. This server does not parse the frame and must not start; the tight, protocol-derived check is the client's. |
+| Global capacity | `MANANA_MAX_LIVE_PAIRINGS`, 1000 | The only bound that survives an attacker with many addresses. Caps the table at roughly 8 MB whoever is writing. Exceeded ⇒ `503 pairing_capacity`. |
+| Deposit rate | `MANANA_PAIRING_DEPOSIT_PER_MINUTE`, 6/min/IP | Its own bucket, far tighter than the general limiter. An honest pairing deposits once; collecting polls dozens of times and stays on the general limiter. |
+| `sid` shape | exactly 16 bytes, base64url | Pinned where a blinded record ID deliberately is not: a short `sid` would be a namespace small enough to sweep. |
+
+**What an attacker who can guess or enumerate `sid` gets.** `sid` is 128 bits of `SecureRandom`, so
+neither is a plan — but the answer should not rest on that. Collecting someone else's blob yields
+ciphertext they cannot open and kills the pairing they interrupted: denial of service, not
+disclosure. Depositing under a live `sid` is refused. Depositing at random to fill the disk is
+bounded twice, per address and globally. None of it yields a note or a key.
+
+**Over plain HTTP** an on-path attacker sees what this server sees and can additionally race the
+collect or substitute the blob. Neither is a compromise — a stolen blob does not open without the
+laptop's ephemeral private key, and a substituted one fails the GCM tag, which the client treats as
+terminal and loud — but both are denial of service, and both are reasons the TLS proxy above is not
+optional.
 
 **There is no delete endpoint, and there must never be one.** A deletion is an ordinary upsert whose
 *plaintext* carries a tombstone flag, sealed inside the envelope. The server cannot tell it apart
@@ -193,7 +245,8 @@ use: `malformed_request`, `malformed_base64`, `invalid_account_id`, `invalid_pub
 `batch_too_large`, `duplicate_record_in_batch`, `payload_too_large`, `rate_limited`, `unauthorized`,
 `bad_signature`, `bad_challenge`, `stale_timestamp`, `replay_detected`, `device_revoked`,
 `unknown_device`, `unknown_record`, `account_exists`, `device_exists`, `cursor_ahead_of_server`,
-`internal_error`.
+`invalid_sid`, `invalid_sealed`, `sealed_too_large`, `pairing_exists`, `pairing_capacity`,
+`no_pairing`, `internal_error`.
 
 Request bodies are decoded **strictly**: an unknown JSON field is a `400`. On a client, ignoring
 unknown fields loses user data quietly; on a server it means silently ignoring a field that a future
@@ -230,6 +283,13 @@ shape either way.
 A token bucket per key, in memory, refilling at `MANANA_RATE_LIMIT_PER_MINUTE`. Exhaustion is `429`
 with a `Retry-After` in whole seconds, never `0`. Honour it **with jitter**: this is one person's VPS
 and their devices all wake up together, so identical back-off schedules form a herd.
+
+`POST /v1/pair/{sid}` draws on a **second, much tighter bucket** as well, keyed on the same address.
+The two verbs are not alike: an honest pairing deposits exactly once, while the collecting side polls
+every second and a half for up to two minutes. Sharing one bucket would either loosen the deposit
+limit to the general rate or throttle every sync request down to the deposit rate. A deposit is also
+the only unauthenticated request that makes this server *store* something, so it is the tap a
+storage-exhaustion attempt has to come through.
 
 ---
 
@@ -285,7 +345,25 @@ CREATE TABLE used_signatures (
     message_hash TEXT    NOT NULL PRIMARY KEY, -- SHA-256 of the canonical signed message
     expires_at   INTEGER NOT NULL
 );
+
+CREATE TABLE pairings (
+    sid        TEXT    NOT NULL PRIMARY KEY,   -- base64url of 16 bytes, chosen by the NEW device
+    sealed     TEXT    NOT NULL,               -- base64url ciphertext. Never opened, never parsed.
+    expires_at INTEGER NOT NULL                -- deposit + MANANA_PAIRING_TTL_MS
+);
+CREATE INDEX pairings_by_expiry ON pairings(expires_at);
 ```
+
+**`pairings` has no `account_id`, and cannot.** At the moment a blob is deposited the collecting
+device does not have an account yet — that is the entire point of a pairing — so there is nothing to
+scope the row to and no foreign key to hang it on. `sid` is 16 random bytes the new device minted
+for one attempt and it names nothing else.
+
+`sid` is stored as it arrives, where a session token is stored digested. The asymmetry is
+deliberate: a token is a credential the server can verify without holding, so hashing it means a
+database read yields nothing usable. Here the row already contains the blob that `sid` would
+retrieve, so digesting the key would be protecting a secret against someone holding the thing it
+unlocks.
 
 **`records` has four columns because four is what the server acts on**, and that is the rule the
 table is maintained under. It once carried `rec_type` and `hlc` as well: both were length-checked
@@ -349,6 +427,19 @@ disk, a hosting provider's snapshot — sees strictly less, and several items be
 - **The byte size of each request and response**, from the log. For a pull that is the aggregate
   bucket count of the page, which the row sizes already give.
 - **IP addresses, connection times and TLS metadata**, at the proxy, like any HTTP service.
+- **That a pairing happened, and when.** A row appears in `pairings` and is collected. A live
+  operator additionally sees **the two IP addresses involved and that they belong to one pairing** —
+  on a home connection that is one address for both — and **the blob's size**, which varies by a few
+  bytes with the account id and the client configuration sealed inside it. `sid` itself is in the
+  database and in the URL; it is 16 random bytes minted for one attempt and means nothing anywhere
+  else. It is never written to the log: the log line names the route template `POST /v1/pair/{sid}`,
+  and `PairingRendezvousTest.noSidReachesALogLine` is the test for that.
+
+  A pairing is not linkable to an account by this server. The blob carries the account id **inside
+  the ciphertext**, and the paired device's later `POST /v1/account` or `POST /v1/devices/authorize`
+  is a separate, signed request that shares no field with the pairing row. What a live operator can
+  do is correlate by *time* — a pairing at 14:02 and an enrolment at 14:03 from the same address are
+  obviously related — which is the same inference available from any two requests.
 
 ### Cannot see
 
@@ -370,6 +461,14 @@ disk, a hosting provider's snapshot — sees strictly less, and several items be
   ordinary upsert whose flag is inside the ciphertext.
 - **The note's real UUID.** Records are filed under `HMAC(K_id, …)`, and `K_id` is derived from the
   Account Root Key, which never leaves a paired device.
+- **Anything inside a pairing bundle.** Not the Account Root Key, not the account id, not the client
+  configuration. The blob is AES-256-GCM under a key derived from an ECDH between two ephemeral
+  P-256 keys; the new device's public half travelled as a QR code on a screen and its private half
+  never left that machine. There is no code in this server that could open it and no key here that
+  would help — and the row is deleted at the first successful collect, so the window in which it is
+  holding anything at all is a two-minute ceiling and usually a few seconds.
+- **Which account a pairing belongs to.** See the note under "Can see": nothing links a `pairings`
+  row to an account except the wall clock.
 - **Anything correlating two accounts.** A different ARK gives a different `K_id`, so the same note
   on two accounts has completely unrelated blinded IDs.
 - **The times of past edits, from the database alone.** `records` has no timestamp column. This is
@@ -489,6 +588,15 @@ full suite is green on the committed code.
 | `RecordDto` gains a `receivedAt` field again | `MetadataTest.aPulledRecordCarriesOnlyTheBlindedIdSeqAndEnvelope`, `MetadataTest.theConflictingVersionReturnedInlineCarriesOnlyThoseThreeFields`, `MetadataTest.aHistoryVersionCarriesOnlyThoseThreeFields`, `MetadataTest.noRecordResponseCarriesATimestamp` |
 | `listDevices` truncates the sealed label instead of returning it whole | `MetadataTest.aSealedLabelIsStoredAndReturnedByteForByte`, `MetadataTest.aDeviceEnrolledWithoutALabelIsAccepted` |
 | `sessionByTokenHash` drops the `d.revoked_at IS NULL` join condition | **Nothing failed.** See below. |
+| `takePairing` drops `AND expires_at > ?` | `PairingRendezvousTest.aDepositIsNotCollectableAfterItsTtl` |
+| `takePairing` no longer deletes the row it read | `PairingRendezvousTest.aDepositIsCollectableExactlyOnce`, `PairingRendezvousTest.aSidIsDepositableAgainOnceItsBlobHasBeenCollected`, `PairingRendezvousTest.unknownAndCollectedLookIdentical` |
+| `putPairing` uses `INSERT OR REPLACE` instead of `INSERT OR IGNORE` | `PairingRendezvousTest.aSecondDepositCannotDisplaceTheFirst` |
+| `putPairing` no longer sweeps expired rows | `PairingRendezvousTest.expiredDepositsAreSweptByALaterDeposit` |
+| `depositPairing`'s size bound becomes `Int.MAX_VALUE` | `PairingRendezvousTest.anOversizedBlobIsRefusedAndNotStored` |
+| `depositPairing`'s capacity bound becomes `Long.MAX_VALUE` | `PairingRendezvousTest.theTableCannotGrowPastTheGlobalCap`, `PairingRendezvousTest.capacityIsFreedWhenDepositsExpire` |
+| `depositPairing` never charges the deposit bucket | `PairingRendezvousTest.depositsAreRateLimitedSeparatelyAndTightly` |
+| `validSid` accepts any base64url instead of exactly 16 bytes | `PairingRendezvousTest.onlyASixteenByteSidIsAccepted` |
+| the deposit route logs the real path instead of `POST /v1/pair/{sid}` | `PairingRendezvousTest.noSidReachesALogLine` |
 
 The `changesSince` row used to read "filters and orders on `received_at`, and `nextCursor` becomes a
 timestamp", and it failed six tests. That mutation is **no longer expressible**: `records` has no

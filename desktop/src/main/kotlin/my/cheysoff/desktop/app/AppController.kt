@@ -7,6 +7,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import my.cheysoff.desktop.pairing.DesktopPairingController
 import my.cheysoff.desktop.store.RecordCodec
 import my.cheysoff.desktop.store.RecordNotesRepository
 import my.cheysoff.desktop.store.RecordStore
@@ -41,6 +42,15 @@ class AppController(
     sealed interface Screen {
         /** No vault here. Pairing is the intended path; see the screen itself. */
         data object FirstRun : Screen
+
+        /**
+         * Joining the phone's account: QR code, poll, SAS.
+         *
+         * [controller] owns the attempt. It is created when this screen is entered and cancelled
+         * when it is left, so an abandoned pairing does not leave a poll loop running or a bundle
+         * in memory.
+         */
+        data class Pairing(val controller: DesktopPairingController) : Screen
 
         /** Choosing a passphrase, having chosen how the account will be obtained. */
         data class CreatePassphrase(val origin: AccountOrigin) : Screen
@@ -78,6 +88,17 @@ class AppController(
     val credentialStoreName: String? = vault.credentialStoreDescription
 
     /**
+     * The ARK a completed pairing produced, held between the SAS confirmation and the passphrase
+     * being chosen.
+     *
+     * A private field rather than a value on [Screen], because [screen] is Compose state that the
+     * runtime keeps, snapshots and reads from arbitrary threads. Cleared and zeroed by
+     * [abandonPairing], which every path out of pairing goes through — including the successful one,
+     * once `setUp` has copied it.
+     */
+    private var pairedArk: ByteArray? = null
+
+    /**
      * Tries the OS credential store, once, at startup.
      *
      * Failure is silent by design — a machine that was never asked to remember anything is the
@@ -91,15 +112,54 @@ class AppController(
 
     fun chooseStandalone() {
         message = null
+        abandonPairing()
         screen = Screen.CreatePassphrase(AccountOrigin.CREATED_HERE)
+    }
+
+    /** Start a pairing attempt. Nothing is created on disk until the SAS is confirmed. */
+    fun choosePairing() {
+        message = null
+        abandonPairing()
+        screen = Screen.Pairing(DesktopPairingController(scope))
+    }
+
+    /**
+     * The user confirmed the six digits match on both screens.
+     *
+     * This is where the ARK crosses from the pairing attempt into this class, and it is the only
+     * place it does. It is held in a private field rather than in [screen], because [screen] is
+     * Compose state that the runtime keeps, copies and reads from arbitrary threads, and an account
+     * root key does not belong in any of that.
+     */
+    fun pairingConfirmed() {
+        val pairing = screen as? Screen.Pairing ?: return
+        val bundle = pairing.controller.takeBundle()
+        if (bundle == null) {
+            abandonPairing()
+            message = "The pairing result was already discarded. Start over."
+            screen = Screen.FirstRun
+            return
+        }
+        pairedArk = bundle.ark
+        pairing.controller.cancel()
+        screen = Screen.CreatePassphrase(AccountOrigin.PAIRED)
     }
 
     fun backToFirstRun() {
         message = null
+        abandonPairing()
         screen = Screen.FirstRun
     }
 
-    /** Creates the vault. [passphrase] is zeroed here whatever the outcome. */
+    /**
+     * Creates the vault. [passphrase] is zeroed here whatever the outcome.
+     *
+     * For [AccountOrigin.PAIRED] the ARK is the one [pairingConfirmed] received. [DesktopVault.setUp]
+     * refuses the combination in either direction — a PAIRED origin with no ARK, or a CREATED_HERE
+     * origin with one — so losing [pairedArk] between the two screens is a refusal rather than a
+     * silently minted second account. It is checked here as well, so that the refusal is a sentence
+     * the user can act on rather than an `IllegalArgumentException`.
+     */
     fun create(passphrase: CharArray, confirmation: CharArray, origin: AccountOrigin) {
         message = null
         if (!passphrase.contentEquals(confirmation)) {
@@ -109,10 +169,25 @@ class AppController(
             return
         }
         confirmation.fill('\u0000')
+        if (origin == AccountOrigin.PAIRED && pairedArk == null) {
+            passphrase.fill('\u0000')
+            message = "The paired account key is no longer available. Start the pairing again."
+            screen = Screen.FirstRun
+            return
+        }
         withVault {
             try {
-                when (val result = vault.setUp(passphrase, origin)) {
-                    is SetupResult.Created -> open(result.session)
+                when (val result = vault.setUp(passphrase, origin, pairedArk)) {
+                    is SetupResult.Created -> {
+                        // The wrap on disk now holds it; this copy has no further use. NOT done in
+                        // the `finally` alongside the passphrase, because a Rejected verdict puts
+                        // the user back on the same screen to retype, and zeroing here would turn
+                        // "that passphrase is too short" into "start the pairing again".
+                        pairedArk?.fill(0)
+                        pairedArk = null
+                        open(result.session)
+                    }
+
                     is SetupResult.AlreadySetUp -> {
                         // Another window, or another process, got there first. Do not offer to
                         // overwrite: that vault holds an ARK this one has no copy of.
@@ -208,6 +283,19 @@ class AppController(
                 busy = false
             }
         }
+    }
+
+    /**
+     * Destroy anything a pairing attempt left behind.
+     *
+     * Called on every path out of pairing, successful or not. The ARK is zeroed rather than
+     * dropped: a desktop process stays open for hours and a dropped array survives in the heap
+     * until a collection that may never come.
+     */
+    private fun abandonPairing() {
+        (screen as? Screen.Pairing)?.controller?.cancel()
+        pairedArk?.fill(0)
+        pairedArk = null
     }
 
     private fun explain(verdict: PassphrasePolicy.Verdict): String = when (verdict) {

@@ -2,7 +2,7 @@ package my.cheysoff.feature_pairing.identity
 
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
-import my.cheysoff.feature_pairing.protocol.P256
+import my.cheysoff.core_pairing.protocol.P256
 import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.PrivateKey

@@ -7,6 +7,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.Color
+import my.cheysoff.core_pairing.qr.QrCodes
 
 /**
  * Turn a [QrCodes.QrMatrix] into a Compose [ImageBitmap], one pixel per module.
