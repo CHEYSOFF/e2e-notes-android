@@ -98,6 +98,11 @@ dependencies {
     // the runner named in testInstrumentationRunner above is the only part of that dependency tree
     // androidTest actually uses. Compose UI tests, when they get written, use ui-test-junit4 below.
     androidTestImplementation(libs.androidx.test.runner)
+    // Room reaches :app only through :core-data's `implementation`, so it is absent from the
+    // androidTest classpath. AndroidPushesToServerTest opens a real database to write the note it
+    // pushes, which is the whole point of it being an instrumented test.
+    androidTestImplementation(libs.androidx.room.runtime)
+    androidTestImplementation(libs.androidx.room.ktx)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
