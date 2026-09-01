@@ -77,6 +77,7 @@ import my.cheysoff.feature_settings.model.SettingsIntent
 import my.cheysoff.feature_settings.model.SettingsScreenState
 import my.cheysoff.feature_settings.model.biometricRowInteractive
 import my.cheysoff.feature_settings.model.biometricRowSubtitle
+import my.cheysoff.feature_settings.model.SyncStatus
 import my.cheysoff.feature_settings.model.syncCheckAvailable
 import my.cheysoff.feature_settings.model.syncStatus
 import my.cheysoff.feature_settings.model.syncStatusLine
@@ -728,11 +729,13 @@ private fun AboutParagraph(text: androidx.compose.ui.text.AnnotatedString) {
  *
  * ## The wording is load-bearing
  *
- * No string here claims a sync happened. There is no sync engine in this build: nothing pushes,
- * pulls or merges. The best state reads "Ready — syncing isn't built yet, so nothing is uploaded",
- * which is two true clauses rather than one reassuring one. Every line comes from [syncStatusLine]
- * for a state [syncStatus] derived, so the copy and the branching are unit-tested together
- * (`SyncRowTest`) instead of assembled here.
+ * Sync is real, so the rule is no longer "never say anything happened". It is narrower and harder:
+ * **every line reports an event, never a state of the world.** "The last sync sent 3, applied 2" is
+ * a fact about a pass that finished; "synced" and "up to date" are claims about where the user's
+ * notes are, which this screen cannot know — a completed pass says nothing about the notes written
+ * since or about the other device that has been offline for a week. Every line comes from
+ * [syncStatusLine] for a state [syncStatus] derived, so the copy and the branching are unit-tested
+ * together (`SyncRowTest`) instead of assembled here.
  */
 @Composable
 private fun SyncSection(state: SettingsScreenState, onIntent: (SettingsIntent) -> Unit) {
@@ -742,11 +745,15 @@ private fun SyncSection(state: SettingsScreenState, onIntent: (SettingsIntent) -
         storedUrlUsable = state.serverUrlUsable,
         checking = state.serverCheckBusy,
         lastCheckFailed = state.lastCheckFailed,
+        sync = state.sync,
     )
 
     SectionLabel("Sync")
     SettingsCard {
-        SyncStatusRow(line = syncStatusLine(status), busy = state.serverCheckBusy)
+        SyncStatusRow(
+            line = syncStatusLine(status, state.sync),
+            busy = state.serverCheckBusy || status == SyncStatus.SYNCING,
+        )
         RowDivider()
         ServerUrlRow(
             draft = state.serverUrlDraft,
@@ -771,7 +778,7 @@ private fun SyncSection(state: SettingsScreenState, onIntent: (SettingsIntent) -
     )
 }
 
-/** The state line: what is configured and what is not. Never a claim that anything synced. */
+/** The state line: what is configured, and what the last pass actually moved. Never more. */
 @Composable
 private fun SyncStatusRow(line: String, busy: Boolean) {
     val sw = LocalConfiguration.current.screenWidthDp

@@ -5,6 +5,7 @@ import dagger.Module
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import my.cheysoff.core_domain.repository.SyncSettingsRepository
+import my.cheysoff.core_domain.sync.SyncController
 import my.cheysoff.core_domain.sync.SyncTransportStatus
 import my.cheysoff.core_sync_net.auth.DeviceLabelSealer
 import my.cheysoff.core_sync_net.auth.DeviceSigner
@@ -70,4 +71,16 @@ abstract class SyncTransportModule {
     @Binds
     @Singleton
     abstract fun bindSyncTransportStatus(impl: AppSyncTransportStatus): SyncTransportStatus
+
+    /**
+     * The sync engine's entry point, as the two feature modules are allowed to see it.
+     *
+     * `:feature-notes` and `:feature-settings` depend on `:core-domain` and `:core-ui` only, so
+     * neither can see `SyncApi`, the account keys or Room. `SyncController` is the whole of what a
+     * pull-to-refresh gesture and a status line need, and `:app` is the only module that can build
+     * one — the same argument every other binding in this module makes.
+     */
+    @Binds
+    @Singleton
+    abstract fun bindSyncController(impl: DefaultSyncController): SyncController
 }

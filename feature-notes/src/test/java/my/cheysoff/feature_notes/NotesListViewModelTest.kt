@@ -57,6 +57,7 @@ class NotesListViewModelTest {
 
     private val notesRepo = FakeNotesRepository()
     private val settingsRepo = FakeSettingsRepository()
+    private val syncController = FakeSyncController()
 
     private fun note(
         id: String,
@@ -80,7 +81,7 @@ class NotesListViewModelTest {
         updatedAt = updatedAt,
     )
 
-    private fun viewModel() = NotesListViewModel(notesRepo, settingsRepo)
+    private fun viewModel() = NotesListViewModel(notesRepo, settingsRepo, syncController)
 
     /** Notes visible under the order the settings repository currently reports. */
     private fun currentNotes(vararg notes: Note) {

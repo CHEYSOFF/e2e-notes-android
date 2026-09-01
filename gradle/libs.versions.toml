@@ -91,6 +91,12 @@ zxing = "3.5.3"
 camerax = "1.5.0"
 robolectric = "4.16"
 
+# Taken for its runtime only -- the serialization COMPILER PLUGIN is deliberately not applied
+# anywhere in this build. :core-sync-codec builds its JSON object key by key, which is what fixes
+# the key order (so a record encodes to the same bytes on every device) and makes every unknown key
+# a decode failure rather than a silently ignored one.
+kotlinxSerialization = "1.9.0"
+
 [libraries]
 androidx-compose-material-icons-extended = { module = "androidx.compose.material:material-icons-extended", version.ref = "materialIconsExtended" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -144,6 +150,7 @@ ktor-client-okhttp = { group = "io.ktor", name = "ktor-client-okhttp", version.r
 ktor-client-darwin = { group = "io.ktor", name = "ktor-client-darwin", version.ref = "ktor" }
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
 atomicfu = { group = "org.jetbrains.kotlinx", name = "atomicfu", version.ref = "atomicfu" }
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
