@@ -8,6 +8,7 @@ import my.cheysoff.core_sync_codec.OpenResult
 import my.cheysoff.core_sync_codec.RecordCodec
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -72,6 +73,8 @@ class RecordNotesRepository private constructor(
     private val store: RecordStore,
     private val codec: RecordCodec,
     private val hlc: HlcGenerator,
+    /** This device's HLC node, kept so [refreshFromStore] can re-read the way [load] did. */
+    private val node: String,
     private val clock: () -> Long,
     initial: Snapshot,
     /** What could not be loaded. Zero on a healthy vault; surfaced by the UI when it is not. */
@@ -93,6 +96,17 @@ class RecordNotesRepository private constructor(
     data class Snapshot(val notes: Map<String, NoteRow>, val folders: Map<String, FolderRow>)
 
     private val state = MutableStateFlow(initial)
+
+    private val _localWrites = MutableStateFlow(0L)
+
+    /**
+     * Increments once per write **this device made itself**.
+     *
+     * Deliberately not bumped by [refreshFromStore]: that publishes what the sync engine pulled,
+     * and a caller who syncs in response to this signal would then sync in response to its own
+     * result, forever. Only edits originating here are worth pushing.
+     */
+    val localWrites: StateFlow<Long> = _localWrites
     private val mutex = Mutex()
 
     companion object {
@@ -170,11 +184,29 @@ class RecordNotesRepository private constructor(
                 store = store,
                 codec = codec,
                 hlc = generator,
+                node = node,
                 clock = clock,
                 initial = Snapshot(notes, folders),
                 diagnostics = LoadDiagnostics(unreadable, mislabelled, unsupported, malformed),
             )
         }
+    }
+
+    /**
+     * Re-reads every row from the store and republishes the snapshot the UI collects.
+     *
+     * The sync engine writes through `RecordSyncStore` straight into the same [RecordStore], and it
+     * has no way to tell this class about it: the snapshot here is built once, at load. So a pass
+     * that pulled twenty-six notes left them on disk and the screen empty, and the notes appeared
+     * only after quitting and unlocking again -- which reads as "sync is broken" even though the
+     * message saying it synced was perfectly true.
+     *
+     * Android does not need this because Room emits on write and the sync store writes through the
+     * same database. A plain SQLite file has no such notification, so the caller that knows a pass
+     * finished is the one that has to say so.
+     */
+    fun refreshFromStore() {
+        state.value = load(store, codec, node, clock).state.value
     }
 
     // -------------------------------------------------------------------------------------------
@@ -425,6 +457,7 @@ class RecordNotesRepository private constructor(
     // -------------------------------------------------------------------------------------------
 
     private suspend fun write(block: (Snapshot) -> Snapshot) {
+        _localWrites.value += 1
         mutex.withLock { state.value = block(state.value) }
     }
 

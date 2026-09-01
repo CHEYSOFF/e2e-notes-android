@@ -33,6 +33,7 @@ import my.cheysoff.desktop.ui.preview.InMemoryNotesRepository
 import my.cheysoff.desktop.ui.preview.SampleLibrary
 import my.cheysoff.desktop.ui.state.NotesWorkspaceModel
 import my.cheysoff.desktop.ui.theme.MananaDesktopTheme
+import my.cheysoff.desktop.ui.theme.TextScale
 
 /**
  * The desktop app's entry point.
@@ -83,6 +84,15 @@ fun MananaWindow(
     val scope = rememberCoroutineScope()
     val model = remember { NotesWorkspaceModel(repository = repository, scope = scope) }
     val state by model.state.collectAsState()
+
+    // Saved the moment it changes rather than on close, because the whole point of a preference
+    // this visible is that it survives -- including a crash, which is exactly when a person is
+    // least willing to set it again.
+    var textScale by remember { mutableStateOf(TextScale.load()) }
+    fun setTextScale(next: TextScale) {
+        textScale = next
+        TextScale.save(next)
+    }
 
     var sidebarWidth by remember { mutableStateOf(WindowGeometry.sidebarWidth()) }
     var sidebarVisible by remember { mutableStateOf(true) }
@@ -135,10 +145,19 @@ fun MananaWindow(
                 onOpenHighlighted = { model.openHighlightedSearchHit() },
                 onFlushSave = model::flushPendingSave,
                 onToggleSidebar = { sidebarVisible = !sidebarVisible },
+                onTextScale = { step ->
+                    setTextScale(
+                        when (step) {
+                            TextScaleStep.LARGER -> textScale.larger()
+                            TextScaleStep.SMALLER -> textScale.smaller()
+                            TextScaleStep.RESET -> TextScale.DEFAULT
+                        }
+                    )
+                },
             )
         },
     ) {
-        MananaDesktopTheme {
+        MananaDesktopTheme(textScale = textScale) {
             NotesWorkspaceScreen(
                 model = model,
                 state = state,
@@ -153,6 +172,8 @@ fun MananaWindow(
                 onToggleRemember = onToggleRemember,
                 syncLabel = syncLabel,
                 onSync = onSync,
+                textScale = textScale,
+                onCycleTextScale = { setTextScale(textScale.next()) },
             )
         }
     }
@@ -176,6 +197,7 @@ private fun handleShortcut(
     onOpenHighlighted: () -> Unit,
     onFlushSave: () -> Unit,
     onToggleSidebar: () -> Unit,
+    onTextScale: (TextScaleStep) -> Unit,
 ): Boolean {
     if (event.type != KeyEventType.KeyDown) return false
     val command = event.isCtrlPressed || event.isMetaPressed
@@ -194,6 +216,12 @@ private fun handleShortcut(
     if (!command) return false
     return when (event.key) {
         Key.N -> { onNewNote(); true }
+        // Ctrl +/-/0 is the one text-size gesture every desktop app shares, and a person who wants
+        // bigger text tries it before looking for a control. Plus needs three keys named: the main
+        // row reports Equals unshifted, and the numeric keypad is its own key entirely.
+        Key.Equals, Key.Plus, Key.NumPadAdd -> { onTextScale(TextScaleStep.LARGER); true }
+        Key.Minus, Key.NumPadSubtract -> { onTextScale(TextScaleStep.SMALLER); true }
+        Key.Zero, Key.NumPad0 -> { onTextScale(TextScaleStep.RESET); true }
         // F as well as K: ⌘K is the palette convention this app follows, but Ctrl+F is the reflex
         // a lot of people have for "find", and having it do nothing would read as a missing feature.
         Key.K, Key.F -> { onOpenSearch(); true }
@@ -220,3 +248,6 @@ private suspend fun FocusRequester.requestFocusWhenReady(attempts: Int = 10) {
         delay(16)
     }
 }
+
+/** What a text-size keystroke asked for. */
+internal enum class TextScaleStep { LARGER, SMALLER, RESET }

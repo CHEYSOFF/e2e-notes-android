@@ -6,6 +6,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
@@ -101,44 +102,44 @@ private fun readFontBytes(name: String): ByteArray =
  * per role (Light hero, Medium titles, Normal body), the negative tracking on the hero line, and
  * the colour roles below.
  */
-private val DesktopTypography = Typography(
+internal fun desktopTypography(scale: Float) = Typography(
     titleLarge = TextStyle(
         fontFamily = urbanist,
         fontWeight = FontWeight.Light,
-        fontSize = 30.sp,
-        lineHeight = 34.sp,
-        letterSpacing = (-0.5).sp,
+        fontSize = (30 * scale).sp,
+        lineHeight = (34 * scale).sp,
+        letterSpacing = (-0.5 * scale).sp,
     ),
     titleMedium = TextStyle(
         fontFamily = urbanist,
         fontWeight = FontWeight.Medium,
-        fontSize = 17.sp,
+        fontSize = (17 * scale).sp,
         letterSpacing = 0.sp,
     ),
     titleSmall = TextStyle(
         fontFamily = urbanist,
         fontWeight = FontWeight.Medium,
-        fontSize = 14.sp,
+        fontSize = (14 * scale).sp,
         letterSpacing = 0.sp,
     ),
     bodyMedium = TextStyle(
         fontFamily = urbanist,
         fontWeight = FontWeight.Normal,
-        fontSize = 14.sp,
-        lineHeight = 21.sp,
+        fontSize = (14 * scale).sp,
+        lineHeight = (21 * scale).sp,
         letterSpacing = 0.sp,
     ),
     bodySmall = TextStyle(
         fontFamily = urbanist,
         fontWeight = FontWeight.Normal,
-        fontSize = 12.5.sp,
-        lineHeight = 17.sp,
+        fontSize = (12.5 * scale).sp,
+        lineHeight = (17 * scale).sp,
         letterSpacing = 0.sp,
     ),
     labelSmall = TextStyle(
         fontFamily = urbanist,
         fontWeight = FontWeight.Normal,
-        fontSize = 10.5.sp,
+        fontSize = (10.5 * scale).sp,
         letterSpacing = 0.sp,
     ),
 )
@@ -162,15 +163,27 @@ private val DarkColorScheme = darkColorScheme(
     outline = OutlineDark,
 )
 
+/**
+ * @param textScale multiplies the whole type scale. Only text moves: spacing, radii and icon sizes
+ *   are deliberately left alone, so a larger size fills the room the layout already has rather
+ *   than making every pane bigger and fitting less on screen. That is the opposite of the usual
+ *   whole-UI zoom, and it is the right trade here -- the complaint is that the words are small,
+ *   not that the window is.
+ */
 @Composable
-fun MananaDesktopTheme(content: @Composable () -> Unit) {
+fun MananaDesktopTheme(
+    textScale: TextScale = TextScale.DEFAULT,
+    content: @Composable () -> Unit,
+) {
     CompositionLocalProvider(
         LocalDesktopSpacing provides DesktopSpacing(),
         LocalDesktopRadii provides DesktopRadii(),
     ) {
         MaterialTheme(
             colorScheme = DarkColorScheme,
-            typography = DesktopTypography,
+            // Keyed on the scale so the styles are rebuilt when it changes and not on every
+            // recomposition of anything above this.
+            typography = remember(textScale) { desktopTypography(textScale.factor) },
             content = content,
         )
     }
