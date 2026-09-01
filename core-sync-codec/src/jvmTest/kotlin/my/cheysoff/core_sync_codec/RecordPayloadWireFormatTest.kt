@@ -20,8 +20,9 @@ import org.junit.Test
  * be opened on the laptop, and the symptom is `RecordFault.UNREADABLE` on a record that decrypted
  * fine.
  *
- * The fixture below is deliberately the same one `RecordPayloadCodecTest` uses on the desktop side,
- * so the two can be compared by eye as well as by byte. The intent is that the desktop's copy of
+ * The fixture below is pinned byte for byte by `RecordPayloadWireContractTest` on the desktop side,
+ * so a drift in either implementation turns one of the two tests red and names it. (That
+ * cross-pinning did not exist when this comment first claimed it did; it does now.) The intent is that the desktop's copy of
  * the codec is **deleted** in favour of this module when `desktop-integration` lands — one
  * implementation is better than two pinned to each other — and until it does, this string is the
  * contract between them.

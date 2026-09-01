@@ -91,11 +91,14 @@ zxing = "3.5.3"
 camerax = "1.5.0"
 robolectric = "4.16"
 
+sqliteJdbc = "3.53.4.0"
+jna = "5.19.1"
 # Taken for its runtime only -- the serialization COMPILER PLUGIN is deliberately not applied
 # anywhere in this build. :core-sync-codec builds its JSON object key by key, which is what fixes
 # the key order (so a record encodes to the same bytes on every device) and makes every unknown key
 # a decode failure rather than a silently ignored one.
 kotlinxSerialization = "1.9.0"
+richeditorDesktop = "1.2.0"
 
 [libraries]
 androidx-compose-material-icons-extended = { module = "androidx.compose.material:material-icons-extended", version.ref = "materialIconsExtended" }
@@ -151,6 +154,13 @@ ktor-client-darwin = { group = "io.ktor", name = "ktor-client-darwin", version.r
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
 atomicfu = { group = "org.jetbrains.kotlinx", name = "atomicfu", version.ref = "atomicfu" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
+
+sqlite-jdbc = { group = "org.xerial", name = "sqlite-jdbc", version.ref = "sqliteJdbc" }
+jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
+jna-platform = { group = "net.java.dev.jna", name = "jna-platform", version.ref = "jna" }
+richeditor-compose-desktop = { group = "com.mohamedrejeb.richeditor", name = "richeditor-compose-desktop", version.ref = "richeditorDesktop" }
+ksoup-entities = { group = "com.mohamedrejeb.ksoup", name = "ksoup-entities-jvm", version = "0.6.0" }
+compose-material-icons-core = { group = "org.jetbrains.compose.material", name = "material-icons-core-desktop", version = "1.7.3" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

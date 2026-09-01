@@ -65,3 +65,7 @@ include(":core-sync-engine")
 // must stay free of the merge vocabulary, and :core-data is Room and therefore invisible to the
 // desktop. A byte-level disagreement here is a note one device can write and the other cannot open.
 include(":core-sync-codec")
+
+// The Compose Desktop app. Plain Kotlin/JVM -- it is the same binary on Windows, macOS and
+// Linux, and jpackage builds whichever installer the host OS supports.
+include(":desktop")
