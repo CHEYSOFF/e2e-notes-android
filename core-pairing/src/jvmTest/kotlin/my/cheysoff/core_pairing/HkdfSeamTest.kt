@@ -1,8 +1,8 @@
-package my.cheysoff.feature_pairing
+package my.cheysoff.core_pairing
 
-import my.cheysoff.feature_pairing.protocol.HkdfKeyDerivation
-import my.cheysoff.feature_pairing.protocol.KeyDerivation
-import my.cheysoff.feature_pairing.protocol.PairingProtocol
+import my.cheysoff.core_pairing.protocol.HkdfKeyDerivation
+import my.cheysoff.core_pairing.protocol.KeyDerivation
+import my.cheysoff.core_pairing.protocol.PairingProtocol
 import org.junit.Assert.assertEquals
 import org.junit.Test
 

@@ -42,12 +42,13 @@ import androidx.compose.ui.unit.dp
  * plainest words available. This is not a nag — it is the only moment at which the choice is
  * reversible, because after the ARK exists there is nothing to undo.
  *
- * Pairing itself is being built separately. Until it lands its button is disabled and says so; the
- * seam it fills is `DesktopVault.setUp(passphrase, AccountOrigin.PAIRED, ark)`, which already
- * exists and already refuses to mint a key of its own.
+ * Pairing fills the seam it was always going to fill: `DesktopVault.setUp(passphrase,
+ * AccountOrigin.PAIRED, ark)`, which already existed and already refused to mint a key of its own.
+ * The ARK reaches it from the phone, through the rendezvous — see `PairingScreen`.
  */
 @Composable
 fun FirstRunScreen(
+    onPair: () -> Unit,
     onUseStandalone: () -> Unit,
 ) {
     var confirming by remember { mutableStateOf(false) }
@@ -85,14 +86,13 @@ fun FirstRunScreen(
                     color = MananaColors.BodyGrey,
                 )
                 Button(
-                    onClick = {},
-                    enabled = false,
+                    onClick = onPair,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MananaColors.AccentIndigo,
                         disabledContainerColor = MananaColors.Outline,
                     ),
                 ) {
-                    Text("Pairing is not built yet")
+                    Text("Pair with my phone")
                 }
             }
         }

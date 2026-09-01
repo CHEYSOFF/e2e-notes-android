@@ -6,10 +6,15 @@ import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
-import my.cheysoff.feature_pairing.protocol.AccountBundle
-import my.cheysoff.feature_pairing.protocol.HkdfKeyDerivation
-import my.cheysoff.feature_pairing.protocol.KeyDerivation
-import my.cheysoff.feature_pairing.protocol.MonotonicClock
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import my.cheysoff.core_pairing.protocol.AccountBundle
+import my.cheysoff.core_pairing.protocol.HkdfKeyDerivation
+import my.cheysoff.core_pairing.protocol.HttpRendezvousClient
+import my.cheysoff.core_pairing.protocol.KeyDerivation
+import my.cheysoff.core_pairing.protocol.MonotonicClock
+import my.cheysoff.core_pairing.protocol.RendezvousClientFactory
+import javax.inject.Qualifier
 import javax.inject.Singleton
 
 /**
@@ -61,6 +66,17 @@ interface PairingKeyMaterial {
 }
 
 /**
+ * Marks the dispatcher the pairing send runs on.
+ *
+ * A qualifier rather than a bare `CoroutineDispatcher` binding, because `CoroutineDispatcher` is a
+ * type the whole app could plausibly want bound differently; an unqualified one is a graph-wide
+ * claim that this module has no business making.
+ */
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class PairingIoDispatcher
+
+/**
  * The `:core-crypto` seam.
  *
  * ## What binds here, and what a reviewer should check
@@ -108,5 +124,35 @@ abstract class PairingSeamModule {
         @Provides
         @Singleton
         fun provideKeyDerivation(): KeyDerivation = HkdfKeyDerivation
+
+        /**
+         * How a rendezvous client is built once an address is known.
+         *
+         * A **factory**, not a client, because the address is read off a QR code at runtime: there
+         * is nothing to inject at graph-construction time. Bound at all only because of the
+         * desktop: a phone pairing with a phone never calls it, because that flow puts QR2 on a
+         * screen and opens no socket.
+         *
+         * There is one production implementation and this is the whole of it. Nothing here chooses
+         * a URL, supplies a default host, or falls back to one — the only address ever passed is
+         * the one the user was shown and approved on the previous screen.
+         */
+        @Provides
+        @Singleton
+        fun provideRendezvousClientFactory(): RendezvousClientFactory =
+            RendezvousClientFactory { HttpRendezvousClient(it) }
+
+        /**
+         * The dispatcher the one blocking network call runs on.
+         *
+         * `Dispatchers.IO` because [HttpRendezvousClient] blocks a thread on a socket, which is
+         * exactly what that pool is sized for. Provided rather than written at the call site so
+         * that a test can substitute the scheduler `runTest` owns — see the parameter's KDoc on
+         * `PairingViewModel` for the bug that made this necessary.
+         */
+        @Provides
+        @Singleton
+        @PairingIoDispatcher
+        fun providePairingIoDispatcher(): CoroutineDispatcher = Dispatchers.IO
     }
 }

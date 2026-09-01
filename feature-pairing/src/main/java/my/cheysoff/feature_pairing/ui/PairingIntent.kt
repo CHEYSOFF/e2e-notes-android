@@ -30,6 +30,18 @@ sealed interface PairingIntent {
      */
     data object SealShown : PairingIntent
 
+    /**
+     * Send the sealed bundle to the rendezvous server the other device named in QR1.
+     *
+     * Deliberately an explicit action rather than something that happens on scanning, and for the
+     * reason [my.cheysoff.feature_pairing.ui.PairingStage.SendingSeal] gives: the address is
+     * unauthenticated at the point it is read, so the user is shown the host and asked.
+     *
+     * Retriable. A failed send leaves the stage in place with a message, because a phone on a flaky
+     * connection should not have to restart a pairing.
+     */
+    data object SendSeal : PairingIntent
+
     /** The user says the two six-digit codes match. This is what commits the pairing. */
     data object SasConfirmed : PairingIntent
 

@@ -1,16 +1,16 @@
-package my.cheysoff.feature_pairing
+package my.cheysoff.core_pairing
 
 import my.cheysoff.core_crypto.sync.AccountRootKey
 import my.cheysoff.core_crypto.sync.ArkCipher
 import my.cheysoff.core_crypto.sync.Base64Url
-import my.cheysoff.feature_pairing.protocol.AccountBundle
-import my.cheysoff.feature_pairing.protocol.AccountDeviceSession
-import my.cheysoff.feature_pairing.protocol.HkdfKeyDerivation
-import my.cheysoff.feature_pairing.protocol.KeyDerivation
-import my.cheysoff.feature_pairing.protocol.NewDeviceSession
-import my.cheysoff.feature_pairing.protocol.OfferOutcome
-import my.cheysoff.feature_pairing.protocol.PairingFailure
-import my.cheysoff.feature_pairing.protocol.SealOutcome
+import my.cheysoff.core_pairing.protocol.AccountBundle
+import my.cheysoff.core_pairing.protocol.AccountDeviceSession
+import my.cheysoff.core_pairing.protocol.HkdfKeyDerivation
+import my.cheysoff.core_pairing.protocol.KeyDerivation
+import my.cheysoff.core_pairing.protocol.NewDeviceSession
+import my.cheysoff.core_pairing.protocol.OfferOutcome
+import my.cheysoff.core_pairing.protocol.PairingFailure
+import my.cheysoff.core_pairing.protocol.SealOutcome
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals

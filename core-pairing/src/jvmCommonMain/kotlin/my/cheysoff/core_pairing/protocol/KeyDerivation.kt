@@ -1,4 +1,4 @@
-package my.cheysoff.feature_pairing.protocol
+package my.cheysoff.core_pairing.protocol
 
 /**
  * The one-way key-derivation function the pairing protocol needs, and the ONLY place this module

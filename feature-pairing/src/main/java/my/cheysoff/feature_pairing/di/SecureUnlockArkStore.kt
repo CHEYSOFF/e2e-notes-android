@@ -3,7 +3,7 @@ package my.cheysoff.feature_pairing.di
 import my.cheysoff.core_crypto.SecureUnlockManager
 import my.cheysoff.core_crypto.sync.AccountRootKey
 import my.cheysoff.core_crypto.sync.Base64Url
-import my.cheysoff.feature_pairing.protocol.AccountBundle
+import my.cheysoff.core_pairing.protocol.AccountBundle
 import javax.inject.Inject
 import javax.inject.Singleton
 

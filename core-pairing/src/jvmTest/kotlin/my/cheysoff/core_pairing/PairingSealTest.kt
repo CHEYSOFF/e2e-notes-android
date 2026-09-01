@@ -1,9 +1,9 @@
-package my.cheysoff.feature_pairing
+package my.cheysoff.core_pairing
 
-import my.cheysoff.feature_pairing.protocol.AccountBundle
-import my.cheysoff.feature_pairing.protocol.PairingCodec
-import my.cheysoff.feature_pairing.protocol.PairingProtocol
-import my.cheysoff.feature_pairing.protocol.PairingSeal
+import my.cheysoff.core_pairing.protocol.AccountBundle
+import my.cheysoff.core_pairing.protocol.PairingCodec
+import my.cheysoff.core_pairing.protocol.PairingProtocol
+import my.cheysoff.core_pairing.protocol.PairingSeal
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull

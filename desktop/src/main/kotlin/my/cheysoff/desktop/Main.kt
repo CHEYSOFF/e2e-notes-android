@@ -18,6 +18,7 @@ import my.cheysoff.desktop.ui.CreatePassphraseScreen
 import my.cheysoff.desktop.ui.DamagedScreen
 import my.cheysoff.desktop.ui.FirstRunScreen
 import my.cheysoff.desktop.ui.MananaColors
+import my.cheysoff.desktop.ui.PairingScreen
 import my.cheysoff.desktop.ui.MananaTheme
 import my.cheysoff.desktop.ui.UnlockScreen
 import my.cheysoff.desktop.ui.MananaWindow
@@ -106,8 +107,25 @@ internal fun vaultDirectoryFrom(args: Array<String>): Path {
 @Composable
 private fun GateScreens(vault: DesktopVault, controller: AppController) {
     when (val screen = controller.screen) {
-        is AppController.Screen.FirstRun ->
-            FirstRunScreen(onUseStandalone = controller::chooseStandalone)
+        is AppController.Screen.FirstRun -> FirstRunScreen(
+            onPair = controller::choosePairing,
+            onUseStandalone = controller::chooseStandalone,
+        )
+
+        is AppController.Screen.Pairing -> PairingScreen(
+            step = screen.controller.step,
+            onAddressChange = screen.controller::editAddress,
+            onStart = screen.controller::start,
+            // Confirming the SAS is the only thing on this screen the *controller* cannot finish on
+            // its own: it hands the bundle over, and only AppController knows where it goes next.
+            onConfirmSas = {
+                screen.controller.confirmSas()
+                controller.pairingConfirmed()
+            },
+            onRejectSas = screen.controller::rejectSas,
+            onStartOver = screen.controller::startOver,
+            onBack = controller::backToFirstRun,
+        )
 
         is AppController.Screen.CreatePassphrase -> CreatePassphraseScreen(
             busy = controller.busy,
