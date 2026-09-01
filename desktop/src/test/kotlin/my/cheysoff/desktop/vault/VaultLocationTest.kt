@@ -1,6 +1,8 @@
 package my.cheysoff.desktop.vault
 
 import my.cheysoff.desktop.platform.HostOs
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -42,7 +44,7 @@ class VaultLocationTest {
             env = { name -> if (name == "LOCALAPPDATA") "C:\\Users\\x\\AppData\\Local" else "C:\\Users\\x\\AppData\\Roaming" },
             userHome = "C:\\Users\\x",
         )
-        assertEquals(Paths.get("C:\\Users\\x\\AppData\\Local", "Manana"), path)
+        assertEquals(Paths.get("C:\\Users\\x\\AppData\\Local", "Manana-vault"), path)
     }
 
     @Test
@@ -52,7 +54,7 @@ class VaultLocationTest {
             env = { null },
             userHome = "C:\\Users\\x",
         )
-        assertEquals(Paths.get("C:\\Users\\x", "AppData", "Local", "Manana"), path)
+        assertEquals(Paths.get("C:\\Users\\x", "AppData", "Local", "Manana-vault"), path)
     }
 
     @Test
@@ -107,5 +109,32 @@ class VaultLocationTest {
         }
         assertEquals(paths.size, paths.toSet().size)
         assertTrue(paths.all { it.isNotEmpty() })
+    }
+    /**
+     * The vault must not live where the installer puts the application.
+     *
+     * jpackage's per-user MSI installs into `%LOCALAPPDATA%\Manana`, and an uninstall removes that
+     * directory **and everything in it** -- verified by writing a file there and uninstalling: the
+     * file and the directory were both gone. A vault under that name would take the user's notes
+     * and their account root key with it, silently, on any uninstall or major upgrade.
+     *
+     * So this asserts the two are different. It is a one-line test guarding a whole-account data
+     * loss, and it fails the moment somebody "tidies up" the directory name back to the app's.
+     */
+    @Test
+    fun `the windows vault directory is not the installer's own directory`() {
+        // Built from segments rather than written as a literal: this file is generated and edited
+        // by tooling often enough that backslash escaping is a needless way to break it.
+        val localAppData = Paths.get("C:", "Users", "x", "AppData", "Local").toString()
+        val vault = VaultLocation.defaultDirectory(
+            hostOs = HostOs.WINDOWS,
+            env = { name -> if (name == "LOCALAPPDATA") localAppData else null },
+            userHome = Paths.get("C:", "Users", "x").toString(),
+        )
+
+        val installDir = Paths.get(localAppData, "Manana")
+        assertNotEquals(installDir, vault)
+        // Nor inside it -- the uninstall removes the tree, not just the files it laid down.
+        assertFalse("the vault must not sit under the install directory", vault.startsWith(installDir))
     }
 }
