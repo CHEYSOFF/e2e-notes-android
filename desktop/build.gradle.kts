@@ -133,6 +133,18 @@ compose.desktop {
             windows {
                 menu = true
                 shortcut = true
+                // Without this, jpackage files the Start menu shortcut under a group literally
+                // named "Unknown" -- it falls back to the vendor field, which it does not read from
+                // `vendor` above.
+                menuGroup = "Manana"
+                // Installs into the user's profile rather than Program Files, so no administrator
+                // prompt. jpackage defaults to per-machine, which fails outright with "Error 1925:
+                // you do not have sufficient privileges" for anyone not running an elevated
+                // installer -- and a personal notes app has no business asking for the whole
+                // machine. Everything it writes (the vault, the DPAPI-protected key) is per-user
+                // anyway, so a machine-wide install would put one user's binary above another
+                // user's data and share nothing useful between them.
+                perUserInstall = true
                 // **Never change this UUID.** Windows Installer uses it to decide whether an .msi
                 // upgrades the installed product or installs a second copy beside it. A new value
                 // ships an app that cannot be upgraded, only uninstalled and reinstalled -- and
