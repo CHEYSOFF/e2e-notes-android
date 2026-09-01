@@ -38,6 +38,9 @@ data class FolderEntity(
 ) {
     /** The row clock as one value. */
     fun rowHlc(): Hlc = Hlc(ms = hlcMs, counter = hlcCounter, node = hlcNode)
+
+    /** The clock columns alone — see `NoteEntity.clocks`. */
+    fun clocks(): RowClock = RowClock(hlcMs, hlcCounter, hlcNode, fieldHlc)
 }
 
 fun FolderEntity.toDomain() = Folder(

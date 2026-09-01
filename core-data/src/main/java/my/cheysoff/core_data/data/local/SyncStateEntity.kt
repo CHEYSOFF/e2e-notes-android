@@ -1,5 +1,6 @@
 package my.cheysoff.core_data.data.local
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
@@ -45,4 +46,22 @@ data class SyncStateEntity(
      * value comes from a user-settable clock.
      */
     val lastPullAt: Long = 0L,
+
+    /**
+     * The name of the `HaltReason` the sync engine stopped on, or `''` while it is healthy.
+     * Added in v8.
+     *
+     * Persisted rather than held in memory because every event that causes one — a server restored
+     * from a backup, a payload from a newer build — is still true after a restart. An engine that
+     * forgot its halt on process death would resume syncing against precisely the server it refused
+     * to trust. It is stored as the enum's `name` rather than its ordinal so that reordering the
+     * enum is not a silent reinterpretation of every stored halt, and an unrecognised value reads
+     * as "halted for a reason this build does not know", which is still a halt.
+     *
+     * It lives beside the cursor because it is the same kind of fact — something true of this
+     * device's *connection* to one account, not of any note — and because dropping the row is how
+     * a re-baseline clears both at once.
+     */
+    @ColumnInfo(defaultValue = "''")
+    val haltReason: String = "",
 )

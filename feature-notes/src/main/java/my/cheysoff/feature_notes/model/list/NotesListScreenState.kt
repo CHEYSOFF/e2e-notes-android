@@ -16,6 +16,25 @@ data class NotesListScreenState(
     val sortOrder: NotesSortOrder = NotesSortOrder.DEFAULT,
     val isLoading: Boolean = true,
     val error: String? = null,
+
+    /**
+     * True while a pull-to-refresh sync pass is running.
+     *
+     * Deliberately not [isLoading]. That one is about whether this screen has its data yet and
+     * gates the whole list; this one is about a network round trip happening behind a list that is
+     * already on screen and fully usable. Collapsing them would blank the library every time
+     * someone pulled down.
+     */
+    val refreshing: Boolean = false,
+
+    /**
+     * One line about the sync pass the user just asked for, or null.
+     *
+     * Shown only after a **manual** refresh, because that is the only sync a person is waiting on
+     * an answer for. A pass triggered by the unlock reports itself in Settings and stays out of the
+     * way of someone who came here to read a note.
+     */
+    val syncNotice: String? = null,
     val selectedBottomBarItem: BottomBarItem = BottomBarItem.ALL_NOTES,
 
     // --- Search tab ---

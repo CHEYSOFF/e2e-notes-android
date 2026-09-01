@@ -66,6 +66,10 @@ dependencies {
     // the declaration itself lives in core-sync-net/src/main/AndroidManifest.xml, next to the
     // network code, and that file explains what it is for.
     implementation(project(":core-sync-net"))
+    // The pull/push pass loop, and the payload codec that turns a `SyncRecord` into the sealed
+    // blob the server stores. `:app` is where the two meet the HTTP client and the account keys.
+    implementation(project(":core-sync-engine"))
+    implementation(project(":core-sync-codec"))
 
     implementation(libs.androidx.core.ktx)
     // The sync server address is a preference, stored the same way every other preference in this
@@ -85,6 +89,9 @@ dependencies {
     implementation(libs.androidx.lifecycle.process)
     ksp(libs.hilt.compiler)
     testImplementation(libs.junit)
+    // `runTest`, for the sync transport adapter's tests. Its suspending surface is the whole of
+    // what it is: a version of these that blocked would be testing the dispatcher.
+    testImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(libs.androidx.junit)
     // androidx.test:runner rather than espresso-core. Every screen in this app is Compose, so
     // Espresso's View matchers have nothing to act on, and `Espresso` appears nowhere in the repo;

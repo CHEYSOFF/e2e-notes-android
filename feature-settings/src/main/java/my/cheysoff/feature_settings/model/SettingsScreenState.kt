@@ -3,6 +3,7 @@ package my.cheysoff.feature_settings.model
 import androidx.compose.runtime.Immutable
 import my.cheysoff.core_crypto.domain.BiometricAuthenticationStatus
 import my.cheysoff.core_domain.model.NotesSortOrder
+import my.cheysoff.core_domain.sync.SyncPassState
 
 @Immutable
 data class SettingsScreenState(
@@ -85,6 +86,16 @@ data class SettingsScreenState(
 
     /** One-line outcome of the last check, shown beneath the card. Null before any check. */
     val serverCheckNotice: String? = null,
+
+    /**
+     * What the sync engine's last attempt did, mirrored from `SyncController.state`.
+     *
+     * Distinct from [lastCheckFailed] and [serverCheckBusy], which are about the unauthenticated
+     * health check the user asks for by tapping a button. This is about the engine, which runs on
+     * its own — and the two must not be collapsed, because "the address answers" and "your notes
+     * moved" are different facts and only one of them is worth acting on.
+     */
+    val sync: SyncPassState = SyncPassState.Idle,
 
     // --- About ---
 
