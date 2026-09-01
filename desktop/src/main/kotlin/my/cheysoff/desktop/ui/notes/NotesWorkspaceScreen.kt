@@ -52,6 +52,7 @@ import my.cheysoff.desktop.ui.theme.AppBlack
 import my.cheysoff.desktop.ui.theme.BodyGrey
 import my.cheysoff.desktop.ui.theme.IndigoTint
 import my.cheysoff.desktop.ui.theme.OutlineDark
+import my.cheysoff.desktop.ui.theme.TextScale
 import my.cheysoff.desktop.ui.theme.SurfaceDark
 import my.cheysoff.desktop.ui.theme.TitleGrey
 import java.awt.Cursor
@@ -83,6 +84,8 @@ fun NotesWorkspaceScreen(
     onToggleRemember: () -> Unit,
     syncLabel: String?,
     onSync: (() -> Unit)?,
+    textScale: TextScale,
+    onCycleTextScale: () -> Unit,
 ) {
     Box(modifier = Modifier.fillMaxSize().background(AppBlack)) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -94,6 +97,8 @@ fun NotesWorkspaceScreen(
                 onToggleRemember = onToggleRemember,
                 syncLabel = syncLabel,
                 onSync = onSync,
+                textScale = textScale,
+                onCycleTextScale = onCycleTextScale,
             )
 
             BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
@@ -204,6 +209,8 @@ private fun TitleBar(
     onToggleRemember: () -> Unit,
     syncLabel: String?,
     onSync: (() -> Unit)?,
+    textScale: TextScale,
+    onCycleTextScale: () -> Unit,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -231,9 +238,21 @@ private fun TitleBar(
         // the reason it cannot -- not paired, or a stored address that stopped validating -- is not
         // something a button can explain.
         if (syncLabel != null && onSync != null) {
-            RememberAffordance(isRemembered = false, onClick = onSync, label = syncLabel)
+            WordedPill(label = syncLabel, onClick = onSync, clickLabel = "Sync now")
             Spacer(Modifier.width(8.dp))
         }
+
+        // Text size. A control rather than a buried setting for the same reason "Remember" is one:
+        // it is read at a glance and changed in a click, and the person who wants larger text wants
+        // it now, not after finding a settings screen. Cycling rather than opening a menu keeps it
+        // to one widget -- four steps is short enough that clicking past the one you wanted costs
+        // three more clicks, not a search.
+        WordedPill(
+            label = "Aa ${textScale.label}",
+            onClick = onCycleTextScale,
+            clickLabel = "Change text size",
+        )
+        Spacer(Modifier.width(8.dp))
 
         // Whether the OS credential store holds the vault key for this machine.
         //
@@ -267,18 +286,22 @@ private fun TitleBar(
 }
 
 /**
- * The `⌘K` slot from the approved layout, spelled `Ctrl K` because this is a Windows build. It is
- * a button as well as a hint — a shortcut nobody can discover is a shortcut nobody uses.
+ * A worded control in the title bar — the shape the header uses for anything whose *state* has to
+ * be readable, not just its action: sync, "Remember", text size.
+ *
+ * @param clickLabel what activating it does, for a screen reader. Required rather than defaulted,
+ *   because the default that used to exist here announced "Remember this computer" on the sync
+ *   control.
  */
 @Composable
-private fun RememberAffordance(
-    isRemembered: Boolean,
+private fun WordedPill(
+    label: String,
     onClick: () -> Unit,
-    label: String? = null,
+    clickLabel: String,
+    accent: Boolean = false,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
-    val text = label ?: if (isRemembered) "Remembered" else "Remember"
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -288,17 +311,28 @@ private fun RememberAffordance(
             .clickable(
                 interactionSource = interaction,
                 indication = null,
-                onClickLabel = if (isRemembered) "Stop remembering this computer" else "Remember this computer",
+                onClickLabel = clickLabel,
                 onClick = onClick,
             )
             .padding(start = 9.dp, end = 9.dp, top = 5.dp, bottom = 5.dp),
     ) {
         Text(
-            text = text,
-            color = if (isRemembered) AccentIndigo else BodyGrey,
+            text = label,
+            color = if (accent) AccentIndigo else BodyGrey,
             style = MaterialTheme.typography.labelSmall,
         )
     }
+}
+
+/** Whether this computer may open the vault without the passphrase — stated, and switchable. */
+@Composable
+private fun RememberAffordance(isRemembered: Boolean, onClick: () -> Unit) {
+    WordedPill(
+        label = if (isRemembered) "Remembered" else "Remember",
+        onClick = onClick,
+        clickLabel = if (isRemembered) "Stop remembering this computer" else "Remember this computer",
+        accent = isRemembered,
+    )
 }
 
 @Composable
