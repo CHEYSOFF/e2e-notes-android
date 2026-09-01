@@ -405,7 +405,7 @@ class AccountDeviceSession(
  * private key was ever transmitted. `PairingSessionTest.observerWithBothPublicKeysCannotDerive`
  * is the test for that.
  */
-private fun deriveSessionKey(
+internal fun deriveSessionKey(
     keyDerivation: KeyDerivation,
     privateKey: ECPrivateKey,
     peer: ECPublicKey,

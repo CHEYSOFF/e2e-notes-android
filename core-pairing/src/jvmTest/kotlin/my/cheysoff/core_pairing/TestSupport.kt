@@ -1,8 +1,13 @@
 package my.cheysoff.core_pairing
 
 import my.cheysoff.core_pairing.protocol.AccountDeviceSession
+import my.cheysoff.core_pairing.protocol.CollectResult
+import my.cheysoff.core_pairing.protocol.DepositResult
 import my.cheysoff.core_pairing.protocol.MonotonicClock
 import my.cheysoff.core_pairing.protocol.OfferOutcome
+import my.cheysoff.core_pairing.protocol.RendezvousClient
+import my.cheysoff.core_pairing.protocol.RendezvousProtocol
+import my.cheysoff.core_pairing.protocol.RendezvousSlot
 
 /**
  * A [MonotonicClock] the test drives by hand.
@@ -48,3 +53,47 @@ fun AccountDeviceSession.accept(text: String, config: String = ""): AcceptedPair
 
 /** What [accept] produced: the six digits, and the QR2 payload. */
 class AcceptedPairing(val sas: String, val sealCode: String)
+
+/**
+ * An in-memory rendezvous with the server's own rules: keyed on `(sid, slot)`, first write wins,
+ * single use per slot.
+ *
+ * A fake of the *server's behaviour*, not of the client's — which is why the rules are reproduced
+ * rather than stubbed out. [force] is the attacker's door: it puts a blob somewhere the honest
+ * protocol never would, which is how the `sid` binding, the `EA` comparison and the tag check get
+ * exercised.
+ *
+ * Shared between the two directions' suites deliberately. Both run against one fake, so a rule that
+ * only one of them relies on cannot quietly stop being enforced for the other.
+ */
+class FakeDrop : RendezvousClient {
+    private val rows = HashMap<String, String>()
+
+    /** Every deposit that reached this drop, in order, as `(sid, slot)`. */
+    val deposits = mutableListOf<Pair<String, RendezvousSlot>>()
+
+    /** When set, every collect returns this instead of looking at the rows. */
+    var answer: CollectResult? = null
+
+    override fun deposit(sid: ByteArray, slot: RendezvousSlot, code: String): DepositResult {
+        val key = key(sid, slot)
+        if (rows.containsKey(key)) return DepositResult.AlreadyDeposited
+        rows[key] = RendezvousProtocol.toBlob(code)
+        deposits += RendezvousProtocol.encodeSid(sid) to slot
+        return DepositResult.Deposited(expiresAt = 0L)
+    }
+
+    override fun collect(sid: ByteArray, slot: RendezvousSlot): CollectResult {
+        answer?.let { return it }
+        val blob = rows.remove(key(sid, slot)) ?: return CollectResult.Pending
+        return CollectResult.Collected(RendezvousProtocol.fromBlob(blob))
+    }
+
+    /** Park a blob regardless of what is already there. Only an attacker can do this. */
+    fun force(sid: ByteArray, slot: RendezvousSlot, code: String) {
+        rows[key(sid, slot)] = RendezvousProtocol.toBlob(code)
+    }
+
+    private fun key(sid: ByteArray, slot: RendezvousSlot): String =
+        RendezvousProtocol.encodeSid(sid) + slot.pathSuffix
+}
