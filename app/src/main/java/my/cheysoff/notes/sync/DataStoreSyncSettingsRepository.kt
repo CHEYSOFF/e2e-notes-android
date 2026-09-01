@@ -14,8 +14,13 @@ import javax.inject.Singleton
 
 /**
  * The backing file. See [DataStoreSyncSettingsRepository] for why it is not `manana_settings`.
+ *
+ * `internal` rather than private because [SyncEnrolmentStore] writes the server-assigned device id
+ * into the same file. That is not tidiness: `preferencesDataStore` refuses to have two active
+ * instances over one file in a process, so a second delegate on this name would throw at first use
+ * — at runtime, on the first sync — rather than fail to compile.
  */
-private val Context.syncSettingsDataStore by preferencesDataStore(name = "manana_sync")
+internal val Context.syncSettingsDataStore by preferencesDataStore(name = "manana_sync")
 
 /**
  * The sync server address, in its own preferences file.

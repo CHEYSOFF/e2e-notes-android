@@ -64,6 +64,45 @@ interface FolderDao {
     @Upsert
     suspend fun applyRemoteFolder(folder: FolderEntity)
 
+    // ── What the sync engine reads and writes. The mirror of NoteDao's block; read it there. ──
+
+    /** One folder in full, **tombstones included** — see `NoteDao.noteRow` for why. */
+    @Query("SELECT * FROM folders WHERE id = :id")
+    suspend fun folderRow(id: String): FolderEntity?
+
+    /** Every folder the server has not acknowledged, oldest row clock first. */
+    @Query("SELECT * FROM folders WHERE dirty = 1 ORDER BY hlcMs ASC, hlcCounter ASC, hlcNode ASC, id ASC")
+    suspend fun dirtyFolders(): List<FolderEntity>
+
+    /**
+     * §3.2's two rules as one statement, exactly as `NoteDao.acknowledgeNotePush` — read that
+     * method's KDoc, which is the argument for both.
+     *
+     * A folder has no `contentSyncedHlc`, because it has no body: it can never produce a conflict
+     * copy and `Baselines.advance` returns null for one.
+     */
+    @Query(
+        """
+        UPDATE folders SET
+            lastSyncedSeq = :seq,
+            dirty = CASE
+                WHEN hlcMs = :sealedMs AND hlcCounter = :sealedCounter AND hlcNode = :sealedNode
+                THEN 0 ELSE dirty END
+        WHERE id = :id
+        """
+    )
+    suspend fun acknowledgeFolderPush(
+        id: String,
+        seq: Long,
+        sealedMs: Long,
+        sealedCounter: Int,
+        sealedNode: String,
+    )
+
+    /** `NoteDao.recordNoteSeen` for a folder: the seq, and nothing else. */
+    @Query("UPDATE folders SET lastSyncedSeq = :seq WHERE id = :id")
+    suspend fun recordFolderSeen(id: String, seq: Long)
+
     /** The sync columns of one folder, or null if there is no such row. */
     @Query("SELECT hlcMs, hlcCounter, hlcNode, fieldHlc FROM folders WHERE id = :id")
     suspend fun rowClock(id: String): RowClock?
