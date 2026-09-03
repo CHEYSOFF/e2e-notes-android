@@ -11,6 +11,7 @@ import my.cheysoff.core_pairing.protocol.MonotonicClock
 import my.cheysoff.core_pairing.protocol.NewDeviceRendezvous
 import my.cheysoff.core_pairing.protocol.OfferOutcome
 import my.cheysoff.core_pairing.protocol.PollOutcome
+import my.cheysoff.core_pairing.protocol.RendezvousSlot
 import my.cheysoff.core_pairing.protocol.RendezvousUrl
 import my.cheysoff.desktop.keychain.NoCredentialStore
 import my.cheysoff.desktop.vault.AccountOrigin
@@ -93,7 +94,7 @@ class PairingAgainstRealServer {
         val deposit = HttpRendezvousClient(server)
             // Sealing is a separate step from accepting: a device must not be able to hand over
             // the account root key before its user has had a chance to compare the SAS digits.
-            .deposit(phone.receivedSid!!, phone.seal("""{"server":"$address"}""")!!)
+            .deposit(phone.receivedSid!!, RendezvousSlot.BUNDLE, phone.seal("""{"server":"$address"}""")!!)
         println("deposit: $deposit")
         assertTrue("the server refused the deposit: $deposit", deposit is DepositResult.Deposited)
 
@@ -111,7 +112,7 @@ class PairingAgainstRealServer {
 
         // Single use: the server has nothing left, so a second collect finds nothing. (It is a new
         // session because the first one closed itself on success -- which is also asserted.)
-        val second = HttpRendezvousClient(server).collect(phone.receivedSid!!)
+        val second = HttpRendezvousClient(server).collect(phone.receivedSid!!, RendezvousSlot.BUNDLE)
         assertTrue(
             "the server kept the blob after it was collected: $second",
             second is CollectResult.Pending,

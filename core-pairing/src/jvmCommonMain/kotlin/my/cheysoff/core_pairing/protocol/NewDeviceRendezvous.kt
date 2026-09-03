@@ -109,7 +109,7 @@ class NewDeviceRendezvous(
             return PollOutcome.Expired
         }
 
-        return when (val result = client.collect(session.sid)) {
+        return when (val result = client.collect(session.sid, RendezvousSlot.BUNDLE)) {
             is CollectResult.Pending -> PollOutcome.Waiting()
 
             is CollectResult.Unreachable -> PollOutcome.Waiting(result.detail)

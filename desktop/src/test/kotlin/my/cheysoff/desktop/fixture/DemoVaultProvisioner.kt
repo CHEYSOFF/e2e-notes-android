@@ -8,7 +8,7 @@ import my.cheysoff.desktop.keychain.NoCredentialStore
 import my.cheysoff.desktop.store.RecordNotesRepository
 import my.cheysoff.desktop.store.RecordStore
 import my.cheysoff.core_crypto.sync.AccountRootKey
-import my.cheysoff.desktop.vault.PairedEnrolment
+import my.cheysoff.desktop.vault.ServerEnrolment
 import my.cheysoff.desktop.vault.DeviceKeyPair
 import my.cheysoff.desktop.vault.AccountOrigin
 import my.cheysoff.desktop.vault.DesktopVault
@@ -112,7 +112,7 @@ class DemoVaultProvisioner {
             PASSPHRASE.toCharArray(),
             AccountOrigin.PAIRED,
             AccountRootKey.generateArk(),
-            PairedEnrolment(
+            ServerEnrolment(
                 serverUrl = server!!,
                 deviceId = "test-device-id",
                 deviceKey = DeviceKeyPair.generate(),

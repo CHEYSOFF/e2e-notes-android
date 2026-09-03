@@ -17,6 +17,21 @@ enum class PairingRole {
 
     /** This is the new device. It shows its code first, then scans the reply. */
     NewDevice,
+
+    /**
+     * This is the new device, and the account is on a **computer** that is showing the code.
+     *
+     * The reverse of the other two. Here this phone scans first, sends its own key through the
+     * account's server, and waits for the account key to come back the same way — because a laptop
+     * has no camera to read a code off this screen with.
+     *
+     * It is listed separately rather than folded into [NewDevice] because the two do not have the
+     * same guarantee. In [NewDevice] the account device authenticates this phone by looking at it,
+     * so a man in the middle is impossible; here this phone's key travels through a server, and the
+     * six digits a person compares are the only thing that catches a substitution. The screen says
+     * so where it applies.
+     */
+    JoinFromComputer,
 }
 
 /**
@@ -101,7 +116,51 @@ sealed interface PairingStage {
         val message: String? = null,
     ) : PairingStage
 
-    /** Both roles: compare the six digits and say whether they match. */
+    /**
+     * Joining from a computer, step 1: camera up, waiting for the computer's invite code.
+     *
+     * Note there is no "show your code" step before this one. The computer minted the session and
+     * this phone answers it.
+     */
+    @Immutable
+    data class ScanningInvite(val lastHint: ScanHint?) : PairingStage
+
+    /**
+     * Joining from a computer, step 2: the invite is read, and this phone is about to answer.
+     *
+     * **The send is a deliberate act**, exactly as [SendingSeal]'s is and for a related reason: the
+     * address came off a code the user pointed a camera at, and the request is the first moment this
+     * phone touches the network. What it sends is public — an ephemeral point and this device's
+     * public key — so a wrong host learns nothing, but a request made from inside someone's network
+     * without their knowing is worth one tap to prevent.
+     *
+     * [sas] is shown from the start, before the send, so that when the computer displays its own the
+     * two are already side by side. It cannot be compared yet: the computer has nothing to compare
+     * against until this phone answers.
+     */
+    @Immutable
+    data class AnsweringInvite(
+        val host: String,
+        /** False for a plain `http://` address. Governs the warning the screen shows. */
+        val secure: Boolean,
+        val sas: String,
+        /** True while a request is in flight. The button is disabled and says so. */
+        val sending: Boolean = false,
+        /** What went wrong with the last attempt, or null. Non-terminal: the user may retry. */
+        val message: String? = null,
+    ) : PairingStage
+
+    /**
+     * Joining from a computer, step 4: the digits matched and the account key is on its way.
+     *
+     * Reached only after [Confirming], which is the point: in this direction the account key does
+     * not move until a person has compared six digits on two screens, and this stage is what that
+     * confirmation starts.
+     */
+    @Immutable
+    data class CollectingBundle(val secondsRemaining: Int, val note: String? = null) : PairingStage
+
+    /** Every role: compare the six digits and say whether they match. */
     @Immutable
     data class Confirming(val sas: String, val role: PairingRole) : PairingStage
 

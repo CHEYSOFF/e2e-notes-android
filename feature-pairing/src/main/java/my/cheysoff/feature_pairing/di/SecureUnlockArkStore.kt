@@ -4,6 +4,7 @@ import my.cheysoff.core_crypto.SecureUnlockManager
 import my.cheysoff.core_crypto.sync.AccountRootKey
 import my.cheysoff.core_crypto.sync.Base64Url
 import my.cheysoff.core_pairing.protocol.AccountBundle
+import my.cheysoff.core_pairing.protocol.PairingConfig
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -26,6 +27,11 @@ import javax.inject.Singleton
 @Singleton
 class SecureUnlockArkStore @Inject constructor(
     private val secureUnlock: SecureUnlockManager,
+    /**
+     * Where a received server configuration goes. Never read here — this class only writes what a
+     * pairing handed it, and reading it back is the sync layer's business.
+     */
+    private val pairedServerStore: PairedServerStore,
 ) : PairingKeyMaterial {
 
     /** The hierarchy is compiled in. See [PairingKeyMaterial.isBound]. */
@@ -62,7 +68,20 @@ class SecureUnlockArkStore @Inject constructor(
         }
     }
 
-    override fun adopt(bundle: AccountBundle) {
+    /**
+     * Store the ARK, and then anything the pairing said about a server.
+     *
+     * In that order, and the order is not cosmetic: the ARK is the account, and a failure while
+     * writing a server address must not be able to leave a device that received the account key and
+     * did not keep it. The address is read from the **sealed** config, never from the QR's hint.
+     */
+    override suspend fun adopt(bundle: AccountBundle) {
         secureUnlock.adoptArk(bundle.ark)
+        val server = PairingConfig.decode(bundle.config) ?: return
+        pairedServerStore.record(
+            accountId = bundle.accountId,
+            serverUrl = server.serverUrl,
+            deviceId = server.deviceId,
+        )
     }
 }
