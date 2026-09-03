@@ -12,7 +12,7 @@ import my.cheysoff.desktop.sync.DesktopSyncService
 import my.cheysoff.desktop.vault.AccountOrigin
 import my.cheysoff.desktop.vault.DesktopVault
 import my.cheysoff.desktop.vault.DeviceKeyPair
-import my.cheysoff.desktop.vault.PairedEnrolment
+import my.cheysoff.desktop.vault.ServerEnrolment
 import my.cheysoff.desktop.vault.SetupResult
 import my.cheysoff.desktop.vault.UnlockResult
 import org.junit.Assert.assertNotNull
@@ -49,7 +49,7 @@ class OpenPairedVaultTest {
             passphrase.toCharArray(),
             AccountOrigin.PAIRED,
             AccountRootKey.generateArk(),
-            PairedEnrolment(
+            ServerEnrolment(
                 serverUrl = "https://notes.example.com",
                 deviceId = "device-id",
                 deviceKey = DeviceKeyPair.generate(),
