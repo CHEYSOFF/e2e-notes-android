@@ -160,6 +160,9 @@ class RecordNotesRepository private constructor(
                     is OpenResult.Mislabelled -> mislabelled++
                     is OpenResult.UnsupportedVersion -> unsupported++
                     is OpenResult.Malformed -> malformed++
+                    // Task 3 replaces this. For now, counted the same way a locally-stored unknown
+                    // type was counted before this case existed: as malformed.
+                    is OpenResult.UnknownType -> malformed++
                     is OpenResult.Ok -> {
                         val payload = opened.payload
                         // Every clock this device has ever seen has to be fed to the generator

@@ -164,6 +164,36 @@ class EnvelopeSyncTransportTest {
         assertEquals(RecordFault.UNREADABLE, faulted.fault)
     }
 
+    /**
+     * A sealed record naming a type this build does not implement.
+     *
+     * Sealed by hand rather than through `RecordPayloadCodec.encode`, which cannot express an
+     * unknown type -- the only way to produce these bytes is to write them the way a later build
+     * would.
+     */
+    private fun sealedRecordWithRecType(wireKey: String): RemoteRecord {
+        val json = """
+            {"v":1,"serializer":1,"recType":"$wireKey","uuid":"u1",
+             "hlc":"1-0-node","fields":{},"clocks":{},"del":false}
+        """.trimIndent().encodeToByteArray()
+        val blindedId = codec.blindedIdOf(wireKey, "u1")
+        return RemoteRecord(blindedId, 1L, RecordEnvelope.seal(keys.kContent, blindedId, json))
+    }
+
+    /** The transport under test, serving exactly [records] from one page. */
+    private fun transportOver(vararg records: RemoteRecord): EnvelopeSyncTransport =
+        transport(FakeApi(page = records.toList()))
+
+    @Test
+    fun `a record of an unknown type arrives as UNKNOWN_TYPE, not UNREADABLE`() = runTest {
+        // UNREADABLE means "I should have been able to read this and could not", and the engine
+        // reacts by refusing to page past it. A type from a later build earns neither reaction.
+        val page = transportOver(sealedRecordWithRecType("sketch")).changesSince(0, 32)
+
+        val faulted = page.records.single() as IncomingRecord.Faulted
+        assertEquals(RecordFault.UNKNOWN_TYPE, faulted.fault)
+    }
+
     // -- the push side ---------------------------------------------------------------------------
 
     @Test
