@@ -96,4 +96,16 @@ interface SyncStateDao {
      */
     @Query("DELETE FROM sync_state WHERE accountId = :accountId")
     suspend fun forget(accountId: String)
+
+    /** The format generation this device last completed a pull under, or null if it never has. */
+    @Query("SELECT dataVersion FROM sync_state WHERE accountId = :accountId")
+    suspend fun dataVersion(accountId: String): Int?
+
+    /**
+     * An UPDATE, not an upsert, for the reason [clearHalt] gives: a device with no row has never
+     * pulled, and inventing one would fabricate a cursor of 0 for an account it knows nothing
+     * about. A device with no row also needs no re-baseline — its next pull starts at 0 anyway.
+     */
+    @Query("UPDATE sync_state SET dataVersion = :version WHERE accountId = :accountId")
+    suspend fun saveDataVersion(accountId: String, version: Int)
 }

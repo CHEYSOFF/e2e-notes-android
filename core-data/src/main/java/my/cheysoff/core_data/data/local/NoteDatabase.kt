@@ -15,7 +15,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * stale the moment the next migration lands — which is how Migration4to5Test came to be broken
  * without anyone noticing.
  */
-internal const val NOTE_DATABASE_VERSION = 8
+internal const val NOTE_DATABASE_VERSION = 9
 
 @Database(
     entities = [NoteEntity::class, FolderEntity::class, SyncStateEntity::class],
@@ -212,6 +212,30 @@ abstract class NoteDatabase : RoomDatabase() {
             }
         }
 
+        // v8 -> v9: `sync_state` gains `dataVersion`, the record-format generation this device last
+        // completed a pull under. It exists so a device that skipped record types it did not
+        // implement can re-pull them once it understands them — see `SyncEngine`'s re-baseline.
+        //
+        // Existing rows are declared current (`dataVersion = 1`) rather than left at 0. A device
+        // upgrading to this build cannot have skipped anything: at this generation there is no
+        // record type it does not implement. Leaving them at 0 would make every existing install
+        // re-pull its whole account once, for nothing.
+        //
+        // The `1` here is a **literal**, not `SyncEngine.DATA_VERSION`. This migration is a
+        // historical statement about what schema 8 -> 9 meant at the moment it ran, and it must stay
+        // true forever regardless of what the constant becomes later. Interpolating the constant
+        // would mean a device migrating from schema 8 next year — after `DATA_VERSION` has moved to
+        // 2 — is silently told it is current at generation 2, when all this migration actually knows
+        // is that it was current as of generation 1. Writing the literal is also the conservative
+        // direction: such a device simply re-baselines once when it later reads `dataVersion = 1`
+        // against a newer `DATA_VERSION`, which costs one extra pull and cannot lose anything.
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE sync_state ADD COLUMN dataVersion INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("UPDATE sync_state SET dataVersion = 1")
+            }
+        }
+
         /**
          * Every migration above, in order. `DataModule` spreads this into Room's builder instead
          * of listing the fields a second time, so the chain the app ships with cannot be missing a
@@ -235,6 +259,7 @@ abstract class NoteDatabase : RoomDatabase() {
             MIGRATION_5_6,
             MIGRATION_6_7,
             MIGRATION_7_8,
+            MIGRATION_8_9,
         )
     }
 }
