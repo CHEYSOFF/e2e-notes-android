@@ -185,9 +185,11 @@ class PairingViewModel @Inject constructor(
          * The payload, once the vouch and the seal have happened.
          *
          * A retry after a failed deposit re-sends **these bytes**; it does not vouch again and does
-         * not seal again. Vouching again would take `409 device_exists` from a server that had
-         * already enrolled the device, and sealing again would put a second `deviceId` in a second
-         * bundle for one pairing. Both would turn a dropped connection into a dead pairing.
+         * not seal again. Sealing again would put a second `deviceId` in a second bundle for one
+         * pairing, which turns a dropped connection into a dead pairing -- so this still holds even
+         * though the server side of it no longer does: enrolment is idempotent now, and vouching
+         * again returns the id the first attempt assigned rather than `409 device_exists`. Keeping
+         * the seal is the cheaper half of the guarantee and it does not depend on the server's.
          */
         var sealCode: String? = null
     }
