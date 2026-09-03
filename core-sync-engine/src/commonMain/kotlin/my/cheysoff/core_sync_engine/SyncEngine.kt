@@ -202,17 +202,14 @@ class SyncEngine(
                             halt(HaltReason.UNSUPPORTED_PAYLOAD_VERSION),
                         )
 
-                        // Task 3 replaces this. For now, an unknown type is treated exactly like
-                        // an unreadable record: counted, frozen, and not paged past.
+                        // The one fault the cursor may pass. A record this build cannot represent
+                        // would not have been stored even if it had been accepted, so nothing is
+                        // lost by moving on -- and freezing here is what halted a device whose
+                        // only problem was being one version behind. Task 7's re-baseline is how
+                        // it recovers these once it understands them.
                         RecordFault.UNKNOWN_TYPE -> {
-                            stats = stats.copy(unreadable = stats.unreadable + 1)
-                            frozen = true
-                            if (stats.unreadable > UNREADABLE_RECORD_LIMIT) {
-                                return finishPull(
-                                    committable, startCursor, stats,
-                                    halt(HaltReason.RECORDS_UNREADABLE),
-                                )
-                            }
+                            stats = stats.copy(ignored = stats.ignored + 1)
+                            if (!frozen) committable = incoming.seq
                         }
                     }
 
@@ -477,6 +474,14 @@ class SyncEngine(
     private class Phase(val stats: PassStats, val stop: SyncOutcome?)
 
     companion object {
+
+        /**
+         * The record-format generation this build implements. Bump it in the same commit that adds
+         * a record type or changes a payload's shape, and never otherwise: every device that has
+         * pulled under a lower number re-pulls its whole account once, which is cheap for a small
+         * library and is not free for a large one.
+         */
+        const val DATA_VERSION = 1
 
         /** The server refuses a batch of more than 64 items. */
         const val MAX_BATCH_LIMIT = 64
