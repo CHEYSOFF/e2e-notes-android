@@ -272,10 +272,9 @@ class SyncRowTest {
             SyncPassState.Completed(SyncPassSummary(received = 4, applied = 3, ignored = 1)),
         )
 
-        assertTrue("the count must appear: $line", line.contains("1"))
         assertTrue(
-            "and it must name the cause rather than sounding like damage: $line",
-            line.contains("newer version", ignoreCase = true),
+            "the exact wording must appear, not merely a stray \"1\": $line",
+            line.contains("skipped 1 needing a newer version of the app"),
         )
         assertFalse("it is not a failure: $line", line.contains("failed", ignoreCase = true))
     }
