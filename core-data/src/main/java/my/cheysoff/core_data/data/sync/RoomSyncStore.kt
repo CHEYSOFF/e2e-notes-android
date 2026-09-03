@@ -245,16 +245,24 @@ class RoomSyncStore(
     override suspend fun clearHalt() = syncStateDao.clearHalt(accountId)
 
     /**
-     * `0` and `null` are the same state here -- "nothing recorded" -- spelled differently only
-     * because this column carries `NOT NULL DEFAULT 0` while the desktop's `data_version` has no
-     * default. `advanceCursor`'s INSERT never names `dataVersion`, so the very first pull already
-     * leaves a row sitting at the column default of 0, and a plain `?:` does not fire on 0 — only
-     * `RoomSyncStore` had this bug; `RecordSyncStore` reads a genuine `NULL` and its elvis already
-     * fires. `0` can never be a real generation, since [SyncEngine.DATA_VERSION] starts at 1 and
-     * only increases, so treating it as "unset" here masks no value any caller could have written.
+     * The raw stored value, with only a genuinely absent row falling back to
+     * [SyncEngine.DATA_VERSION] — **not** a stored `0`.
+     *
+     * An earlier version of this method also masked `0`, on the theory that it was
+     * indistinguishable from "no row" and so had to mean the same thing. That was wrong, and it is
+     * why [SyncEngine]'s generation write never fired for a device that reached `0` honestly:
+     * `advanceCursor`'s INSERT never names `dataVersion`, so *every* device's first completed pull
+     * leaves this column at its own `NOT NULL DEFAULT 0` -- a real, meaningful "pulled once,
+     * generation unrecorded, therefore behind" -- and masking it to [SyncEngine.DATA_VERSION] told
+     * the engine that state was already current, so it never wrote anything to correct it. A
+     * device could sit at that masked `0` forever.
+     *
+     * `0` can never be a genuine *recorded* generation -- [SyncEngine.DATA_VERSION] starts at 1
+     * and only increases -- so returning it here loses nothing a caller could have written; it
+     * only stops pretending an unrecorded row is a current one.
      */
     override suspend fun dataVersion(): Int =
-        syncStateDao.dataVersion(accountId)?.takeIf { it != 0 } ?: SyncEngine.DATA_VERSION
+        syncStateDao.dataVersion(accountId) ?: SyncEngine.DATA_VERSION
 
     override suspend fun saveDataVersion(version: Int) =
         syncStateDao.saveDataVersion(accountId, version)
