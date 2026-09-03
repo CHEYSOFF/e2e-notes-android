@@ -52,6 +52,12 @@ enum class SyncTrigger {
 
     /** The user pulled the notes list down. */
     MANUAL_REFRESH,
+
+    /**
+     * A timer, while the app is open and unlocked. Nobody is watching a spinner for this one, so
+     * it is the trigger that must never announce that it did nothing.
+     */
+    PERIODIC,
 }
 
 /**
