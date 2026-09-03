@@ -21,12 +21,20 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import my.cheysoff.core_pairing.protocol.RendezvousUrl
+import my.cheysoff.desktop.pairing.DesktopAccountPairingController
 import my.cheysoff.desktop.pairing.DesktopPairingController
+import my.cheysoff.desktop.pairing.InviteAccount
+import my.cheysoff.desktop.pairing.PairingServer
+import my.cheysoff.desktop.sync.ClaimResult
+import my.cheysoff.desktop.sync.DesktopAccountServer
+import my.cheysoff.desktop.sync.VouchResult
+import my.cheysoff.desktop.vault.DeviceKeyPair
 import my.cheysoff.desktop.store.RecordNotesRepository
 import my.cheysoff.desktop.store.RecordStore
 import my.cheysoff.desktop.vault.AccountOrigin
 import my.cheysoff.desktop.vault.DesktopVault
-import my.cheysoff.desktop.vault.PairedEnrolment
+import my.cheysoff.desktop.vault.ServerEnrolment
 import my.cheysoff.desktop.vault.PassphrasePolicy
 import my.cheysoff.desktop.vault.SetupResult
 import my.cheysoff.desktop.vault.UnlockResult
@@ -66,8 +74,39 @@ class AppController(
          */
         data class Pairing(val controller: DesktopPairingController) : Screen
 
-        /** Choosing a passphrase, having chosen how the account will be obtained. */
-        data class CreatePassphrase(val origin: AccountOrigin) : Screen
+        /**
+         * Naming the server an account created on this computer will sync through.
+         *
+         * Before the passphrase, and therefore before the vault, because the two steps are not
+         * equally reversible: a mistyped address costs a correction and an Account Root Key cannot
+         * be un-minted. See `NameServerScreen`.
+         */
+        data class NameServer(val url: String, val message: String? = null) : Screen
+
+        /**
+         * Choosing a passphrase, having chosen how the account will be obtained.
+         *
+         * [server] is set only for an account being created on this computer, and is the address
+         * the claim will be made against once the vault exists. Null for a paired vault (the
+         * address came out of the sealed bundle) and for a standalone one (there is none).
+         */
+        data class CreatePassphrase(
+            val origin: AccountOrigin,
+            val server: RendezvousUrl? = null,
+        ) : Screen
+
+        /**
+         * Admitting a phone to the account this computer holds.
+         *
+         * [returnTo] is the open workspace this screen was entered from and is where every exit
+         * goes. It is carried rather than rebuilt because the vault, the store and the repository
+         * are already open behind this screen — closing and reopening them to draw a QR code would
+         * unwrap the ARK a second time for no reason.
+         */
+        data class Invite(
+            val controller: DesktopAccountPairingController,
+            val returnTo: Open,
+        ) : Screen
 
         /** A vault exists and is closed. */
         data object Unlock : Screen
@@ -138,7 +177,7 @@ class AppController(
      * It carries a private key, so it is dropped and zeroed on every path out of pairing, exactly
      * as the ARK is.
      */
-    private var pairedEnrolment: PairedEnrolment? = null
+    private var pairedEnrolment: ServerEnrolment? = null
 
     /**
      * Tries the OS credential store, once, at startup.
@@ -156,6 +195,66 @@ class AppController(
         message = null
         abandonPairing()
         screen = Screen.CreatePassphrase(AccountOrigin.CREATED_HERE)
+    }
+
+    /**
+     * Start creating an account on this computer, beginning with the server it will sync through.
+     *
+     * Nothing is minted yet. The ARK is created by [create], after the address has been checked
+     * against a live server, because a vault created against an address that answers nothing is an
+     * account no phone can ever be added to — and it looks like a working app until somebody tries.
+     */
+    fun chooseCreateAccountHere() {
+        message = null
+        abandonPairing()
+        screen = Screen.NameServer(PairingServer.remembered())
+    }
+
+    fun editServerUrl(url: String) {
+        val current = screen
+        if (current is Screen.NameServer) screen = current.copy(url = url, message = null)
+    }
+
+    /**
+     * Check the typed address, then move on to the passphrase.
+     *
+     * The check is `GET /healthz` — unauthenticated, and the one call that can be made before any
+     * key material exists. It does not prove the server is honest and is not meant to; it proves
+     * the address reaches something that speaks this protocol, which is what a typo does not.
+     */
+    fun confirmServer() {
+        val current = screen as? Screen.NameServer ?: return
+        val parsed = RendezvousUrl.parse(current.url)
+        if (parsed == null) {
+            screen = current.copy(
+                message = "That is not an http:// or https:// address this can reach."
+            )
+            return
+        }
+        val endpoint = endpointFor(parsed)
+        if (endpoint == null) {
+            screen = current.copy(
+                message = "Plain http:// is only allowed to this computer itself. Put the server " +
+                    "behind https:// and try again."
+            )
+            return
+        }
+        if (busy) return
+        busy = true
+        scope.launch {
+            val reachable = withContext(Dispatchers.IO) {
+                DesktopAccountServer(endpoint, DeviceKeyPair.generate(), { null }).isReachable()
+            }
+            busy = false
+            screen = if (reachable) {
+                Screen.CreatePassphrase(AccountOrigin.CREATED_HERE, parsed)
+            } else {
+                current.copy(
+                    message = "Nothing at ${parsed.host} answered as a Manana server. Check the " +
+                        "address and that the server is running."
+                )
+            }
+        }
     }
 
     /** Start a pairing attempt. Nothing is created on disk until the SAS is confirmed. */
@@ -203,7 +302,20 @@ class AppController(
      * silently minted second account. It is checked here as well, so that the refusal is a sentence
      * the user can act on rather than an `IllegalArgumentException`.
      */
-    fun create(passphrase: CharArray, confirmation: CharArray, origin: AccountOrigin) {
+    fun create(
+        passphrase: CharArray,
+        confirmation: CharArray,
+        origin: AccountOrigin,
+        /**
+         * The server an account created here will be claimed on, or null.
+         *
+         * Not passed to [DesktopVault.setUp]: the handle a server files the account under is
+         * derived from the ARK, so it does not exist until the vault does. The claim therefore
+         * happens after the vault is written, and [DesktopVault.recordEnrolment] adds the result
+         * to the header.
+         */
+        server: RendezvousUrl? = null,
+    ) {
         message = null
         if (!passphrase.contentEquals(confirmation)) {
             passphrase.fill('\u0000')
@@ -231,6 +343,7 @@ class AppController(
                         pairedEnrolment?.deviceKey?.privateKeyPkcs8?.fill(0)
                         pairedEnrolment = null
                         open(result.session)
+                        if (server != null) claimAccountOn(server, result.session)
                     }
 
                     is SetupResult.AlreadySetUp -> {
@@ -248,6 +361,135 @@ class AppController(
                 passphrase.fill('\u0000')
             }
         }
+    }
+
+    /**
+     * Install this computer as the account's first device on [server].
+     *
+     * Trust on first use, and legitimate here for exactly one reason: the account was minted
+     * moments ago in [create], so there is nobody else who could have vouched and nothing on that
+     * server to take over. Any other path to a server goes through pairing, where an existing
+     * device does the vouching.
+     *
+     * A failure is reported and not retried in a loop. The vault is real, the notes are safe, and
+     * what is missing is the ability to add a phone — which is a sentence the user can act on, and
+     * which [addDevice] offers to fix by sending them back to the address field.
+     */
+    private fun claimAccountOn(server: RendezvousUrl, session: VaultSession) {
+        val endpoint = endpointFor(server) ?: return
+        val deviceKey = DeviceKeyPair.generate()
+        scope.launch {
+            val outcome = withContext(Dispatchers.IO) {
+                DesktopAccountServer(
+                    endpoint = endpoint,
+                    deviceKey = deviceKey,
+                    // A copy per call: the label sealer zeroes what it is handed, and zeroing the
+                    // session's own ARK would take the vault down with it.
+                    arkProvider = { session.ark.copyOf() },
+                ).claim(
+                    accountId = Base64Url.encode(session.accountKeys.accountId),
+                    deviceLabel = DESKTOP_DEVICE_LABEL,
+                )
+            }
+            when (outcome) {
+                is ClaimResult.Claimed -> {
+                    val recorded = vault.recordEnrolment(
+                        session,
+                        ServerEnrolment(server.base, outcome.deviceId, deviceKey),
+                    )
+                    if (recorded) {
+                        PairingServer.remember(server)
+                        attachSync(session)
+                        // Straight to the invite: adding the phone is the reason this path exists,
+                        // and a user who has just named a server and typed a passphrase is not
+                        // helped by being dropped into an empty note list to find a button.
+                        addDevice()
+                    } else {
+                        message = "This computer was authorised on ${server.host}, but that could " +
+                            "not be written to the vault. It will not sync yet."
+                    }
+                }
+
+                is ClaimResult.Refused -> {
+                    deviceKey.privateKeyPkcs8.fill(0)
+                    message = "Your notes are safe on this computer, but it is not set up on " +
+                        "${server.host}: ${outcome.message} You can add a phone once it is."
+                }
+            }
+        }
+    }
+
+    /**
+     * Show the code a phone scans to join this account.
+     *
+     * Refused when this computer is not itself enrolled, and the refusal is the honest one: the
+     * server checks the voucher's signature against a device row it holds, so a computer with no
+     * row cannot authorise anybody. The user is sent back to the address field rather than shown a
+     * QR code that would fail at the last step.
+     */
+    fun addDevice() {
+        val open = screen as? Screen.Open ?: (screen as? Screen.Invite)?.returnTo ?: return
+        message = null
+        val sync = open.session.sync
+        if (sync == null) {
+            screen = Screen.NameServer(
+                url = PairingServer.remembered(),
+                message = "This computer is not set up on a server yet, so it cannot authorise a " +
+                    "phone. Name the server first.",
+            )
+            return
+        }
+        val server = RendezvousUrl.parse(sync.serverUrl)
+        val endpoint = server?.let(::endpointFor)
+        if (server == null || endpoint == null) {
+            message = "This vault's server address is one this build cannot use, so a phone " +
+                "cannot be added."
+            return
+        }
+        val accountId = Base64Url.encode(open.session.accountKeys.accountId)
+        val accountServer = DesktopAccountServer(
+            endpoint = endpoint,
+            deviceKey = sync.deviceKey,
+            arkProvider = { open.session.ark.copyOf() },
+        )
+        screen = Screen.Invite(
+            controller = DesktopAccountPairingController(
+                scope = scope,
+                server = server,
+                account = InviteAccount(
+                    arkProvider = { open.session.ark.copyOf() },
+                    accountId = accountId,
+                    voucherDeviceId = sync.deviceId,
+                ),
+                voucher = { joiningDeviceKey ->
+                    val result = withContext(Dispatchers.IO) {
+                        accountServer.vouch(
+                            accountId = accountId,
+                            voucherDeviceId = sync.deviceId,
+                            joiningDeviceKey = joiningDeviceKey,
+                            deviceLabel = JOINING_DEVICE_LABEL,
+                        )
+                    }
+                    (result as? VouchResult.Enrolled)?.deviceId
+                },
+            ),
+            returnTo = open,
+        )
+    }
+
+    /** Leave the invite screen, whatever it ended on, and go back to the notes. */
+    fun inviteFinished() {
+        val invite = screen as? Screen.Invite ?: return
+        invite.controller.cancel()
+        screen = invite.returnTo
+    }
+
+    /** Abandon this invite and start a fresh one. A new attempt means a new `sid` and new keys. */
+    fun inviteStartOver() {
+        val invite = screen as? Screen.Invite ?: return
+        invite.controller.cancel()
+        screen = invite.returnTo
+        addDevice()
     }
 
     /** Opens the vault. [passphrase] is zeroed here whatever the outcome. */
@@ -308,6 +550,25 @@ class AppController(
             codec = RecordCodec(session.accountKeys),
             node = session.hlcNode,
         )
+        screen = Screen.Open(session, repository, store)
+        attachSync(session)
+        message = repository.diagnostics.total.takeIf { it > 0 }?.let {
+            // Said out loud rather than logged. These records are still on disk and still belong to
+            // the user; the app has simply not been able to read them, and a silent count is how a
+            // partial data loss becomes a surprise months later.
+            "$it record(s) on disk could not be read and are being left untouched."
+        }
+    }
+
+    /**
+     * Build the record pipeline for [session], if this vault has a server at all.
+     *
+     * Called on every unlock, and again after a claim: a vault created on this computer has no
+     * enrolment when it opens and gains one seconds later, and a sync service built before that
+     * would be a permanently unavailable one on a device that can in fact sync.
+     */
+    private fun attachSync(session: VaultSession) {
+        val open = screen as? Screen.Open ?: return
         syncService = session.sync?.let { identity ->
             val endpoint = try {
                 ServerEndpoint(identity.serverUrl)
@@ -315,7 +576,6 @@ class AppController(
                 // A stored address that no longer validates. The vault still opens and the notes
                 // are readable; it simply cannot sync, and saying so beats discovering it at the
                 // first pass.
-                syncState = DesktopSyncState.Unavailable
                 null
             }
             endpoint?.let {
@@ -327,24 +587,32 @@ class AppController(
                         deviceId = identity.deviceId,
                     ),
                     codec = RecordCodec(session.accountKeys),
-                    store = store,
+                    store = open.store,
                     // A copy per call: the label sealer zeroes what it is handed, and zeroing the
                     // session's own ARK would take the vault down with it.
                     arkProvider = { session.ark.copyOf() },
-                    clockObserver = repository.clockObserver,
+                    clockObserver = open.repository.clockObserver,
                 )
             }
         }
         syncState = if (syncService == null) DesktopSyncState.Unavailable else DesktopSyncState.Idle
 
-        // Push what was just typed, without pushing on every keystroke.
-        //
-        // A pass previously ran only on unlock and on the title-bar control, so a note written and
-        // left alone stayed on this machine indefinitely while the app cheerfully reported its last
-        // successful sync. Debounced rather than immediate because the editor autosaves as you
-        // type, and a pass per character would be absurd.
+        // The triggers, rebuilt whenever the pipeline is. Both are started only when there is a
+        // service for them to drive: a vault with no server would otherwise run a timer for the
+        // sole purpose of returning early once a minute.
         localEditJob?.cancel()
-        localEditJob = repository.localWrites
+        localEditJob = null
+        periodicSyncJob?.cancel()
+        periodicSyncJob = null
+
+        if (syncService == null) return
+
+        // Push what was just typed, without pushing on every keystroke. A pass previously ran only
+        // on unlock and on the title-bar control, so a note written and left alone stayed on this
+        // machine indefinitely while the app cheerfully reported its last successful sync.
+        // Debounced rather than immediate because the editor autosaves as you type, and a pass per
+        // character would be absurd.
+        localEditJob = open.repository.localWrites
             .drop(1)
             .debounce(LOCAL_EDIT_SYNC_DELAY_MS)
             .onEach { syncNow() }
@@ -354,7 +622,6 @@ class AppController(
         // have done something. Without it a laptop left open never learns about a note written on
         // the phone -- while displaying the accurate, and in that moment deeply misleading, result
         // of its last pass.
-        periodicSyncJob?.cancel()
         periodicSyncJob = scope.launch {
             while (isActive) {
                 delay(PeriodicSyncPolicy.INTERVAL_MS)
@@ -365,13 +632,20 @@ class AppController(
                 if (shouldRun) runPass(clearHalt = false)
             }
         }
-        screen = Screen.Open(session, repository, store)
-        message = repository.diagnostics.total.takeIf { it > 0 }?.let {
-            // Said out loud rather than logged. These records are still on disk and still belong to
-            // the user; the app has simply not been able to read them, and a silent count is how a
-            // partial data loss becomes a surprise months later.
-            "$it record(s) on disk could not be read and are being left untouched."
-        }
+    }
+    /**
+     * The sync endpoint for a rendezvous address, or null when this build will not talk to it.
+     *
+     * `ServerEndpoint`'s rule and not a second one: https, or plain http to loopback. The two
+     * addresses are the same string -- the rendezvous and the sync API are one server -- so a
+     * pairing that named a host the sync transport would refuse is a pairing worth stopping at the
+     * address field rather than at the first sync.
+     */
+    private fun endpointFor(server: RendezvousUrl): ServerEndpoint? = try {
+        ServerEndpoint(server.base)
+    } catch (e: IllegalArgumentException) {
+        null
+
     }
 
     /**
@@ -489,6 +763,27 @@ class AppController(
         pairedArk = null
         pairedEnrolment?.deviceKey?.privateKeyPkcs8?.fill(0)
         pairedEnrolment = null
+    }
+
+    private companion object {
+
+        /**
+         * What this computer is called in the account's device list.
+         *
+         * A constant, because the alternative is the machine's hostname -- which is a personal
+         * detail ("vova-thinkpad") that would be sealed into the account's own device label and is
+         * not worth collecting to say "the laptop". The user can rename it from a device list.
+         */
+        const val DESKTOP_DEVICE_LABEL = "Computer"
+
+        /**
+         * What the joining device is called.
+         *
+         * "Phone" rather than a name, because this computer does not know one: the reply carries a
+         * key, not a hostname. An unnamed row would be worse than a generic one -- a device the
+         * user cannot identify is a device they will not revoke.
+         */
+        const val JOINING_DEVICE_LABEL = "Phone"
     }
 
     private fun explain(verdict: PassphrasePolicy.Verdict): String = when (verdict) {

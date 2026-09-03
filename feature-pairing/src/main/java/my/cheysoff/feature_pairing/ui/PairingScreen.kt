@@ -235,6 +235,27 @@ fun PairingScreen(
                     onStartOver = { onIntent(PairingIntent.StartOver) },
                 )
 
+                is PairingStage.ScanningInvite -> ScanStep(
+                    title = "Scan your computer's code",
+                    body = "On the computer, choose \u201cAdd your phone\u201d and point this " +
+                        "camera at the code it shows.",
+                    hint = stage.lastHint,
+                    secondsRemaining = null,
+                    permission = state.cameraPermission,
+                    onCode = { onIntent(PairingIntent.CodeScanned(it)) },
+                    onRequestPermission = { permissionLauncher.launch(Manifest.permission.CAMERA) },
+                    onOpenSettings = { context.openAppSettings() },
+                    onStartOver = { onIntent(PairingIntent.StartOver) },
+                )
+
+                is PairingStage.AnsweringInvite -> AnswerInviteStep(
+                    stage = stage,
+                    onSend = { onIntent(PairingIntent.SendReply) },
+                    onStartOver = { onIntent(PairingIntent.StartOver) },
+                )
+
+                is PairingStage.CollectingBundle -> CollectingCard(stage)
+
                 is PairingStage.Confirming -> ConfirmStep(
                     sas = stage.sas,
                     onMatch = { onIntent(PairingIntent.SasConfirmed) },
@@ -421,6 +442,17 @@ private fun RoleChooser(canShareAccount: Boolean, onChoose: (PairingRole) -> Uni
             disabledNote = null,
             onClick = { onChoose(PairingRole.NewDevice) },
         )
+        // Last, and worded as the different thing it is. The two above are two phones looking at
+        // each other's screens and nothing in between; this one goes through a server, and the
+        // check it rests on is a person comparing six digits rather than a camera.
+        RoleCard(
+            title = "Join an account on my computer",
+            body = "Scan the code your computer is showing. Your key travels through the server " +
+                "it names, so compare the six digits carefully before you finish.",
+            enabled = true,
+            disabledNote = null,
+            onClick = { onChoose(PairingRole.JoinFromComputer) },
+        )
     }
 }
 
@@ -548,6 +580,81 @@ private fun SendSealStep(
             enabled = !stage.sending && stage.secure,
         )
         StartOverButton(onStartOver)
+    }
+}
+
+/**
+ * The step where this phone answers a computer's invite.
+ *
+ * ## Why the wording here is heavier than [SendSealStep]'s
+ *
+ * They send different things across the same route. There, the payload is a sealed account key and
+ * the account device authenticated the recipient by camera, so nobody can be in the middle. Here,
+ * the payload is this phone's own ephemeral key on its way to a computer that cannot see this
+ * screen — so somebody on that route can replace it, agree a secret with the computer instead, and
+ * nothing in the protocol will notice.
+ *
+ * What notices is the person. The six digits are shown before the send so that they are already on
+ * screen when the computer displays its own, and the copy says what the comparison is for rather
+ * than treating it as a formality.
+ */
+@Composable
+private fun AnswerInviteStep(
+    stage: PairingStage.AnsweringInvite,
+    onSend: () -> Unit,
+    onStartOver: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Card {
+            CardTitle("Answer your computer")
+            CardBody(
+                "This sends your device key to the server that computer named. Nothing secret " +
+                    "goes with it \u2014 but nothing proves it arrives unchanged either, which " +
+                    "is what the six digits below are for."
+            )
+        }
+        Card {
+            CardTitle(stage.host)
+            CardBody(
+                if (stage.secure) {
+                    "Check that this is your own server before sending."
+                } else {
+                    "This is a plain http:// address. Android refuses unencrypted connections, " +
+                        "so this cannot be sent. Put the server behind https:// and start over."
+                },
+                color = if (stage.secure) BodyGrey else ErrorRed,
+            )
+        }
+        SasCard(stage.sas)
+        stage.message?.let {
+            Card {
+                CardTitle("That did not work")
+                CardBody(it, color = ErrorRed)
+            }
+        }
+        PrimaryButton(
+            label = if (stage.sending) "Sending\u2026" else "Send to ${stage.host}",
+            onClick = onSend,
+            enabled = !stage.sending && stage.secure,
+        )
+        StartOverButton(onStartOver)
+    }
+}
+
+/** Waiting for the account key, which the computer sends only once its user has confirmed too. */
+@Composable
+private fun CollectingCard(stage: PairingStage.CollectingBundle) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Card {
+            CardTitle("Waiting for your computer")
+            CardBody(
+                "Confirm the same six digits on the computer. It sends your account key only " +
+                    "after you do \u2014 ${stage.secondsRemaining}s left."
+            )
+        }
+        stage.note?.let {
+            Card { CardBody(it, color = ErrorRed) }
+        }
     }
 }
 
@@ -773,6 +880,10 @@ private fun FinishedCard(role: PairingRole, onDone: () -> Unit) {
                         "The other phone now holds a copy of your account key. It is the only " +
                             "backup of it that exists: if you lose the PIN on this phone, that " +
                             "phone can still read your notes."
+
+                    PairingRole.JoinFromComputer ->
+                        "This phone now holds your account key and is set up to sync with the " +
+                            "server your computer named."
                 }
             )
         }

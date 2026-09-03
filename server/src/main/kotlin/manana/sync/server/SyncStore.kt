@@ -106,9 +106,37 @@ class SyncStore(
                 // holds the only copy of someone's account.
                 statement.execute("PRAGMA journal_mode = WAL")
                 statement.execute("PRAGMA synchronous = FULL")
+                dropPairingsIfOneSlotShaped(statement)
                 for (ddl in SCHEMA) statement.execute(ddl)
             }
             return SyncStore(connection, clock, historyDepth)
+        }
+
+        /**
+         * Bring a database written before the rendezvous had two slots up to the current shape.
+         *
+         * `CREATE TABLE IF NOT EXISTS` would leave the old single-slot table in place and every
+         * insert would then fail on an unknown column, so the table is dropped and rebuilt. That is
+         * safe here and nowhere else in this schema: `pairings` is a dead drop with a two-minute
+         * lease, every row in it belongs to a handshake that is already over by the time a process
+         * restarts, and none of it is anybody's data. A migration that copied rows across would be
+         * copying blobs no client is still waiting for.
+         *
+         * Detected by asking for the columns rather than by a version counter, so a fresh database
+         * and an upgraded one reach the same place with no extra state to keep correct.
+         */
+        private fun dropPairingsIfOneSlotShaped(statement: java.sql.Statement) {
+            val hasSlot = statement.executeQuery("PRAGMA table_info(pairings)").use { columns ->
+                var found = false
+                var any = false
+                while (columns.next()) {
+                    any = true
+                    if (columns.getString("name") == "slot") found = true
+                }
+                // A table that does not exist yet reports no columns; there is nothing to drop.
+                !any || found
+            }
+            if (!hasSlot) statement.execute("DROP TABLE pairings")
         }
 
         private val SCHEMA = listOf(
@@ -175,11 +203,17 @@ class SyncStore(
             // verify without holding, so hashing it means a database read yields nothing usable.
             // Here the row already contains the blob that `sid` would retrieve, so digesting the
             // key would protect a secret against someone who is holding the thing it unlocks.
+            //
+            // Keyed on `(sid, slot)` because one pairing now has two exchanges: the joining
+            // device's key material travels one way and the sealed bundle travels the other. Each
+            // slot keeps every rule the single blob had -- first write wins, one collect, one TTL.
             """
             CREATE TABLE IF NOT EXISTS pairings (
-                sid        TEXT    NOT NULL PRIMARY KEY,
+                sid        TEXT    NOT NULL,
+                slot       TEXT    NOT NULL,
                 sealed     TEXT    NOT NULL,
-                expires_at INTEGER NOT NULL
+                expires_at INTEGER NOT NULL,
+                PRIMARY KEY (sid, slot)
             )
             """,
             "CREATE INDEX IF NOT EXISTS pairings_by_expiry ON pairings(expires_at)",
@@ -371,11 +405,11 @@ class SyncStore(
      * than on a timer for the same reason [claimSignature] and [createChallenge] do it: a server
      * that is not being written to has nothing to clean up.
      */
-    fun putPairing(sid: String, sealed: String, expiresAt: Long): Boolean = tx {
+    fun putPairing(sid: String, slot: String, sealed: String, expiresAt: Long): Boolean = tx {
         update("DELETE FROM pairings WHERE expires_at <= ?", clock.nowMillis())
         update(
-            "INSERT OR IGNORE INTO pairings(sid, sealed, expires_at) VALUES (?, ?, ?)",
-            sid, sealed, expiresAt,
+            "INSERT OR IGNORE INTO pairings(sid, slot, sealed, expires_at) VALUES (?, ?, ?, ?)",
+            sid, slot, sealed, expiresAt,
         ) == 1
     }
 
@@ -389,12 +423,15 @@ class SyncStore(
      * the blob, and the pairing must be started again -- and that is the right trade at a two-minute
      * TTL, because the alternative is a blob that stays fetchable to anyone who later learns `sid`.
      */
-    fun takePairing(sid: String): String? = tx {
+    fun takePairing(sid: String, slot: String): String? = tx {
         val row = query(
-            "SELECT sealed FROM pairings WHERE sid = ? AND expires_at > ?",
-            sid, clock.nowMillis(),
+            "SELECT sealed FROM pairings WHERE sid = ? AND slot = ? AND expires_at > ?",
+            sid, slot, clock.nowMillis(),
         ) { if (it.next()) it.getString(1) else null }
-        update("DELETE FROM pairings WHERE sid = ?", sid)
+        // Deletes this slot only. The other half of the pairing is a separate exchange with its own
+        // single-use lifetime, and clearing it here would mean collecting the reply destroyed the
+        // bundle the same `sid` is about to carry.
+        update("DELETE FROM pairings WHERE sid = ? AND slot = ?", sid, slot)
         row
     }
 
@@ -406,8 +443,29 @@ class SyncStore(
      * refusal should not also be doing housekeeping -- [putPairing] sweeps on the path that grows
      * the table.
      */
+    /**
+     * Whether any unexpired slot is already filed under [sid].
+     *
+     * Exists so the global cap can refuse a *new* pairing without refusing the second leg of one
+     * already in flight. A cap that blocked the reply's partner would let handshakes start and
+     * never finish on a busy server, which is a worse failure than turning one away at the door.
+     *
+     * The extra rows this permits are bounded: a `sid` has two slots, so the table is bounded by
+     * `2 * maxLivePairings` rather than by `maxLivePairings`, and `ServerConfig`'s disk arithmetic
+     * says so.
+     */
+    fun hasLivePairing(sid: String): Boolean = tx {
+        query(
+            "SELECT 1 FROM pairings WHERE sid = ? AND expires_at > ? LIMIT 1",
+            sid, clock.nowMillis(),
+        ) { it.next() }
+    }
+
     fun livePairingCount(): Long = tx {
-        query("SELECT COUNT(*) FROM pairings WHERE expires_at > ?", clock.nowMillis()) {
+        // DISTINCT sid, not rows. `maxLivePairings` bounds how many pairings may be in flight, and
+        // that is what its name, its error message and its disk-size arithmetic all mean; counting
+        // slots would silently halve the cap the day a second slot was added.
+        query("SELECT COUNT(DISTINCT sid) FROM pairings WHERE expires_at > ?", clock.nowMillis()) {
             if (it.next()) it.getLong(1) else 0L
         }
     }

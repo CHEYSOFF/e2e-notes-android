@@ -46,13 +46,13 @@ class HttpRendezvousClient(
     private val open: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection },
 ) : RendezvousClient {
 
-    override fun deposit(sid: ByteArray, sealCode: String): DepositResult {
-        val blob = RendezvousProtocol.toBlob(sealCode)
+    override fun deposit(sid: ByteArray, slot: RendezvousSlot, code: String): DepositResult {
+        val blob = RendezvousProtocol.toBlob(code)
         val body = JsonObject(mapOf(RendezvousProtocol.FIELD_SEALED to JsonPrimitive(blob)))
             .toString().toByteArray(Charsets.UTF_8)
 
         val response = try {
-            request(sid, method = "POST", body = body)
+            request(sid, slot, method = "POST", body = body)
         } catch (e: IOException) {
             return DepositResult.Unreachable(e.message ?: e::class.java.simpleName)
         }
@@ -67,9 +67,9 @@ class HttpRendezvousClient(
         }
     }
 
-    override fun collect(sid: ByteArray): CollectResult {
+    override fun collect(sid: ByteArray, slot: RendezvousSlot): CollectResult {
         val response = try {
-            request(sid, method = "GET", body = null)
+            request(sid, slot, method = "GET", body = null)
         } catch (e: IOException) {
             return CollectResult.Unreachable(e.message ?: e::class.java.simpleName)
         }
@@ -82,7 +82,7 @@ class HttpRendezvousClient(
                 // non-base64 body is refused before anything downstream allocates it. The frame
                 // itself is then validated by the ordinary decoder, which is the point of
                 // `fromBlob`: this leg skips no guard the scanned leg runs.
-                if (!RendezvousProtocol.isPlausibleBlob(blob)) {
+                if (!RendezvousProtocol.isPlausibleBlob(blob, slot.maxBlobBytes)) {
                     return CollectResult.Unusable("the server returned an implausible sealed bundle")
                 }
                 CollectResult.Collected(RendezvousProtocol.fromBlob(blob))
@@ -105,8 +105,16 @@ class HttpRendezvousClient(
 
     private class Response(val status: Int, val body: String)
 
-    private fun request(sid: ByteArray, method: String, body: ByteArray?): Response {
-        val url = URL(server.base + RendezvousProtocol.PATH_PREFIX + RendezvousProtocol.encodeSid(sid))
+    private fun request(
+        sid: ByteArray,
+        slot: RendezvousSlot,
+        method: String,
+        body: ByteArray?,
+    ): Response {
+        val url = URL(
+            server.base + RendezvousProtocol.PATH_PREFIX +
+                RendezvousProtocol.encodeSid(sid) + slot.pathSuffix
+        )
         val connection = open(url)
         return try {
             connection.requestMethod = method

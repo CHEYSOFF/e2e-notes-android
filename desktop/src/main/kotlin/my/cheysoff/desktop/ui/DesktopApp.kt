@@ -72,6 +72,8 @@ fun MananaWindow(
     onToggleRemember: () -> Unit,
     syncLabel: String? = null,
     onSync: (() -> Unit)? = null,
+    /** Null when this computer has no server and therefore cannot authorise another device. */
+    onAddDevice: (() -> Unit)? = null,
     onExit: () -> Unit,
 ) {
     val windowState = rememberWindowState(
@@ -172,6 +174,7 @@ fun MananaWindow(
                 onToggleRemember = onToggleRemember,
                 syncLabel = syncLabel,
                 onSync = onSync,
+                onAddDevice = onAddDevice,
                 textScale = textScale,
                 onCycleTextScale = { setTextScale(textScale.next()) },
             )

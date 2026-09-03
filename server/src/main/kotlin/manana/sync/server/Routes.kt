@@ -114,14 +114,34 @@ fun Application.syncModule(deps: ServerDeps) {
 
         // The pairing rendezvous. Unauthenticated, and it cannot be otherwise: the device that
         // collects has no account yet, which is the whole reason it is pairing.
+        //
+        // Two slots, two pairs of routes. `/v1/pair/{sid}` is the sealed bundle and keeps the
+        // meaning it has always had; `/v1/pair/{sid}/reply` is the joining device's key material in
+        // the invite direction. Separate resources rather than one blob whose meaning depends on
+        // who wrote it -- and every limit below is applied per slot except the global cap, which
+        // counts pairings.
         post("/v1/pair/{sid}") {
             serve(deps, "POST /v1/pair/{sid}") {
-                depositPairing(deps, call.parameters["sid"], it)
+                depositPairing(deps, call.parameters["sid"], SLOT_BUNDLE, it)
             }
         }
 
         get("/v1/pair/{sid}") {
-            serve(deps, "GET /v1/pair/{sid}") { collectPairing(deps, call.parameters["sid"]) }
+            serve(deps, "GET /v1/pair/{sid}") {
+                collectPairing(deps, call.parameters["sid"], SLOT_BUNDLE)
+            }
+        }
+
+        post("/v1/pair/{sid}/reply") {
+            serve(deps, "POST /v1/pair/{sid}/reply") {
+                depositPairing(deps, call.parameters["sid"], SLOT_REPLY, it)
+            }
+        }
+
+        get("/v1/pair/{sid}/reply") {
+            serve(deps, "GET /v1/pair/{sid}/reply") {
+                collectPairing(deps, call.parameters["sid"], SLOT_REPLY)
+            }
         }
 
         get("/v1/records/{id}/history") {
@@ -684,16 +704,31 @@ private fun history(deps: ServerDeps, session: SessionRow, blindedId: String?, l
 // Pairing rendezvous
 // -------------------------------------------------------------------------------------------
 //
-// ## What these two endpoints are
+// ## What these endpoints are
 //
-// A dead drop with a two-minute lease. The device that already holds the account key leaves one
-// opaque string under a name the *other* device chose, and the other device picks it up. That is
-// all. In between, the server holds a string it did not produce, cannot read, and deletes on the
-// first read.
+// A dead drop with a two-minute lease. One device leaves an opaque string under a name minted for
+// this handshake, and the other picks it up. That is all. In between, the server holds a string it
+// did not produce, cannot read, and deletes on the first read.
 //
-// They exist because a laptop has no camera worth relying on. Two phones pair with two QR codes
-// and nothing in between; that flow is untouched and never reaches this file. What travels here is
-// the second QR's payload, byte for byte, for the case where there is nothing to point a camera at.
+// They exist because a laptop has no camera worth relying on. Two phones pair with two QR codes and
+// nothing in between; that flow is untouched and never reaches this file.
+//
+// ## Two slots, and why
+//
+//  - `bundle` (`/v1/pair/{sid}`) is the sealed account bundle -- the second QR's payload, byte for
+//    byte -- left by the device that holds the account key.
+//  - `reply` (`/v1/pair/{sid}/reply`) is the joining device's ephemeral point and device public
+//    key, left by the joining device, for the direction in which the ACCOUNT device is the one
+//    with no camera.
+//
+// Each slot is independently first-write-wins and single-use, shares the TTL and the deposit rate
+// limit, and carries its own size cap. The global cap counts *pairings* -- `COUNT(DISTINCT sid)` --
+// so the bound still means what its name and its error message say now that a pairing can occupy
+// two rows.
+//
+// The two deposits share one per-address bucket on purpose. They come from two different devices
+// and so ordinarily two different addresses; giving the reply its own bucket would only hand a
+// flooder a second allowance.
 //
 // ## What the server learns
 //
@@ -712,8 +747,9 @@ private fun history(deps: ServerDeps, session: SessionRow, blindedId: String?, l
 // `sid` is 128 bits of `SecureRandom`, so "guess" is not a plan and "enumerate" is not either --
 // but the question deserves an answer that does not rest on that.
 //
-//  - **Collecting someone else's blob**: ciphertext they cannot open, and the pairing they
-//    interrupted dies at a `404`. Denial of service, not disclosure.
+//  - **Collecting someone else's blob**: from `bundle`, ciphertext they cannot open, and the
+//    pairing they interrupted dies at a `404`. From `reply`, two public P-256 points. Denial of
+//    service, not disclosure.
 //  - **Depositing under a `sid` already in use**: refused. `SyncStore.putPairing` is
 //    first-write-wins, so a real bundle cannot be displaced by a decoy that would fail the waiting
 //    device's GCM tag -- which the client reports, correctly and alarmingly, as "this was meant for
@@ -723,6 +759,16 @@ private fun history(deps: ServerDeps, session: SessionRow, blindedId: String?, l
 //    `ServerConfig.pairingDepositPerMinute` and `maxLivePairings`.
 //
 // The one thing they do not get, under any of those, is a note or a key.
+//
+// ## What this server does NOT defend against, in the invite direction
+//
+// Everything above is about a party who does not control this route. A party who *does* -- the
+// operator, or anyone on the path of a deployment without TLS in front -- can replace a `reply`
+// before the account device collects it, and the account device has no way to tell. That is a real
+// man-in-the-middle position and this server is not what closes it: the two devices display six
+// digits derived from what each of them agreed, and a person comparing those digits is the defence.
+// See `AccountInviteSession` on the client. The scanned direction has no such exposure, because
+// there the key that would have to be replaced never crosses this route at all.
 
 /**
  * `POST /v1/pair/{sid}` -- leave one sealed bundle.
@@ -733,7 +779,12 @@ private fun history(deps: ServerDeps, session: SessionRow, blindedId: String?, l
  * looked at, so a malformed request cannot spend a permit and a well-formed flood cannot avoid
  * spending one.
  */
-private fun RoutingContext.depositPairing(deps: ServerDeps, sid: String?, body: ByteArray): Reply {
+private fun RoutingContext.depositPairing(
+    deps: ServerDeps,
+    sid: String?,
+    slot: String,
+    body: ByteArray,
+): Reply {
     if (sid == null || !validSid(sid)) {
         return error(BAD_REQUEST, "invalid_sid", "sid is not a 16-byte base64url value.")
     }
@@ -768,7 +819,13 @@ private fun RoutingContext.depositPairing(deps: ServerDeps, sid: String?, body: 
     // this and the insert lets the cap be exceeded by the number of concurrent deposits, which is a
     // handful of rows on a server whose premise is one person's devices -- and the cap exists to
     // bound a disk, not to be exact.
-    if (deps.store.livePairingCount() >= deps.config.maxLivePairings) {
+    // `hasLivePairing` first, so a pairing that is already under way can fill its second slot even
+    // on a server at capacity. Refusing the reply's partner would let handshakes start and never
+    // finish, which is a worse failure than turning a NEW pairing away -- and it does not loosen
+    // the bound, because a `sid` has only two slots to fill.
+    if (!deps.store.hasLivePairing(sid) &&
+        deps.store.livePairingCount() >= deps.config.maxLivePairings
+    ) {
         return error(
             HttpStatusCode.ServiceUnavailable,
             "pairing_capacity",
@@ -777,7 +834,7 @@ private fun RoutingContext.depositPairing(deps: ServerDeps, sid: String?, body: 
     }
 
     val expiresAt = deps.clock.nowMillis() + deps.config.pairingTtlMillis
-    if (!deps.store.putPairing(sid, request.sealed, expiresAt)) {
+    if (!deps.store.putPairing(sid, slot, request.sealed, expiresAt)) {
         return error(
             HttpStatusCode.Conflict,
             "pairing_exists",
@@ -795,11 +852,11 @@ private fun RoutingContext.depositPairing(deps: ServerDeps, sid: String?, body: 
  * ever" are genuinely the same instruction -- keep waiting until your own clock says stop -- and a
  * client that could tell them apart would still do the same thing.
  */
-private fun collectPairing(deps: ServerDeps, sid: String?): Reply {
+private fun collectPairing(deps: ServerDeps, sid: String?, slot: String): Reply {
     if (sid == null || !validSid(sid)) {
         return error(BAD_REQUEST, "invalid_sid", "sid is not a 16-byte base64url value.")
     }
-    val sealed = deps.store.takePairing(sid)
+    val sealed = deps.store.takePairing(sid, slot)
         ?: return error(HttpStatusCode.NotFound, "no_pairing", "Nothing is waiting for this pairing.")
     return Reply(HttpStatusCode.OK, JSON.encodeToString(PairingCollectResponse(sealed)))
 }
@@ -818,3 +875,13 @@ private fun validSid(value: String): Boolean = B64.decodeExactly(value, SID_SIZE
 
 /** Length of a pairing session id. Matches the client's `PairingProtocol.SID_SIZE_BYTES`. */
 private const val SID_SIZE_BYTES = 16
+
+/**
+ * The two slot names, as they are stored.
+ *
+ * Constants rather than the URL suffix, so the wire path and the storage key can be read in one
+ * place and neither is derived from the other by string surgery. They are opaque labels to this
+ * server: it does not know or care that one carries a public point and the other a sealed bundle.
+ */
+private const val SLOT_BUNDLE = "bundle"
+private const val SLOT_REPLY = "reply"

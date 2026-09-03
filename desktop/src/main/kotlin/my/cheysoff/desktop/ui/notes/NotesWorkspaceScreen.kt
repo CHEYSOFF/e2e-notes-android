@@ -84,6 +84,8 @@ fun NotesWorkspaceScreen(
     onToggleRemember: () -> Unit,
     syncLabel: String?,
     onSync: (() -> Unit)?,
+    /** Null when this computer has no server and therefore cannot authorise another device. */
+    onAddDevice: (() -> Unit)? = null,
     textScale: TextScale,
     onCycleTextScale: () -> Unit,
 ) {
@@ -97,6 +99,7 @@ fun NotesWorkspaceScreen(
                 onToggleRemember = onToggleRemember,
                 syncLabel = syncLabel,
                 onSync = onSync,
+                onAddDevice = onAddDevice,
                 textScale = textScale,
                 onCycleTextScale = onCycleTextScale,
             )
@@ -209,6 +212,7 @@ private fun TitleBar(
     onToggleRemember: () -> Unit,
     syncLabel: String?,
     onSync: (() -> Unit)?,
+    onAddDevice: (() -> Unit)?,
     textScale: TextScale,
     onCycleTextScale: () -> Unit,
 ) {
@@ -239,6 +243,18 @@ private fun TitleBar(
         // something a button can explain.
         if (syncLabel != null && onSync != null) {
             WordedPill(label = syncLabel, onClick = onSync, clickLabel = "Sync now")
+            Spacer(Modifier.width(8.dp))
+        }
+
+        // Shown only where it can work, on the same argument as the sync control: authorising
+        // another device is a signature the server checks against this computer's own device row,
+        // so a computer with no row cannot do it and a button offering to would lead nowhere.
+        if (onAddDevice != null) {
+            WordedPill(
+                label = "Add a phone",
+                onClick = onAddDevice,
+                clickLabel = "Add a phone to this account",
+            )
             Spacer(Modifier.width(8.dp))
         }
 
