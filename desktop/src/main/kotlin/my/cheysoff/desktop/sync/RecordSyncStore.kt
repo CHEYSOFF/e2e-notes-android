@@ -89,12 +89,20 @@ class RecordSyncStore(
     // expression body would infer `Unit?` and fail to override `SyncStore.applyMerged`.
     override suspend fun applyMerged(write: MergedWrite) {
         store.inTransaction {
-            put(write.record, dirty = write.dirty, seq = write.seq, baseline = write.contentBaseline)
+            put(
+                write.record,
+                dirty = write.dirty,
+                seq = write.seq,
+                baseline = write.contentBaseline,
+                remoteCreatedAt = write.remoteCreatedAt,
+            )
             write.conflictCopy?.let { copy ->
                 // `dirty = true` and no `seq`: the copy has never been on the server, which the
                 // server reads as "this record must not exist". The engine only sets it when no
                 // record with that uuid is present, so there is nothing here to preserve.
-                put(copy, dirty = true, seq = null, baseline = null)
+                // No `remoteCreatedAt`: the incoming record's creation time belongs to the record
+                // it arrived as, not to a copy this device mints from a losing body.
+                put(copy, dirty = true, seq = null, baseline = null, remoteCreatedAt = null)
             }
         }
     }
@@ -169,14 +177,23 @@ class RecordSyncStore(
         return payload.field(PayloadFields.CREATED_AT)?.toLongOrNull()
     }
 
-    private fun put(record: SyncRecord, dirty: Boolean, seq: Long?, baseline: Hlc?) {
+    private fun put(
+        record: SyncRecord,
+        dirty: Boolean,
+        seq: Long?,
+        baseline: Hlc?,
+        remoteCreatedAt: Long?,
+    ) {
         val blindedId = codec.blindedIdOf(record.type.wireKey, record.uuid)
-        // Preserved from the row already on disk when there is one, because `createdAt` is what the
-        // notes list sorts on and a merge has no business moving it. `updatedAt` when there is not:
-        // the record is new here, and that is the same fallback `ConflictCopies` and the phone's
-        // `RecordRows.createdAtFor` both choose, so the two devices agree rather than each
-        // inventing something.
+        // The row already on disk first, because `createdAt` is what the notes list sorts on and a
+        // merge has no business moving it. Then the value the incoming payload carried, because a
+        // record's creation time is a property of the record and not something two devices contest
+        // -- it was always sent and merely dropped one step before it was needed (issue #90).
+        // `updatedAt` only as a last resort, which is where a locally-minted conflict copy lands;
+        // that is the same fallback `ConflictCopies` and the phone's `RecordRows.createdAtFor`
+        // choose, so the two platforms agree rather than each inventing something.
         val createdAt = existingCreatedAt(blindedId)
+            ?: remoteCreatedAt?.takeIf { it != 0L }
             ?: record.valueOf(my.cheysoff.core_domain.sync.FieldClocks.UPDATED_AT)
                 .parts[0]?.toLongOrNull()
             ?: 0L

@@ -265,7 +265,7 @@ class RecordingClock : ClockObserver {
 fun openedPage(vararg records: SyncRecord, firstSeq: Long = 1L, hasMore: Boolean = false): ChangePage =
     ChangePage(
         records = records.mapIndexed { index, record ->
-            IncomingRecord.Opened(seq = firstSeq + index, record = record)
+            IncomingRecord.Opened(seq = firstSeq + index, record = record, createdAt = null)
         },
         hasMore = hasMore,
     )
