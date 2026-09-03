@@ -204,7 +204,8 @@ class SyncEngine(
                     }
 
                     is IncomingRecord.Opened -> {
-                        val applied = applyIncoming(incoming.record, incoming.seq)
+                        val applied =
+                            applyIncoming(incoming.record, incoming.seq, incoming.createdAt)
                         stats += applied.stats
                         applied.stop?.let { return finishPull(committable, startCursor, stats, it) }
                         if (!frozen) committable = incoming.seq
@@ -312,7 +313,11 @@ class SyncEngine(
                         // The row stays dirty and the next pull fetches the blocking version the
                         // ordinary way, which is slower and always correct.
                         val current = ack.current ?: continue
-                        val applied = applyIncoming(current, ack.currentSeq)
+                        // No `remoteCreatedAt` on this route, and it provably cannot matter: a
+                        // push conflict is the server refusing a row THIS device sent, so the row
+                        // is in this store already and its `createdAt` is set. The value is only
+                        // ever consulted for a record being seen for the first time.
+                        val applied = applyIncoming(current, ack.currentSeq, remoteCreatedAt = null)
                         stats += applied.stats
                         applied.stop?.let { return Phase(stats, it) }
                     }
@@ -336,7 +341,11 @@ class SyncEngine(
      *   decided**, including `NoChange`, because the row's next push has to be built on the version
      *   the server actually holds.
      */
-    private suspend fun applyIncoming(remote: SyncRecord, seq: Long): Phase {
+    private suspend fun applyIncoming(
+        remote: SyncRecord,
+        seq: Long,
+        remoteCreatedAt: Long?,
+    ): Phase {
         val stored = store.load(remote.type, remote.uuid)
         val result = Merge.merge(stored?.asLocalRecord(), remote)
 
@@ -369,7 +378,10 @@ class SyncEngine(
             }
 
             is MergeResult.Applied -> {
-                write(result.record, result.dirty, seq, stored?.contentBaseline, remote, copy = null)
+                write(
+                    result.record, result.dirty, seq, stored?.contentBaseline, remote,
+                    copy = null, remoteCreatedAt = remoteCreatedAt,
+                )
                 Phase(PassStats(applied = 1), null)
             }
 
@@ -382,6 +394,7 @@ class SyncEngine(
                 write(
                     result.record, result.dirty, seq, stored?.contentBaseline, remote,
                     copy = if (existing == null) result.copy else null,
+                    remoteCreatedAt = remoteCreatedAt,
                 )
                 Phase(PassStats(applied = 1, conflictCopies = if (existing == null) 1 else 0), null)
             }
@@ -395,6 +408,7 @@ class SyncEngine(
         previousBaseline: Hlc?,
         agreed: SyncRecord,
         copy: SyncRecord?,
+        remoteCreatedAt: Long?,
     ) {
         store.applyMerged(
             MergedWrite(
@@ -407,6 +421,10 @@ class SyncEngine(
                 // how an unpushed body stops earning its conflict copy.
                 contentBaseline = Baselines.advance(previousBaseline, agreed),
                 conflictCopy = copy,
+                // Used only if this device has no row for the record yet. The conflict copy is a
+                // NEW record minted here, so it is not covered by this and keeps taking its own
+                // creation time from the body it preserves.
+                remoteCreatedAt = remoteCreatedAt,
             )
         )
     }

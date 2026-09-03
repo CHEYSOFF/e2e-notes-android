@@ -42,7 +42,12 @@ class ReplicaTransport(private val server: FakeServer) : SyncTransport {
     override suspend fun changesSince(since: Long, limit: Int): ChangePage {
         val page = server.changes(since, limit)
         return ChangePage(
-            records = page.map { IncomingRecord.Opened(seq = it.seq, record = it.record) },
+            // No payloads in this harness, so no createdAt to carry. The store's fallback then
+            // applies, exactly as it did before the value was carried at all -- these sweeps are
+            // about merge convergence, and `TwoDeviceSyncTest` covers createdAt over a real codec.
+            records = page.map {
+                IncomingRecord.Opened(seq = it.seq, record = it.record, createdAt = null)
+            },
             // The server has no `hasMore` of its own; a full page is the signal, which is what a
             // real client infers too.
             hasMore = page.size == limit,

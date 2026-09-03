@@ -72,7 +72,7 @@ class SyncEngineTest {
     @Test
     fun `a pass interrupted by process death resumes to the same state`() = runBlocking {
         val stream = (1..6).map { seq ->
-            IncomingRecord.Opened(seq.toLong(), note(uuid = "n$seq", content = "body-$seq"))
+            IncomingRecord.Opened(seq.toLong(), note(uuid = "n$seq", content = "body-$seq"), null)
         }
 
         val uninterrupted = RecordingStore()
@@ -105,9 +105,9 @@ class SyncEngineTest {
         val store = RecordingStore()
         val page = ChangePage(
             records = listOf(
-                IncomingRecord.Opened(1L, note(uuid = "n1")),
+                IncomingRecord.Opened(1L, note(uuid = "n1"), null),
                 IncomingRecord.Faulted(2L, RecordFault.UNREADABLE),
-                IncomingRecord.Opened(3L, note(uuid = "n3")),
+                IncomingRecord.Opened(3L, note(uuid = "n3"), null),
             ),
             hasMore = false,
         )
@@ -150,7 +150,7 @@ class SyncEngineTest {
         val page = ChangePage(
             records = listOf(
                 IncomingRecord.Faulted(1L, RecordFault.MISLABELLED),
-                IncomingRecord.Opened(2L, note(uuid = "n2")),
+                IncomingRecord.Opened(2L, note(uuid = "n2"), null),
             ),
             hasMore = false,
         )
@@ -262,7 +262,7 @@ class SyncEngineTest {
     @Test
     fun `a pull pages until the server says there is no more`() = runBlocking {
         val store = RecordingStore()
-        val stream = (1..5).map { IncomingRecord.Opened(it.toLong(), note(uuid = "n$it")) }
+        val stream = (1..5).map { IncomingRecord.Opened(it.toLong(), note(uuid = "n$it"), null) }
         val transport = PagingTransport(stream)
 
         engine(store, transport, pageLimit = 2).runPass()

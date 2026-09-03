@@ -200,4 +200,18 @@ class MergedWrite(
      * a blind overwrite would clobber one the user had since edited.
      */
     val conflictCopy: SyncRecord?,
+    /**
+     * The `createdAt` the incoming payload carried, for a store that has no row for this record
+     * yet. Null when the payload omitted one, or when the write did not come from a remote record.
+     *
+     * **Only for a first receipt.** A row that already has a `createdAt` keeps it, always: it is
+     * the one column in the schema with no history to fall back on, and the merge does not model it
+     * because no write path moves it. This exists so that a device seeing a record for the first
+     * time can use the creation time the record actually has, instead of inventing one from
+     * `updatedAt` and disagreeing with the device that made it forever (issue #90).
+     *
+     * It is not a clocked field and must not become one on this route: nothing here contests the
+     * value, it is simply carried.
+     */
+    val remoteCreatedAt: Long? = null,
 )
