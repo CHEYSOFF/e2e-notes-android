@@ -2,6 +2,7 @@ package my.cheysoff.desktop.store
 
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Rule
@@ -48,5 +49,21 @@ class RecordStoreDataVersionTest {
         store.close()
         store = RecordStore.open(folder.root.toPath().resolve("vault").resolve("records.db"))
         assertEquals(2, store.dataVersion(account))
+    }
+
+    /**
+     * `saveDataVersion` is an UPDATE, never an upsert -- see its doc for why a missing row must
+     * stay missing. This checks for the row itself, not just what `dataVersion` reads back: a row
+     * that genuinely existed with `data_version = NULL` would read back identically through
+     * `dataVersion` alone, so only [RecordStore.hasSyncStateRow] can tell the two apart.
+     */
+    @Test
+    fun `saving a data version against a missing row writes nothing and creates no row`() {
+        store.saveDataVersion(account, 2)
+
+        assertFalse(
+            "an UPDATE against a missing row must not fabricate one",
+            store.hasSyncStateRow(account),
+        )
     }
 }

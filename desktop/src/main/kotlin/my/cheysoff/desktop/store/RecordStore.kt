@@ -475,5 +475,21 @@ class RecordStore private constructor(private val connection: Connection) : Auto
             }
     }
 
+    /**
+     * Whether a `sync_state` row exists for [accountId] at all.
+     *
+     * Exposed only for tests. Production code never needs this: [cursor], [halt] and
+     * [dataVersion] already give the inert reading for "no row" (`0`, `null` and `null`
+     * respectively), which is all any caller has ever needed to know. A test asserting that an
+     * UPDATE-only write did not fabricate a row needs more than that, though -- a row that
+     * genuinely exists with `data_version = NULL` reads back identically to no row at all through
+     * [dataVersion] alone, so only this can tell the two apart.
+     */
+    internal fun hasSyncStateRow(accountId: String): Boolean =
+        connection.prepareStatement("SELECT 1 FROM sync_state WHERE account_id = ?").use { statement ->
+            statement.setString(1, accountId)
+            statement.executeQuery().use { it.next() }
+        }
+
     override fun close() = connection.close()
 }
