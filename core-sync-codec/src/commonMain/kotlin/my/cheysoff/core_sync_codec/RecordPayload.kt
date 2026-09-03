@@ -67,6 +67,18 @@ sealed interface PayloadResult {
      */
     data class UnsupportedVersion(val payloadVersion: Int, val serializerVersion: Int) : PayloadResult
 
+    /**
+     * The payload named a `recType` this build does not implement.
+     *
+     * Deliberately **not** [Malformed]. A malformed record is one this build should have been able
+     * to read and could not, which is evidence of corruption or a wrong key and is why the engine
+     * refuses to page past it. This is the opposite: the record decrypted, authenticated and parsed
+     * far enough to say what it is, and this build simply has no representation for it. Nothing is
+     * wrong, and treating it as damage freezes the cursor of a device whose only fault is being a
+     * version behind.
+     */
+    data class UnknownType(val wireKey: String) : PayloadResult
+
     /** Not a payload this build can parse at all. [reason] is for a bug report, not for the user. */
     data class Malformed(val reason: String) : PayloadResult
 }
@@ -187,8 +199,9 @@ object RecordPayloadCodec {
             return PayloadResult.UnsupportedVersion(version, serializer)
         }
 
-        val recType = RecordType.fromWireKey(root.getValue(KEY_REC_TYPE).jsonPrimitive.content)
-            ?: return PayloadResult.Malformed("unknown recType")
+        val recTypeKey = root.getValue(KEY_REC_TYPE).jsonPrimitive.content
+        val recType = RecordType.fromWireKey(recTypeKey)
+            ?: return PayloadResult.UnknownType(recTypeKey)
         val uuid = root.getValue(KEY_UUID).jsonPrimitive.content
         if (uuid.isEmpty()) return PayloadResult.Malformed("empty uuid")
         val rowClock = Hlc.parse(root.getValue(KEY_HLC).jsonPrimitive.content)

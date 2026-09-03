@@ -79,6 +79,9 @@ class RecordCodec(private val keys: AccountKeys) {
                 is PayloadResult.Malformed -> OpenResult.Malformed(result.reason)
                 is PayloadResult.UnsupportedVersion ->
                     OpenResult.UnsupportedVersion(result.payloadVersion, result.serializerVersion)
+                is PayloadResult.UnknownType ->
+                    // Task 2 replaces this with appropriate transport-layer handling
+                    OpenResult.Malformed("unknown recType: ${result.wireKey}")
 
                 is PayloadResult.Ok ->
                     if (blindedIdOf(result.payload) != blindedId) {
