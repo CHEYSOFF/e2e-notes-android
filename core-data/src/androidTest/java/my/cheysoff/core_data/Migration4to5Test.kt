@@ -102,21 +102,12 @@ class Migration4to5Test {
 
     private fun openMigrated(): NoteDatabase =
         Room.databaseBuilder(ctx, NoteDatabase::class.java, dbName)
-            .addMigrations(
-                NoteDatabase.MIGRATION_1_2,
-                NoteDatabase.MIGRATION_2_3,
-                NoteDatabase.MIGRATION_3_4,
-                NoteDatabase.MIGRATION_4_5,
-                // Every migration from here on must be appended too. Room opens the database at
-                // the CURRENT @Database version, so a v4 file has to walk the whole chain: leaving
-                // one out throws "A migration from 4 to N was required but not found" and every
-                // test in this class fails. That is exactly what happened when v6 landed — the
-                // class still compiled, so nothing surfaced it until the suite was next executed.
-                NoteDatabase.MIGRATION_5_6,
-                NoteDatabase.MIGRATION_6_7,
-                NoteDatabase.MIGRATION_7_8,
-                NoteDatabase.MIGRATION_8_9,
-            )
+            // The whole chain, spread rather than listed: a hand-written list is a second copy of
+            // `ALL_MIGRATIONS` that goes stale silently, which is how this class came to be red for
+            // the life of schema v6 — Room opens the database at the CURRENT @Database version, so
+            // a v4 file has to walk the whole chain, and leaving one out throws "A migration from 4
+            // to N was required but not found" for every test here at once.
+            .addMigrations(*NoteDatabase.ALL_MIGRATIONS)
             .build()
 
     @Test
