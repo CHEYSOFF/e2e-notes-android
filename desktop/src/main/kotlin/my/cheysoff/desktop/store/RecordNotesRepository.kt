@@ -33,6 +33,17 @@ data class LoadDiagnostics(
     val unsupportedVersion: Int,
     /** Rows that decrypted and authenticated but did not parse. */
     val malformed: Int,
+    /**
+     * Rows that decrypted, authenticated and parsed cleanly, but name a record type this build
+     * does not implement.
+     *
+     * Deliberately **not** part of [total]: every other field here means the row is damaged and
+     * some other build could read it if only it existed intact, which is a fact worth alarming a
+     * user over. This one means the opposite -- a newer build wrote a record this one has not
+     * been taught yet, which is not evidence of anything wrong. Folding it into `total` would tell
+     * someone their data is corrupt when it is merely newer than their app.
+     */
+    val newerType: Int = 0,
 ) {
     val total: Int get() = unreadable + mislabelled + unsupportedVersion + malformed
 }
@@ -151,6 +162,7 @@ class RecordNotesRepository private constructor(
             var mislabelled = 0
             var unsupported = 0
             var malformed = 0
+            var newerType = 0
 
             val generator = HlcGenerator { node }
 
@@ -160,6 +172,11 @@ class RecordNotesRepository private constructor(
                     is OpenResult.Mislabelled -> mislabelled++
                     is OpenResult.UnsupportedVersion -> unsupported++
                     is OpenResult.Malformed -> malformed++
+                    // A record of a type this build does not implement is not damage -- see
+                    // LoadDiagnostics.newerType. Left on disk untouched, exactly like the other
+                    // three cases, but counted separately so the "could not be read" message never
+                    // reports someone else's newer data as corruption.
+                    is OpenResult.UnknownType -> newerType++
                     is OpenResult.Ok -> {
                         val payload = opened.payload
                         // Every clock this device has ever seen has to be fed to the generator
@@ -187,7 +204,7 @@ class RecordNotesRepository private constructor(
                 node = node,
                 clock = clock,
                 initial = Snapshot(notes, folders),
-                diagnostics = LoadDiagnostics(unreadable, mislabelled, unsupported, malformed),
+                diagnostics = LoadDiagnostics(unreadable, mislabelled, unsupported, malformed, newerType),
             )
         }
     }

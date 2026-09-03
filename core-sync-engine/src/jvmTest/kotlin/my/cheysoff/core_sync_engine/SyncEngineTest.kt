@@ -141,6 +141,65 @@ class SyncEngineTest {
     }
 
     /**
+     * The behaviour this whole change exists for: a device a version behind keeps syncing.
+     *
+     * Before it, the first record of an unknown type froze the cursor — so ordinary notes *after*
+     * it stopped arriving too — and the sixth halted the engine outright.
+     */
+    @Test
+    fun `records of an unknown type are skipped and the cursor moves past them`() = runBlocking {
+        val store = RecordingStore()
+        val transport = ScriptedTransport(
+            pages = listOf(
+                ChangePage(
+                    records = listOf(
+                        IncomingRecord.Faulted(1L, RecordFault.UNKNOWN_TYPE),
+                        IncomingRecord.Opened(2L, note(uuid = "n2"), null),
+                    ),
+                    hasMore = false,
+                )
+            )
+        )
+
+        val outcome = engine(store, transport).runPass()
+
+        assertTrue("a skipped type must not stop the pass: $outcome", outcome is SyncOutcome.Completed)
+        assertEquals("the note after it must still be applied", 1, (outcome as SyncOutcome.Completed).stats.applied)
+        assertEquals("and it is counted, not silent", 1, outcome.stats.ignored)
+        assertEquals("the cursor moves past both", 2L, store.cursor())
+    }
+
+    @Test
+    fun `a stream of unknown types never halts`() = runBlocking {
+        val store = RecordingStore()
+        val many = (1..SyncEngine.UNREADABLE_RECORD_LIMIT * 3).map {
+            IncomingRecord.Faulted(it.toLong(), RecordFault.UNKNOWN_TYPE)
+        }
+        val outcome = engine(store, ScriptedTransport(pages = listOf(ChangePage(many, hasMore = false))))
+            .runPass()
+
+        assertTrue("unknown types are not evidence of anything wrong: $outcome", outcome is SyncOutcome.Completed)
+        assertEquals(many.size.toLong(), store.cursor())
+    }
+
+    /**
+     * The other direction, and it matters as much: this change must not have made *damaged*
+     * records skippable. Only testing the new branch would let a later edit quietly widen it.
+     */
+    @Test
+    fun `an unreadable record still freezes the cursor and still halts in quantity`() = runBlocking {
+        val store = RecordingStore()
+        val many = (1..SyncEngine.UNREADABLE_RECORD_LIMIT + 2).map {
+            IncomingRecord.Faulted(it.toLong(), RecordFault.UNREADABLE)
+        }
+        val outcome = engine(store, ScriptedTransport(pages = listOf(ChangePage(many, hasMore = false))))
+            .runPass()
+
+        assertEquals(HaltReason.RECORDS_UNREADABLE, (outcome as SyncOutcome.Halted).reason)
+        assertEquals("the cursor must not have moved past a damaged record", 0L, store.cursor())
+    }
+
+    /**
      * §8's F3. A server cannot produce a mislabelled payload without the ARK, so this is a client
      * bug and it has to be loud rather than worked around.
      */

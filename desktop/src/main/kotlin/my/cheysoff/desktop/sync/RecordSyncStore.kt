@@ -10,6 +10,7 @@ import my.cheysoff.core_sync_codec.SyncRecords
 import my.cheysoff.core_sync_engine.HaltReason
 import my.cheysoff.core_sync_engine.MergedWrite
 import my.cheysoff.core_sync_engine.StoredRecord
+import my.cheysoff.core_sync_engine.SyncEngine
 import my.cheysoff.core_sync_engine.SyncStore
 import my.cheysoff.desktop.store.RecordStore
 
@@ -160,6 +161,25 @@ class RecordSyncStore(
     override suspend fun recordHalt(reason: HaltReason) = store.recordHalt(accountId, reason.name)
 
     override suspend fun clearHalt() = store.clearHalt(accountId)
+
+    /**
+     * `store.dataVersion(accountId)` returns `null` for two different states — genuinely no row
+     * (never pulled), and a row that exists with `data_version` still `NULL` (pulled at least
+     * once, generation never recorded) — and only the first may fall back to
+     * [SyncEngine.DATA_VERSION]. `RoomSyncStore.dataVersion()` faces the identical ambiguity
+     * (there spelled `0` vs. absent-row, since Android's column carries a `NOT NULL DEFAULT 0`)
+     * and resolves it the same way: an absent row reads as current, because a device that has
+     * never pulled starts its next pull at 0 and fetches everything anyway; anything else reads
+     * as `0`, which [SyncEngine] treats as "behind" and corrects on the next completed pull.
+     *
+     * [RecordStore.hasSyncStateRow] is what makes the distinction possible at all — see its own
+     * doc for why `dataVersion` alone cannot.
+     */
+    override suspend fun dataVersion(): Int =
+        store.dataVersion(accountId)
+            ?: if (store.hasSyncStateRow(accountId)) 0 else SyncEngine.DATA_VERSION
+
+    override suspend fun saveDataVersion(version: Int) = store.saveDataVersion(accountId, version)
 
     /**
      * The `createdAt` of a record this device already holds, or null.

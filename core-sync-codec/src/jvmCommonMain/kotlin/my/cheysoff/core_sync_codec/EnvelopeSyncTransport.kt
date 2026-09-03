@@ -91,6 +91,8 @@ class EnvelopeSyncTransport(
                     OpenResult.Mislabelled -> IncomingRecord.Faulted(remote.seq, RecordFault.MISLABELLED)
                     is OpenResult.UnsupportedVersion ->
                         IncomingRecord.Faulted(remote.seq, RecordFault.UNSUPPORTED_PAYLOAD_VERSION)
+                    is OpenResult.UnknownType ->
+                        IncomingRecord.Faulted(remote.seq, RecordFault.UNKNOWN_TYPE)
                 }
             },
             hasMore = page.hasMore,

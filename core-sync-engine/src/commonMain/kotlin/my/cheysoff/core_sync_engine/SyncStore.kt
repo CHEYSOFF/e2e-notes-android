@@ -142,6 +142,32 @@ interface SyncStore {
      * error recovery — only when a person asked.
      */
     suspend fun clearHalt()
+
+    /**
+     * The format generation this device last completed a pull under.
+     *
+     * Two "unrecorded" states share this account and must be told apart:
+     *
+     *  - **No row at all** — this device has never pulled on this account — reports
+     *    [SyncEngine.DATA_VERSION], i.e. current. The default matters: this device's next pull
+     *    starts at 0 and fetches everything anyway, so reporting `0` here would send it through a
+     *    re-baseline that could not possibly find anything it had missed.
+     *  - **A row exists but the generation was never written** — this device has pulled at least
+     *    once, under a build that never called [saveDataVersion] — reports `0`, genuinely behind.
+     *    `0` can never be a value [saveDataVersion] itself wrote, since [SyncEngine.DATA_VERSION]
+     *    starts at 1 and only increases, so it is a safe, unambiguous spelling of "behind" that
+     *    [SyncEngine] corrects on its next completed pull.
+     *
+     * An implementation whose storage cannot tell these two states apart from the generation
+     * column alone (a `NULL` column reads the same whether or not the row exists) needs a second
+     * signal to distinguish them — see `RecordStore.hasSyncStateRow` for how the desktop store
+     * does it, and the `NOT NULL DEFAULT 0` on Android's `dataVersion` column for how Room avoids
+     * needing one at all.
+     */
+    suspend fun dataVersion(): Int
+
+    /** Records that a pull completed under [version]. Written only after a completed pass. */
+    suspend fun saveDataVersion(version: Int)
 }
 
 /**

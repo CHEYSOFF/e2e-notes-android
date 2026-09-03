@@ -6,6 +6,7 @@ import my.cheysoff.core_sync_codec.RecordPayload
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import my.cheysoff.core_crypto.sync.AccountRootKey
+import my.cheysoff.core_crypto.sync.RecordEnvelope
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.model.NotesSortOrder
@@ -107,6 +108,29 @@ class RecordNotesRepositoryTest {
 
         val reloaded = reload()
         assertEquals(1, reloaded.diagnostics.unreadable)
+        assertEquals(1, reloaded.getNotes(NotesSortOrder.RECENTLY_EDITED).first().size)
+        assertEquals(2, store.readAll().size)
+    }
+
+    /**
+     * A record of a type this build does not implement is not damage: some other, newer build
+     * wrote it on purpose and can still read it. It must not be folded into [LoadDiagnostics.total]
+     * or `malformed`, which both assert the record is broken -- it is merely newer than this build.
+     */
+    @Test
+    fun `a row of a type this build does not implement is reported separately from damage`() = runTest {
+        repository.saveNote(note("a"))
+        val blindedId = codec.blindedIdOf("sketch", "u1")
+        val plaintext = """
+            {"v":1,"serializer":1,"recType":"sketch","uuid":"u1",
+             "hlc":"1-0-node","fields":{},"clocks":{},"del":false}
+        """.trimIndent().encodeToByteArray()
+        store.put(blindedId, RecordEnvelope.seal(keys.kContent, blindedId, plaintext))
+
+        val reloaded = reload()
+        assertEquals("counted on its own", 1, reloaded.diagnostics.newerType)
+        assertEquals("not counted as damage", 0, reloaded.diagnostics.malformed)
+        assertEquals("not folded into the 'could not be read' total", 0, reloaded.diagnostics.total)
         assertEquals(1, reloaded.getNotes(NotesSortOrder.RECENTLY_EDITED).first().size)
         assertEquals(2, store.readAll().size)
     }
