@@ -134,14 +134,15 @@ capabilities over the wire. Step 2 must not merge until step 1 is installed on b
 ```
 RecordType.SKETCH("sketch", FieldClocks.SKETCH_FIELDS)
 
-SKETCH_FIELDS = { noteId, strokes, order, updatedAt, deleted }
+SKETCH_FIELDS = { noteId, anchor, order, strokes, updatedAt, deleted }
 ```
 
 | Field | Parts | Notes |
 |---|---|---|
 | `noteId` | 1 | The owning note's uuid. Clocked, so moving a sketch merges normally. |
 | `strokes` | 1 | The drawing, encoded as below. |
-| `order` | 1 | Integer position among the sketches of one note. Ties are broken by uuid, so two devices that independently pick the same position still agree on the resulting sequence rather than showing two different orders. |
+| `anchor` | 1 | Where in the note's text the drawing sits — see below. |
+| `order` | 1 | Position among sketches sharing one anchor. Ties are broken by uuid, so two devices that independently pick the same value still agree on the sequence. Included now rather than later because adding a field to a record's shape is a payload change and costs a whole format generation; one integer today is much cheaper than that. |
 | `updatedAt` | 1 | As for notes. |
 | `deleted` | 2 | `isDeleted`, `deletedAt` — the existing two-part shape. |
 
@@ -154,6 +155,36 @@ record*. `checklist` is a field on the note today and could later become `Record
 the same shape, giving several checklists per note. This spec does **not** build a generic block
 system — there is one block type and the abstraction would have exactly one implementation — but the
 naming and the DAO shape should not make that later move awkward.
+
+### Placement: the anchor lives on the sketch, never in the note's text
+
+A drawing sits **between blocks of the note's text**, and the position is stored on the sketch
+record as an index over the note's top-level blocks: `0` means before the first block, `k` means
+after the `k`th. It is clamped to the note's current block count when rendered.
+
+**Why not a marker in the HTML, which is the obvious way to do inline placement.** The note's
+`content` would then carry something like `<img src="sketch://uuid">`. A build without sketch
+support would load that HTML, fail to resolve the image, and — on the next text edit — re-serialize
+through `toHtml()` without emitting it. The note would push back with the reference gone, the sketch
+orphaned, and nothing anywhere reporting a problem. That is precisely the hazard
+`SERIALIZER_VERSION`'s KDoc already names: *"a device that cannot render version N must refuse the
+record rather than re-save it at version 1."* Honouring that rule would mean bumping the serializer
+version for any note containing a drawing, which makes the **whole note**, text included, invisible
+on a device that is behind.
+
+Keeping the anchor on the sketch avoids both. The note's payload shape is unchanged, so a build
+without sketch support sees the entire note, edits its text freely, and pushes it back safely — it
+cannot damage a reference it never holds. What it can do is shift the blocks the anchor counts, so a
+drawing may render a paragraph away from where it was placed. **Misplaced, never lost**, and only
+while some device is behind; once both understand sketches, editing maintains the anchor and drift
+stops.
+
+Counting blocks must be one shared, deterministic function in `:core-domain` — both platforms must
+agree, or the same note shows the drawing in two places. It must never throw: content it cannot
+parse yields a count that still clamps to something sensible rather than losing the sketch. Its
+exact definition (which tags count as blocks, how `PLAIN` content is divided) is settled in
+implementation and pinned by golden tests, because a vague definition here is the one part of this
+design that would rot silently.
 
 ### Stroke encoding
 
@@ -212,8 +243,8 @@ revisit only if the user's actual use turns out to be handwriting rather than sc
 
 ### Rendering elsewhere
 
-- **In the note editor**, a sketch is a block: the drawing rendered to fit the note width, tapped to
-  reopen full-screen.
+- **In the note editor**, a sketch is a block between paragraphs at its anchor, rendered to fit the
+  note width and tapped to reopen full-screen.
 - **On the desktop**, sketches render and can be deleted and reordered, but **not drawn**. Drawing
   with a mouse is a poor experience and building it is not free; phone-first is the honest scope.
   The renderer is shared code, so the desktop gets display for very little.
@@ -264,6 +295,8 @@ already record-shaped.
 |---|---|
 | Stroke data that will not decode | The block renders as a placeholder naming the problem; the record is left untouched. Never silently dropped, never rewritten — rewriting a record this build misread is how one bad parse propagates to every device. |
 | A sketch whose `noteId` names a note this device does not have | Kept, not shown. The note may arrive later in the same pass or a later one; discarding it would delete a drawing because two records arrived out of order. |
+| A sketch whose note has been deleted | Treated as deleted, and tombstoned by the first device that observes the note's tombstone and understands sketches. **Not** a cascade: a build without sketch support can delete a note without knowing its sketches exist, so a local cascade would look right on one device and leave orphans on the other. Reconciliation, not cascade, is the only rule both can honour. |
+| An anchor past the end of the text | Clamped to the last block. A drawing at a stale position is a drawing in the wrong place; a drawing dropped for an out-of-range integer is data loss. |
 | Stroke set over the size guard | Refused at capture with a message, before it can reach a push. |
 | A sketch record on a build without sketch support | Skipped and counted, per step 1. |
 
@@ -289,6 +322,10 @@ Pure and JVM-testable, which is most of it:
   re-baseline runs again; and a device already at the current version does not re-baseline.
 - **Two-device**: a sketch drawn on one device arrives on the other and renders identically, over
   the existing `TwoDeviceSyncTest` harness.
+- **Anchoring**: the block count is identical on both platforms for a corpus of golden bodies;
+  an anchor beyond the current block count clamps instead of vanishing; editing text above a sketch
+  moves its anchor; and a note edited by a build with no sketch support still round-trips
+  byte-identically, since nothing about the sketch is in its content.
 - **Deletion**: deleting a note tombstones its sketches, and they do not resurrect on the next pull.
 
 Rendering is tested at the geometry level — the path a stroke set produces — not by comparing
