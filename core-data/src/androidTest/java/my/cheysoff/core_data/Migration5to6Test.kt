@@ -116,6 +116,7 @@ class Migration5to6Test {
                 // disturb anything MIGRATION_5_6 established.
                 NoteDatabase.MIGRATION_6_7,
                 NoteDatabase.MIGRATION_7_8,
+                NoteDatabase.MIGRATION_8_9,
             )
             .build()
 

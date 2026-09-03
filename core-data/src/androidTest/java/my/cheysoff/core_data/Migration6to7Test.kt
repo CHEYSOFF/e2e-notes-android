@@ -143,6 +143,7 @@ class Migration6to7Test {
                 NoteDatabase.MIGRATION_5_6,
                 NoteDatabase.MIGRATION_6_7,
                 NoteDatabase.MIGRATION_7_8,
+                NoteDatabase.MIGRATION_8_9,
             )
             .build()
 
