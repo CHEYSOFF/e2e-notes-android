@@ -65,4 +65,14 @@ sealed interface SettingsIntent {
      * paired and the stored address validates.
      */
     data object CheckServer : SettingsIntent
+
+    /**
+     * Forget a recorded halt and try one more pass, because the user asked.
+     *
+     * Offered only while the engine is actually halted. It repairs nothing -- see
+     * `SyncStore.clearHalt` -- and the likely outcome is the same halt again; what it removes is
+     * the dead end for a halt whose cause has since been dealt with, such as an app update after an
+     * unsupported payload version.
+     */
+    data object RetryAfterHalt : SettingsIntent
 }

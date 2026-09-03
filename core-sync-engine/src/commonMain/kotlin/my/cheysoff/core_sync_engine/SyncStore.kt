@@ -120,6 +120,28 @@ interface SyncStore {
      * because it is the one that explains the rest.
      */
     suspend fun recordHalt(reason: HaltReason)
+
+    /**
+     * Forgets the halt, so the next pass runs instead of refusing.
+     *
+     * ## This repairs nothing, and must not be described as if it did
+     *
+     * Every [HaltReason] is a condition the engine cannot fix: a server restored from a backup, a
+     * payload from a newer build, a device revoked, an ARK that cannot read the account. Clearing
+     * the flag does not change any of them. What the next pass does is **detect the same thing
+     * again and halt again**, which is the correct outcome and the reason this is safe to offer.
+     *
+     * It exists because the alternative is worse. Before it, a halt was permanent: a person who
+     * updated the app after an [HaltReason.UNSUPPORTED_PAYLOAD_VERSION], or re-paired after a
+     * [HaltReason.DEVICE_REVOKED], had fixed the cause and still had no way to tell the engine to
+     * look again — short of reinstalling and losing the local library. A dead end with a fixed
+     * cause is a worse failure than a halt that can be retried.
+     *
+     * So the honest framing, and the one the UI copy is held to: this is "look again", not "it's
+     * fine now". Callers must not clear a halt on the engine's behalf, on a timer, or as part of
+     * error recovery — only when a person asked.
+     */
+    suspend fun clearHalt()
 }
 
 /**

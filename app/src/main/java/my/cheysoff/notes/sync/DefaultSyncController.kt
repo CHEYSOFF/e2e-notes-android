@@ -84,7 +84,17 @@ class DefaultSyncController @Inject constructor(
         scope.launch { syncNow(trigger) }
     }
 
-    override suspend fun syncNow(trigger: SyncTrigger): SyncPassState {
+    override suspend fun clearHaltAndSync(): SyncPassState = pass(clearHalt = true)
+
+    override suspend fun syncNow(trigger: SyncTrigger): SyncPassState = pass(clearHalt = false)
+
+    /**
+     * @param clearHalt forget a recorded halt before running. Threaded down to [runPass] rather
+     *   than done separately, because clearing needs every precondition a pass needs -- unlocked,
+     *   an ARK, a server, an enrolment, an open database -- and duplicating that list is how the
+     *   two copies start disagreeing about which of the five messages to show.
+     */
+    private suspend fun pass(clearHalt: Boolean): SyncPassState {
         // A pass that is already running is doing exactly what this caller wanted, so the honest
         // answer is the running one rather than a queued second pass that would take a 409 against
         // the first.
@@ -92,7 +102,7 @@ class DefaultSyncController @Inject constructor(
         try {
             _state.value = SyncPassState.Running
             val result = try {
-                runPass()
+                runPass(clearHalt)
             } catch (e: Exception) {
                 // `SyncEngine.runPass` never throws and the transport translates everything it can
                 // — but this method is also called from a fire-and-forget `launch`, where an escaped
@@ -108,7 +118,7 @@ class DefaultSyncController @Inject constructor(
         }
     }
 
-    private suspend fun runPass(): SyncPassState {
+    private suspend fun runPass(clearHalt: Boolean): SyncPassState {
         if (!secureUnlock.unlocked.value) {
             return SyncPassState.Unavailable("Unlock the app to sync.")
         }
@@ -166,6 +176,10 @@ class DefaultSyncController @Inject constructor(
                 // version on the next sync -- silently.
                 clock = ClockObserver { syncClock.observe(it) },
             )
+
+            // After the store is open and before the engine reads the halt, which is the only
+            // window where clearing means anything: the engine refuses at the top of every pass.
+            if (clearHalt) store.clearHalt()
 
             return describe(engine.runPass())
         } finally {

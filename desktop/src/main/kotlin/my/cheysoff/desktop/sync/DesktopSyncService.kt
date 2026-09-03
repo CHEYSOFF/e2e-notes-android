@@ -71,4 +71,16 @@ class DesktopSyncService(
      * again with nothing on screen to explain why.
      */
     suspend fun syncOnce(): SyncOutcome = engine.runPass()
+
+    /**
+     * Forgets a recorded halt and runs one pass. Only in response to a person asking -- see
+     * `SyncStore.clearHalt` for why this repairs nothing and is still worth having.
+     *
+     * Cleared here rather than as a separate call the caller makes first, so that "clear it and
+     * look again" cannot be split across two awaits with a pass slipping between them.
+     */
+    suspend fun clearHaltAndSyncOnce(): SyncOutcome {
+        syncStore.clearHalt()
+        return engine.runPass()
+    }
 }
