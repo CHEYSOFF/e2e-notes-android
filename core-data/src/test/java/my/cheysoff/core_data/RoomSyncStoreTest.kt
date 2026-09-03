@@ -15,6 +15,7 @@ import my.cheysoff.core_domain.sync.RecordType
 import my.cheysoff.core_domain.sync.SyncRecord
 import my.cheysoff.core_sync_engine.HaltReason
 import my.cheysoff.core_sync_engine.MergedWrite
+import my.cheysoff.core_sync_engine.SyncEngine
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -631,5 +632,36 @@ class RoomSyncStoreTest {
         database.syncStateDao.saveDataVersion(account, 2)
 
         assertEquals(12L, store.cursor())
+    }
+
+    /**
+     * `advanceCursor`'s INSERT never names `dataVersion`, so a device that has pulled at least
+     * once but never had `saveDataVersion` called sits at the column's own `NOT NULL DEFAULT 0` --
+     * not at `null`. `SyncStore.dataVersion()` must still read that as "nothing recorded": `0` can
+     * never be a genuine generation, since [SyncEngine.DATA_VERSION] starts at 1 and only
+     * increases. The desktop's `RecordSyncStore` reaches the same answer for the same reason, but
+     * gets there through a genuinely `NULL` column rather than through this guard.
+     */
+    @Test
+    fun `a device that has pulled but never recorded a version reports the current generation`() = runTest {
+        store.saveCursor(12L)
+
+        assertEquals(SyncEngine.DATA_VERSION, store.dataVersion())
+    }
+
+    /**
+     * `saveDataVersion` is an UPDATE, never an upsert -- see [clearHalt] for why a missing row
+     * must stay missing. This checks the row itself, not just what `dataVersion` reads back,
+     * because a `dataVersion` of null is also what an inserted-then-unset row would report; the
+     * only way to be sure nothing was fabricated is to look for the row.
+     */
+    @Test
+    fun `saving a data version against a missing row writes nothing and creates no row`() = runTest {
+        database.syncStateDao.saveDataVersion(account, 2)
+
+        assertNull(
+            "an UPDATE against a missing row must not fabricate one",
+            database.syncStateDao.get(account),
+        )
     }
 }
