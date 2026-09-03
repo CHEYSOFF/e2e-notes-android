@@ -155,6 +155,19 @@ class RecordStore private constructor(private val connection: Connection) : Auto
                 )
                 """.trimIndent(),
             )
+
+            // Added rather than folded into the CREATE above, for the same reason `content_baseline`
+            // is: a vault written before this column existed already has the table, and `CREATE
+            // TABLE IF NOT EXISTS` would leave it alone. Guarded by reading the schema rather than
+            // by catching the duplicate-column error, so a swallowed SQLException here does not also
+            // swallow a disk failure.
+            //
+            // Nullable here, where the phone's is `NOT NULL DEFAULT 0`: an existing desktop row
+            // predates the column and NULL says "never recorded" honestly, which is the same state
+            // the phone spells as an absent row.
+            if (!hasColumn("sync_state", "data_version")) {
+                statement.executeUpdate("ALTER TABLE sync_state ADD COLUMN data_version INTEGER")
+            }
         }
     }
 
@@ -437,6 +450,29 @@ class RecordStore private constructor(private val connection: Connection) : Auto
             statement.setString(1, accountId)
             statement.executeUpdate()
         }
+    }
+
+    /**
+     * The format generation this device last completed a pull under for [accountId], or null if
+     * it never has -- either no row exists yet, or the row predates this column.
+     */
+    fun dataVersion(accountId: String): Int? =
+        connection.prepareStatement("SELECT data_version FROM sync_state WHERE account_id = ?")
+            .use { statement ->
+                statement.setString(1, accountId)
+                statement.executeQuery().use {
+                    if (!it.next()) null else it.getInt(1).takeUnless { _ -> it.wasNull() }
+                }
+            }
+
+    /** An UPDATE, never an upsert: see [clearHalt] for why a missing row must stay missing. */
+    fun saveDataVersion(accountId: String, version: Int) {
+        connection.prepareStatement("UPDATE sync_state SET data_version = ? WHERE account_id = ?")
+            .use { statement ->
+                statement.setInt(1, version)
+                statement.setString(2, accountId)
+                statement.executeUpdate()
+            }
     }
 
     override fun close() = connection.close()
