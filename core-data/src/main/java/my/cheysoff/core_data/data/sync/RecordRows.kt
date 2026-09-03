@@ -135,36 +135,40 @@ internal object RecordRows {
     }
 
     /**
-     * The `createdAt` to write for a merged record: the row's own if this device already has one,
-     * and otherwise the record's `updatedAt`.
+     * The `createdAt` to write for a merged record, in order of preference: the row's own, then the
+     * one the incoming payload carried, and only then the record's `updatedAt`.
      *
-     * ## Why this is not read off the record
+     * ## An existing row keeps what it has, always
      *
-     * `createdAt` is a column the merge does not model. `FieldClocks.NOTE_FIELDS` excludes it on
-     * the grounds that no write path moves it, so it has no history of its own — which is true, and
-     * which also means a `SyncRecord` has nowhere to carry it. The payload *does* carry it (§5.1
-     * lists it, and the desktop writes it), but it is dropped at the `SyncRecords.fromPayload`
-     * boundary and never reaches a store.
+     * Nothing may move a `createdAt` that is already set. It is the one column in this schema with
+     * no history to fall back on, and the merge does not model it: `FieldClocks.NOTE_FIELDS`
+     * excludes it because no write path moves it, so it has no clock and nothing contests it.
      *
-     * So a device seeing a record for the first time has to choose a value, and this is the choice
-     * `ConflictCopies` already made for the identical problem: **the record's `updatedAt`**. A note
-     * that arrives here came into existence carrying that body at that time, and dating it to the
-     * moment of the merge instead would put it in the user's Recent list stamped with a moment they
-     * were not editing.
+     * ## Why the remote value, and why it is not a merge
      *
-     * ## What it costs, honestly
+     * A record's creation time is a property of the record, not a value two devices can disagree
+     * about — so on a first receipt the right answer is simply the one the payload carries. It
+     * always carried it (§5.1 lists it, both codecs write it); it was **dropped** at the
+     * `SyncRecords.fromPayload` boundary, because that builds its fields from `recType.fields` and
+     * `createdAt` is not one of them. So the value existed, arrived, and was thrown away one step
+     * before it was needed. It is now carried beside the record, on `MergedWrite.remoteCreatedAt`.
      *
-     * A note created on one device and edited before it reaches a second one has a later
-     * `createdAt` on the second. The two devices then disagree about the "newest created" order —
-     * the same class of visible divergence the plan's §5.3 refuses to accept for `updatedAt`. The
-     * fix is not here: it is to give `createdAt` a clock and a place in `RecordType.fields`, so
-     * that it merges like every other value. That is a change to `:core-domain` and to the merge's
-     * field set, and it is recorded as owed rather than made silently here.
+     * That is issue #90's second option, and the cheaper one: the alternative was to give
+     * `createdAt` a clock and a place in the field set, which changes the `clocks` object on the
+     * wire and would need every device to agree at once. This changes no bytes at all — only what a
+     * receiver does with bytes it was already being sent.
      *
-     * An existing row keeps what it has, always. Nothing may move a `createdAt` that is already
-     * set — it is the one column in this schema with no history to fall back on.
+     * ## The fallback, and who still uses it
+     *
+     * `updatedAt` remains for a record whose payload carried no `createdAt`, and for the write that
+     * has no remote at all: a conflict copy is a NEW record minted on this device, and the choice
+     * `ConflictCopies` makes for it is deliberate — a preserved body came into existence carrying
+     * that body at that time, and dating it to the moment of the merge would put it in the user's
+     * Recent list stamped with a moment they were not editing.
      */
-    fun createdAtFor(existing: Long?, record: SyncRecord): Long =
-        if (existing != null && existing != 0L) existing
-        else record.valueOf(FieldClocks.UPDATED_AT).parts[0]?.toLongOrNull() ?: 0L
+    fun createdAtFor(existing: Long?, remote: Long?, record: SyncRecord): Long {
+        if (existing != null && existing != 0L) return existing
+        if (remote != null && remote != 0L) return remote
+        return record.valueOf(FieldClocks.UPDATED_AT).parts[0]?.toLongOrNull() ?: 0L
+    }
 }

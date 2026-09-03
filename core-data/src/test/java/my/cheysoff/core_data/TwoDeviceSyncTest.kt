@@ -87,7 +87,12 @@ class TwoDeviceSyncTest {
 
         val engine = SyncEngine(
             store = store,
-            transport = DirectTransport(server),
+            transport = DirectTransport(server) { type, uuid ->
+                when (type) {
+                    RecordType.NOTE -> database.noteDao.noteRow(uuid)?.createdAt
+                    RecordType.FOLDER -> database.folderDao.folderRow(uuid)?.createdAt
+                }
+            },
             clock = ClockObserver { clock.observe(it) },
         )
 
@@ -147,6 +152,71 @@ class TwoDeviceSyncTest {
         assertEquals("milk, eggs", arrived.content)
         assertEquals(true, arrived.isPinned)
         assertEquals(phone.note("n1")!!.updatedAt, arrived.updatedAt)
+    }
+
+    /**
+     * Both devices agree about when a note was created — issue #90.
+     *
+     * `createdAt` always travelled on the wire, and was always thrown away one step before it was
+     * needed: `SyncRecords.fromPayload` builds its fields from `recType.fields`, and `createdAt` is
+     * not one of them because no write path moves it and so it has no clock. A receiving device
+     * therefore had to invent a value, and took the record's `updatedAt` — which is later than the
+     * real creation time for any note edited before it first synced. The two devices then disagreed
+     * forever, because `createdAt` never changes again and so never gets a second chance to
+     * converge.
+     *
+     * The edit before the first sync is the whole point of the fixture: without it `updatedAt` and
+     * `createdAt` coincide and the bug is invisible.
+     */
+    @Test
+    fun `both devices agree about when a note was created`() = runTest {
+        newDevices()
+        phone.repository.saveNote(Note(id = "n1", title = "Trip", content = "first draft", folderId = null))
+        val created = requireNotNull(phone.note("n1")).createdAt
+
+        // Edited before it ever syncs, so this note's updatedAt is strictly later than its
+        // createdAt by the time the tablet first sees it. A real millisecond, not virtual time:
+        // `SyncClock` stamps from `System.currentTimeMillis`, and two saves inside one millisecond
+        // would leave the two columns equal and hide exactly the bug under test. The precondition
+        // below fails loudly rather than letting the test pass vacuously if that ever stops
+        // working.
+        @Suppress("BlockingMethodInNonBlockingContext")
+        Thread.sleep(2)
+        phone.repository.saveNote(
+            requireNotNull(phone.note("n1")).copy(title = "Trip", content = "second draft"),
+        )
+        assertTrue(
+            "the fixture must produce a note whose updatedAt has moved past its createdAt",
+            requireNotNull(phone.note("n1")).updatedAt > created,
+        )
+
+        settle(phone, tablet)
+
+        assertEquals(
+            "the creation time is a property of the record, not something the receiver invents",
+            created,
+            requireNotNull(tablet.note("n1")).createdAt,
+        )
+    }
+
+    /**
+     * The half that must not change: a device that already holds a record keeps its own
+     * `createdAt`. It is the one column with no history to fall back on, so nothing arriving from
+     * the network may move it.
+     */
+    @Test
+    fun `a later version does not move a createdAt this device already has`() = runTest {
+        newDevices()
+        phone.repository.saveNote(Note(id = "n1", title = "Trip", content = "first", folderId = null))
+        settle(phone, tablet)
+        val onTablet = requireNotNull(tablet.note("n1")).createdAt
+
+        Thread.sleep(2)
+        phone.repository.saveNote(requireNotNull(phone.note("n1")).copy(content = "second"))
+        settle(phone, tablet)
+
+        assertEquals("second", requireNotNull(tablet.note("n1")).content)
+        assertEquals(onTablet, requireNotNull(tablet.note("n1")).createdAt)
     }
 
     /**
@@ -286,42 +356,64 @@ class TwoDeviceSyncTest {
      * never be a decryption or an HTTP one. `:core-sync-net` is checked against the real server in
      * its own module.
      */
+    /**
+     * One stored version, as the server holds it.
+     *
+     * [createdAt] rides alongside rather than inside [record] for the same reason it does on the
+     * wire: it is not a clocked field, so `SyncRecord` -- the merge's vocabulary -- has nowhere to
+     * put it. A harness that dropped it here could not reproduce issue #90 in either direction.
+     */
+    private data class Version(val seq: Long, val record: SyncRecord, val createdAt: Long?)
+
     private class RecordServer {
-        private val head = LinkedHashMap<String, Pair<Long, SyncRecord>>()
+        private val head = LinkedHashMap<String, Version>()
         private var nextSeq = 0L
 
-        fun changes(since: Long, limit: Int): Pair<List<Pair<Long, SyncRecord>>, Boolean> {
-            val all = head.values.filter { it.first > since }.sortedBy { it.first }
+        fun changes(since: Long, limit: Int): Pair<List<Version>, Boolean> {
+            val all = head.values.filter { it.seq > since }.sortedBy { it.seq }
             return all.take(limit) to (all.size > limit)
         }
 
         /** Accepts only when [baseSeq] is still the record's head; `0` asserts "must not exist". */
-        fun push(key: String, baseSeq: Long, record: SyncRecord): Pair<Long, SyncRecord>? {
+        fun push(key: String, baseSeq: Long, record: SyncRecord, createdAt: Long?): Version? {
             val current = head[key]
-            if ((current?.first ?: 0L) != baseSeq) return current
+            if ((current?.seq ?: 0L) != baseSeq) return current
             nextSeq += 1
-            head[key] = nextSeq to record
+            head[key] = Version(nextSeq, record, createdAt)
             return null
         }
     }
 
-    private class DirectTransport(private val server: RecordServer) : SyncTransport {
+    /**
+     * @param createdAtOf the pushing device's own `createdAt` for a record, mirroring what
+     *   `EnvelopeSyncTransport` does in production: the engine never supplies the value, because
+     *   the merge does not model it, so the transport looks it up on the way out.
+     */
+    private class DirectTransport(
+        private val server: RecordServer,
+        private val createdAtOf: suspend (RecordType, String) -> Long?,
+    ) : SyncTransport {
 
         override suspend fun changesSince(since: Long, limit: Int): ChangePage {
             val (records, hasMore) = server.changes(since, limit)
             return ChangePage(
-                records = records.map { (seq, record) -> IncomingRecord.Opened(seq, record) },
+                records = records.map { IncomingRecord.Opened(it.seq, it.record, it.createdAt) },
                 hasMore = hasMore,
             )
         }
 
         override suspend fun push(items: List<PushRequest>): PushResponse = PushResponse(
             items.map { item ->
-                val blocking = server.push(keyOf(item.type, item.uuid), item.baseSeq, item.record)
+                val blocking = server.push(
+                    keyOf(item.type, item.uuid),
+                    item.baseSeq,
+                    item.record,
+                    createdAtOf(item.type, item.uuid),
+                )
                 if (blocking == null) {
                     PushAck.Accepted(item.type, item.uuid, seqOf(item))
                 } else {
-                    PushAck.Conflicted(item.type, item.uuid, blocking.second, blocking.first)
+                    PushAck.Conflicted(item.type, item.uuid, blocking.record, blocking.seq)
                 }
             }
         )
@@ -331,7 +423,9 @@ class TwoDeviceSyncTest {
          * engine matches acks by identity and this keeps the server's own bookkeeping in one place.
          */
         private fun seqOf(item: PushRequest): Long =
-            server.changes(-1, Int.MAX_VALUE).first.first { it.second.uuid == item.uuid && it.second.type == item.type }.first
+            server.changes(-1, Int.MAX_VALUE).first
+                .first { it.record.uuid == item.uuid && it.record.type == item.type }
+                .seq
 
         private fun keyOf(type: RecordType, uuid: String) = "${type.wireKey}:$uuid"
     }
