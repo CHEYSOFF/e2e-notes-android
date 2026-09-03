@@ -603,4 +603,33 @@ class RoomSyncStoreTest {
             store.cursor(),
         )
     }
+
+    // -- the data version --------------------------------------------------------------------------
+
+    @Test
+    fun `a data version round-trips`() = runTest {
+        assertNull("a device that has never pulled has no version", database.syncStateDao.dataVersion(account))
+
+        // saveDataVersion is an UPDATE, never an upsert (see its doc), so the round trip is only
+        // meaningful for a device that has a row -- i.e. one that has completed a pull, which is
+        // exactly when the engine calls it in production.
+        store.saveCursor(5L)
+        database.syncStateDao.saveDataVersion(account, 2)
+
+        assertEquals(2, database.syncStateDao.dataVersion(account))
+    }
+
+    /**
+     * Saving the version must not invent a cursor. A row conjured here would claim this device had
+     * pulled up to 0 on an account it has never contacted, and `takeSnapshotOnce` reads a cursor of
+     * 0 as "before the first pull".
+     */
+    @Test
+    fun `saving a data version does not disturb the cursor`() = runTest {
+        store.saveCursor(12L)
+
+        database.syncStateDao.saveDataVersion(account, 2)
+
+        assertEquals(12L, store.cursor())
+    }
 }
