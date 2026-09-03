@@ -201,6 +201,19 @@ class SyncEngine(
                             committable, startCursor, stats,
                             halt(HaltReason.UNSUPPORTED_PAYLOAD_VERSION),
                         )
+
+                        // Task 3 replaces this. For now, an unknown type is treated exactly like
+                        // an unreadable record: counted, frozen, and not paged past.
+                        RecordFault.UNKNOWN_TYPE -> {
+                            stats = stats.copy(unreadable = stats.unreadable + 1)
+                            frozen = true
+                            if (stats.unreadable > UNREADABLE_RECORD_LIMIT) {
+                                return finishPull(
+                                    committable, startCursor, stats,
+                                    halt(HaltReason.RECORDS_UNREADABLE),
+                                )
+                            }
+                        }
                     }
 
                     is IncomingRecord.Opened -> {
