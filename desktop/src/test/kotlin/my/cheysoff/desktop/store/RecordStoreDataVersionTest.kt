@@ -1,0 +1,52 @@
+package my.cheysoff.desktop.store
+
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+
+class RecordStoreDataVersionTest {
+
+    @get:Rule val folder = TemporaryFolder()
+
+    private lateinit var store: RecordStore
+    private val account = "account-under-test"
+
+    @Before fun setUp() {
+        store = RecordStore.open(folder.newFolder("vault").toPath().resolve("records.db"))
+    }
+
+    @After fun tearDown() = store.close()
+
+    @Test
+    fun `a data version round-trips`() {
+        assertNull(store.dataVersion(account))
+        // saveDataVersion is an UPDATE, never an upsert (see its doc), so the round trip needs a
+        // row first -- i.e. a device that has completed a pull, which is exactly when the engine
+        // calls it in production.
+        store.saveCursor(account, 5L)
+        store.saveDataVersion(account, 2)
+        assertEquals(2, store.dataVersion(account))
+    }
+
+    /** Same rule as the phone's: recording a version must not invent a cursor. */
+    @Test
+    fun `saving a data version does not disturb the cursor`() {
+        store.saveCursor(account, 12L)
+        store.saveDataVersion(account, 2)
+        assertEquals(12L, store.cursor(account))
+    }
+
+    /** A vault written before this column existed must open, not throw. */
+    @Test
+    fun `a store opened twice keeps its version`() {
+        store.saveCursor(account, 5L)
+        store.saveDataVersion(account, 2)
+        store.close()
+        store = RecordStore.open(folder.root.toPath().resolve("vault").resolve("records.db"))
+        assertEquals(2, store.dataVersion(account))
+    }
+}
