@@ -63,7 +63,15 @@ class SyncEngineRebaselineTest {
 
         val outcome = engine(store, transport).runPass()
 
-        assertTrue("precondition: the pass did not complete", outcome !is SyncOutcome.Completed)
+        assertTrue(
+            "precondition: a network failure defers rather than halting or completing",
+            outcome is SyncOutcome.Deferred,
+        )
+        assertEquals(
+            "precondition: it is the network failure the transport was scripted to throw",
+            TransportFault.NETWORK,
+            (outcome as SyncOutcome.Deferred).fault,
+        )
         assertEquals(
             "so the next launch must re-baseline again",
             SyncEngine.DATA_VERSION - 1,
@@ -82,7 +90,11 @@ class SyncEngineRebaselineTest {
         engine(store, transport).runPass()
 
         assertEquals(0L, transport.pulls[0].since)
-        assertTrue("the second pass resumes normally", transport.pulls[1].since > 0L)
+        assertEquals(
+            "the second pass resumes where the device actually was, not merely somewhere nonzero",
+            50L,
+            transport.pulls[1].since,
+        )
     }
 
     private fun engine(
