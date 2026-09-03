@@ -71,7 +71,24 @@ sealed interface IncomingRecord {
     val seq: Long
 
     /** The envelope opened, its blinded id checked, and its payload version understood. */
-    class Opened(override val seq: Long, val record: SyncRecord) : IncomingRecord
+    class Opened(
+        override val seq: Long,
+        val record: SyncRecord,
+        /**
+         * The `createdAt` the payload carried, or null if it did not carry one.
+         *
+         * Beside the record rather than inside it, deliberately. `SyncRecord` is the **merge's**
+         * vocabulary and holds only clocked fields; `createdAt` is not one, because no write path
+         * moves it and so it has no history to merge. It nevertheless has to reach the store, and
+         * before this it did not: `SyncRecords.fromPayload` builds its fields from
+         * `recType.fields`, so the value was dropped at that boundary and a device seeing a record
+         * for the first time had to invent one from `updatedAt` — permanently disagreeing with the
+         * device that made it (issue #90).
+         *
+         * Null for a record whose payload omitted it, which the store then handles as before.
+         */
+        val createdAt: Long?,
+    ) : IncomingRecord
 
     /** The envelope did not survive one of §4's three checks. */
     class Faulted(override val seq: Long, val fault: RecordFault) : IncomingRecord

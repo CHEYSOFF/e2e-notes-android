@@ -66,8 +66,19 @@ class EnvelopeSyncTransport(
         ChangePage(
             records = page.records.map { remote ->
                 when (val opened = codec.open(remote.blindedId, remote.envelope)) {
+                    // `createdAt` is read straight off the payload rather than out of the record:
+                    // it is not a clocked field, so `fromPayload` does not carry it. It is the one
+                    // value here that belongs to the record rather than to the merge.
                     is OpenResult.Ok -> SyncRecords.fromPayload(opened.payload)
-                        ?.let { IncomingRecord.Opened(remote.seq, it) }
+                        ?.let {
+                            IncomingRecord.Opened(
+                                seq = remote.seq,
+                                record = it,
+                                createdAt = opened.payload
+                                    .field(PayloadFields.CREATED_AT)
+                                    ?.toLongOrNull(),
+                            )
+                        }
                     // Authentic bytes this build cannot turn into a record. Reported as UNREADABLE
                     // rather than as its own fault because the engine's response is the right one:
                     // count it, skip it, do not advance past it, and halt if there is a stream of

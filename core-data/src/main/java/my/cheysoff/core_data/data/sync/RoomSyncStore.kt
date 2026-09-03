@@ -135,7 +135,11 @@ class RoomSyncStore(
                 noteDao.applyRemoteNote(
                     RecordRows.toNoteEntity(
                         record = write.record,
-                        createdAt = RecordRows.createdAtFor(noteDao.noteRow(write.record.uuid)?.createdAt, write.record),
+                        createdAt = RecordRows.createdAtFor(
+                            existing = noteDao.noteRow(write.record.uuid)?.createdAt,
+                            remote = write.remoteCreatedAt,
+                            record = write.record,
+                        ),
                         dirty = write.dirty,
                         lastSyncedSeq = write.seq,
                         contentBaseline = write.contentBaseline,
@@ -147,7 +151,11 @@ class RoomSyncStore(
                 folderDao.applyRemoteFolder(
                     RecordRows.toFolderEntity(
                         record = write.record,
-                        createdAt = RecordRows.createdAtFor(folderDao.folderRow(write.record.uuid)?.createdAt, write.record),
+                        createdAt = RecordRows.createdAtFor(
+                            existing = folderDao.folderRow(write.record.uuid)?.createdAt,
+                            remote = write.remoteCreatedAt,
+                            record = write.record,
+                        ),
                         dirty = write.dirty,
                         lastSyncedSeq = write.seq,
                     )
@@ -161,8 +169,10 @@ class RoomSyncStore(
                     record = copy,
                     // The copy is new here by construction — the engine only sets it when no record
                     // with that uuid exists — so there is nothing to preserve and its own
-                    // `updatedAt` is the honest creation time.
-                    createdAt = RecordRows.createdAtFor(null, copy),
+                    // `updatedAt` is the honest creation time. `remote` is null for the same
+                    // reason: the incoming record's creation time belongs to the record it
+                    // arrived as, not to a copy this device is minting from a losing body.
+                    createdAt = RecordRows.createdAtFor(existing = null, remote = null, record = copy),
                     dirty = true,
                     // It has never been on the server, which the server reads as "must not exist".
                     lastSyncedSeq = 0L,
