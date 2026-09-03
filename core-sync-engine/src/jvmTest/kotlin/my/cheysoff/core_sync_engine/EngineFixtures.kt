@@ -78,6 +78,8 @@ class RecordingStore(
     var halt: HaltReason? = null
         private set
 
+    var storedDataVersion: Int = SyncEngine.DATA_VERSION
+
     override suspend fun cursor(): Long = cursor
 
     override suspend fun saveCursor(seq: Long) {
@@ -140,6 +142,12 @@ class RecordingStore(
     override suspend fun clearHalt() {
         halt = null
         writes += "halt=cleared"
+    }
+
+    override suspend fun dataVersion(): Int = storedDataVersion
+
+    override suspend fun saveDataVersion(version: Int) {
+        storedDataVersion = version
     }
 
     /** Puts a row in place without going through the engine, for a test's starting state. */

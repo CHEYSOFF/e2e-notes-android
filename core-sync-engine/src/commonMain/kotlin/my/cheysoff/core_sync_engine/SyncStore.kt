@@ -142,6 +142,19 @@ interface SyncStore {
      * error recovery — only when a person asked.
      */
     suspend fun clearHalt()
+
+    /**
+     * The format generation this device last completed a pull under, or [SyncEngine.DATA_VERSION]
+     * when nothing has been recorded.
+     *
+     * The default matters: a store with no row for this account has never pulled, so its next pull
+     * starts at 0 and fetches everything anyway. Reporting `0` there would send it through a
+     * re-baseline that could not possibly find anything it had missed.
+     */
+    suspend fun dataVersion(): Int
+
+    /** Records that a pull completed under [version]. Written only after a completed pass. */
+    suspend fun saveDataVersion(version: Int)
 }
 
 /**

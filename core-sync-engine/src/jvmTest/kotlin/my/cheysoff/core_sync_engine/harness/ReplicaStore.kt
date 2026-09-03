@@ -7,6 +7,7 @@ import my.cheysoff.core_domain.sync.SyncRecord
 import my.cheysoff.core_sync_engine.HaltReason
 import my.cheysoff.core_sync_engine.MergedWrite
 import my.cheysoff.core_sync_engine.StoredRecord
+import my.cheysoff.core_sync_engine.SyncEngine
 import my.cheysoff.core_sync_engine.SyncStore
 
 /**
@@ -33,6 +34,9 @@ class ReplicaStore(
     private val rows = LinkedHashMap<String, StoredRecord>()
     private var cursor = 0L
     private var halted: HaltReason? = null
+
+    /** Named `storedDataVersion`, not `dataVersion`, so it does not collide with the method. */
+    var storedDataVersion: Int = SyncEngine.DATA_VERSION
 
     // ── The SyncStore contract ─────────────────────────────────────────────────────────────────
 
@@ -117,6 +121,12 @@ class ReplicaStore(
 
     override suspend fun clearHalt() {
         halted = null
+    }
+
+    override suspend fun dataVersion(): Int = storedDataVersion
+
+    override suspend fun saveDataVersion(version: Int) {
+        storedDataVersion = version
     }
 
     // ── What the harness needs on top ──────────────────────────────────────────────────────────

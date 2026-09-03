@@ -10,6 +10,7 @@ import my.cheysoff.core_domain.sync.RecordType
 import my.cheysoff.core_sync_engine.HaltReason
 import my.cheysoff.core_sync_engine.MergedWrite
 import my.cheysoff.core_sync_engine.StoredRecord
+import my.cheysoff.core_sync_engine.SyncEngine
 import my.cheysoff.core_sync_engine.SyncStore
 
 /**
@@ -242,4 +243,10 @@ class RoomSyncStore(
         syncStateDao.recordHalt(accountId, reason.name)
 
     override suspend fun clearHalt() = syncStateDao.clearHalt(accountId)
+
+    override suspend fun dataVersion(): Int =
+        syncStateDao.dataVersion(accountId) ?: SyncEngine.DATA_VERSION
+
+    override suspend fun saveDataVersion(version: Int) =
+        syncStateDao.saveDataVersion(accountId, version)
 }

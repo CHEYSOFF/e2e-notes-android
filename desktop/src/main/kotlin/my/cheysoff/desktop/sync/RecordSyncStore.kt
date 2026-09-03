@@ -10,6 +10,7 @@ import my.cheysoff.core_sync_codec.SyncRecords
 import my.cheysoff.core_sync_engine.HaltReason
 import my.cheysoff.core_sync_engine.MergedWrite
 import my.cheysoff.core_sync_engine.StoredRecord
+import my.cheysoff.core_sync_engine.SyncEngine
 import my.cheysoff.core_sync_engine.SyncStore
 import my.cheysoff.desktop.store.RecordStore
 
@@ -160,6 +161,11 @@ class RecordSyncStore(
     override suspend fun recordHalt(reason: HaltReason) = store.recordHalt(accountId, reason.name)
 
     override suspend fun clearHalt() = store.clearHalt(accountId)
+
+    override suspend fun dataVersion(): Int =
+        store.dataVersion(accountId) ?: SyncEngine.DATA_VERSION
+
+    override suspend fun saveDataVersion(version: Int) = store.saveDataVersion(accountId, version)
 
     /**
      * The `createdAt` of a record this device already holds, or null.
