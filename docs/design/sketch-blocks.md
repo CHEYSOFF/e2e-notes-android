@@ -79,11 +79,44 @@ unknown type is the opposite: the record opened, authenticated, and parsed far e
 is. Nothing is wrong; this build simply has no use for it. Advancing past it loses nothing, because
 a build that cannot represent the record could not have stored it anyway.
 
-**The cursor question.** Advancing past a record this device will never store means that if the
-device is later upgraded, it will not re-pull the sketches it skipped — its cursor is already beyond
-them. This is accepted rather than solved: the alternative is freezing, which is the failure being
-removed. The recovery is the existing re-baseline path, and in practice both devices are upgraded
-together. It is stated here so nobody rediscovers it as a bug.
+**The cursor question, and its answer.** Advancing past a record this device will never store means
+its cursor ends up beyond records it did not keep. Upgrade the device later and it would never
+re-pull them: the sketches it skipped would be permanently invisible to it, while being perfectly
+present on the other device and on the server.
+
+The fix is a **data version and a one-shot re-baseline**.
+
+- `sync_state` gains `dataVersion`, the record-format generation this device last completed a pull
+  under. It is a property of the build, bumped when a record type or payload shape is added — not a
+  per-record field and not on the wire.
+- On the first pass after a build whose `dataVersion` exceeds the stored one, the device resets its
+  cursor to 0 exactly once, completes a full pull, then writes the new version. If the pass does not
+  complete, the version is not written and the re-baseline is retried — it must be idempotent, and
+  it is, because it is an ordinary pull.
+
+**Why this does not trip the rollback guard, which is the part worth being careful about.**
+`GET /v1/changes` serves the **head** version of each record and never history. So a pull from 0
+returns, for every record, either the version this device already holds — in which case
+`remote.rowClock` *equals* `local.rowClock`, the guard's test `remote.rowClock < local.rowClock` is
+false, and the merge resolves to `NoChange` — or a newer one, which is an ordinary apply. Nothing
+arrives older than what a clean row holds, because a clean row is by definition one the server has
+acknowledged.
+
+This must not be confused with the prohibition in `RejectReason.ROLLBACK_SUSPECTED`, which states
+that a rollback "may not silently reset the cursor to 0". That is about resetting **in response to a
+suspected rollback**, where the server is the thing that has stopped being trustworthy and a reset
+would read an emptied account as "delete everything". Here the reset is client-initiated, the server
+is known-good, and the replay is what was asked for. Same operation, opposite trust — and the code
+that performs it should say which one it is at the call site.
+
+**What is deliberately not done: ranking records by app version.** It is tempting to prefer records
+written by a newer build. It would be wrong. Merge order is the HLC `(ms, counter, node)`, a total
+order, and that totality is what makes the result convergent; a second ranking key that is not part
+of that order would let a *newer* edit from an old build lose to an *older* edit from a new one, and
+two devices applying it in different orders would stop converging. The hazard this would be reaching
+for — an old build re-saving a newer record through a lossy parser — is already prevented, and more
+strictly: an unknown payload version returns `UnsupportedVersion` and halts rather than
+round-tripping the record.
 
 ### Rollout gate
 
@@ -250,6 +283,10 @@ Pure and JVM-testable, which is most of it:
   count toward the unreadable limit, and does not halt — and a *malformed* record of a known type
   still does all four. Both directions matter; only testing the new one would let a future change
   quietly make every damaged record skippable.
+- **Re-baseline**: a device whose `dataVersion` is behind resets its cursor once, re-pulls, and
+  recovers records it previously skipped; a re-pull of records it already holds produces `NoChange`
+  and no rollback rejection; the version is written only on a completed pass, so an interrupted
+  re-baseline runs again; and a device already at the current version does not re-baseline.
 - **Two-device**: a sketch drawn on one device arrives on the other and renders identically, over
   the existing `TwoDeviceSyncTest` harness.
 - **Deletion**: deleting a note tombstones its sketches, and they do not resurrect on the next pull.
