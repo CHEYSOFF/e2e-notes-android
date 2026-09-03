@@ -212,18 +212,63 @@ class DeviceTest {
         assertEquals("unknown_device", response.errorCode())
     }
 
+    /**
+     * Enrolment is idempotent, and this is the bug that made it worth fixing.
+     *
+     * A device that enrolled successfully but never saw the reply -- a dropped response, a killed
+     * app, a second tap -- used to be told `409 device_exists` on every retry, forever. It was
+     * correctly on the account and permanently unable to learn its own id, so it could never sync,
+     * with nothing wrong on either side. `claimAccount` has always answered this shape of question
+     * with `AlreadyClaimed`; this is the same idea one call to its left.
+     */
     @Test
-    fun enrollingTheSameKeyTwiceIsRejected() = serverTest { harness ->
+    fun enrollingTheSameKeyTwiceReturnsTheSameDeviceId() = serverTest { harness ->
         val first = enrol(harness)
         val joining = TestDevice("joining")
-        assertEquals(
-            201,
-            authorizeDevice(harness, first.accountId, first.deviceId, first.device, joining).status.value,
-        )
+        val created = authorizeDevice(harness, first.accountId, first.deviceId, first.device, joining)
+        assertEquals(201, created.status.value)
+        val firstAnswer: AuthorizeResponse = created.decode()
+
         harness.clock.now += 1 // a different ts, so this is not a replay
+        val retry = authorizeDevice(harness, first.accountId, first.deviceId, first.device, joining)
+
+        assertEquals(200, retry.status.value, "a retry is not a creation")
+        assertEquals(
+            firstAnswer.deviceId,
+            retry.decode<AuthorizeResponse>().deviceId,
+            "a retry must hand back the id the first attempt assigned",
+        )
+
+        // The point of returning the id rather than minting one: the account has two devices, not
+        // three. A retry that enrolled again would grow a row per dropped reply.
+        val listed: DevicesResponse = client.getAuth("/v1/devices", first.token).decode()
+        assertEquals(2, listed.devices.size)
+    }
+
+    /**
+     * The half that must NOT be idempotent.
+     *
+     * A revoked key coming back through the front door would undo the only thing revocation does.
+     * It is refused, and named as revoked rather than as "already enrolled" -- which is true of it
+     * and useless to whoever has to act on it, since the fix is to pair again for a fresh key.
+     */
+    @Test
+    fun enrollingARevokedKeyIsRefusedAsRevoked() = serverTest { harness ->
+        val first = enrol(harness)
+        val joining = TestDevice("joining")
+        val joiningId = authorizeDevice(harness, first.accountId, first.deviceId, first.device, joining)
+            .decode<AuthorizeResponse>().deviceId
+        assertEquals(200, client.deleteAuth("/v1/devices/$joiningId", first.token).status.value)
+
+        harness.clock.now += 1
         val response = authorizeDevice(harness, first.accountId, first.deviceId, first.device, joining)
-        assertEquals(409, response.status.value)
-        assertEquals("device_exists", response.errorCode())
+
+        assertEquals(403, response.status.value)
+        assertEquals("device_revoked", response.errorCode())
+
+        // And it is still revoked -- the refusal must not have quietly restored anything.
+        val listed: DevicesResponse = client.getAuth("/v1/devices", first.token).decode()
+        assertNotNull(listed.devices.single { it.deviceId == joiningId }.revokedAt)
     }
 
     @Test

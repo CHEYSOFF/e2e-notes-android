@@ -170,7 +170,7 @@ fields (public keys, signatures, envelopes) are all unpadded base64url, RFC 4648
 |---|---|---|---|
 | `GET` | `/healthz` | none | liveness; returns `{"status":"ok","version":…}` and nothing else |
 | `POST` | `/v1/account` | self-signed | TOFU claim; enrols the first device. `201`, or `409 account_exists` |
-| `POST` | `/v1/devices/authorize` | voucher signature | vouched enrolment. `201`, or `409 device_exists` |
+| `POST` | `/v1/devices/authorize` | voucher signature | vouched enrolment. `201` for a new device, `200` with the same id for a retry, `403 device_revoked` for a revoked key |
 | `GET` | `/v1/devices` | bearer | list devices, including revoked ones |
 | `DELETE` | `/v1/devices/{id}` | bearer | revoke; kills that device's sessions in the same transaction |
 | `POST` | `/v1/session/challenge` | none | single-use nonce for a device to sign |
@@ -244,7 +244,7 @@ use: `malformed_request`, `malformed_base64`, `invalid_account_id`, `invalid_pub
 `invalid_base_seq`, `invalid_envelope`, `invalid_cursor`, `invalid_limit`, `empty_batch`,
 `batch_too_large`, `duplicate_record_in_batch`, `payload_too_large`, `rate_limited`, `unauthorized`,
 `bad_signature`, `bad_challenge`, `stale_timestamp`, `replay_detected`, `device_revoked`,
-`unknown_device`, `unknown_record`, `account_exists`, `device_exists`, `cursor_ahead_of_server`,
+`unknown_device`, `unknown_record`, `account_exists`, `cursor_ahead_of_server`,
 `invalid_sid`, `invalid_sealed`, `sealed_too_large`, `pairing_exists`, `pairing_capacity`,
 `no_pairing`, `internal_error`.
 

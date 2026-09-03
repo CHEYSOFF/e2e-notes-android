@@ -263,16 +263,36 @@ class SyncStore(
     }
 
     /**
-     * Enrols [publicKey] on an existing account. Returns the new device ID, or null if that exact
-     * key is already enrolled (including if it is enrolled but revoked -- a revoked key must not
-     * come back through the front door).
+     * Enrols [publicKey] on an existing account.
+     *
+     * The two ways a key can already be present are **not** the same event and this used to
+     * conflate them into one null, which the route turned into `409 device_exists` for both.
+     *
+     *  - **Live already**: a retry. The first attempt enrolled the device and its answer did not
+     *    get home -- a dropped reply, a killed app, a second tap. The device is on the account, the
+     *    caller simply does not know its id, and the useful answer is that id. Refusing is how a
+     *    correctly-enrolled device ends up permanently unable to sync with nothing wrong on either
+     *    side, which is exactly what happened here. `claimAccount` has always modelled this, as
+     *    `AlreadyClaimed`; this is the same idea one call to its left.
+     *  - **Revoked**: not a retry, and the refusal is the whole point of revocation. A revoked key
+     *    must never come back through the front door, so it gets its own outcome and the route says
+     *    so plainly rather than reporting "already enrolled" and leaving someone to guess.
+     *
+     * Nothing is rewritten on the retry path -- not the label, not `created_at`. A retry is a
+     * caller learning an answer, not an event that changes the account.
      */
-    fun enrolDevice(accountId: String, publicKey: ByteArray, sealedLabel: ByteArray): String? = tx {
-        val alreadyPresent = query(
-            "SELECT 1 FROM devices WHERE account_id = ? AND public_key = ?", accountId, publicKey,
-        ) { it.next() }
-        if (alreadyPresent) return@tx null
-        insertDevice(accountId, publicKey, sealedLabel, clock.nowMillis())
+    fun enrolDevice(accountId: String, publicKey: ByteArray, sealedLabel: ByteArray): EnrolOutcome = tx {
+        val existing = query(
+            "SELECT device_id, revoked_at FROM devices WHERE account_id = ? AND public_key = ?",
+            accountId, publicKey,
+        ) { if (it.next()) it.getString(1) to it.getObject(2) else null }
+
+        if (existing != null) {
+            val (deviceId, revokedAt) = existing
+            return@tx if (revokedAt != null) EnrolOutcome.Revoked
+            else EnrolOutcome.AlreadyEnrolled(deviceId)
+        }
+        EnrolOutcome.Enrolled(insertDevice(accountId, publicKey, sealedLabel, clock.nowMillis()))
     }
 
     private fun insertDevice(
