@@ -33,7 +33,7 @@ class SettingsViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val syncSettingsRepository: SyncSettingsRepository,
     private val syncTransportStatus: SyncTransportStatus,
-    syncController: SyncController,
+    private val syncController: SyncController,
     private val secureUnlockManager: SecureUnlockManager,
     private val authRepository: AuthRepository,
     private val biometricEnroller: BiometricEnroller,
@@ -133,7 +133,19 @@ class SettingsViewModel @Inject constructor(
             SettingsIntent.SaveServerUrl -> saveServerUrl()
             SettingsIntent.ClearServerUrl -> clearServerUrl()
             SettingsIntent.CheckServer -> checkServer()
+            SettingsIntent.RetryAfterHalt -> retryAfterHalt()
         }
+    }
+
+    /**
+     * Forget the halt and run one pass.
+     *
+     * Nothing is echoed into state here: the result arrives through the controller's own state
+     * flow, which this screen already mirrors. Showing "trying..." locally would be this screen
+     * inventing a status, and the engine's `Running` is both truer and already wired.
+     */
+    private fun retryAfterHalt() {
+        viewModelScope.launch { syncController.clearHaltAndSync() }
     }
 
     /**

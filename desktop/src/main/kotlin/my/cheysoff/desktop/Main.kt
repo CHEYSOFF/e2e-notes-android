@@ -27,6 +27,11 @@ import my.cheysoff.desktop.ui.UnlockScreen
 import my.cheysoff.desktop.ui.MananaWindow
 import my.cheysoff.desktop.vault.DesktopVault
 import my.cheysoff.desktop.vault.VaultLocation
+import java.io.PrintWriter
+import java.io.StringWriter
+import java.nio.file.Files
+import java.nio.file.StandardOpenOption
+import java.time.Instant
 import java.nio.file.Path
 import java.nio.file.Paths
 
@@ -40,6 +45,7 @@ import java.nio.file.Paths
  */
 fun main(args: Array<String>) {
     val directory = vaultDirectoryFrom(args)
+    installCrashLog(directory)
     val vault = DesktopVault(
         directory = directory,
         credentialStore = CredentialStores.forHost(HostOs.current(), directory),
@@ -75,8 +81,13 @@ fun main(args: Array<String>) {
                     }
                 },
                 syncLabel = syncLabelOf(controller.syncState),
-                onSync = if (controller.syncState is DesktopSyncState.Unavailable) null
-                else controller::syncNow,
+                // A halted engine refuses every ordinary pass, so the control has to do something
+                // different rather than something that provably will not work.
+                onSync = when (controller.syncState) {
+                    is DesktopSyncState.Unavailable -> null
+                    is DesktopSyncState.Halted -> controller::clearHaltAndSync
+                    else -> controller::syncNow
+                },
                 // Offered only where it can work. A computer with no server enrolment cannot
                 // authorise anything, and a button that always led to "name a server first" would
                 // be an invitation to a dead end rather than a feature.
@@ -200,6 +211,47 @@ internal fun syncLabelOf(state: DesktopSyncState): String? = when (state) {
     is DesktopSyncState.Done ->
         if (state.applied == 0) "Synced, nothing new" else "Synced, ${state.applied} new"
     DesktopSyncState.Deferred -> "Server asked to wait"
-    is DesktopSyncState.Halted -> "Stopped: ${state.reason}"
+    // Named, and phrased as an invitation to look again rather than a verdict. A halt does not
+    // clear itself and clicking this is the only way to ask the engine to re-check -- which, for
+    // most reasons, will find the same thing and stop again. That is the honest outcome; what the
+    // control removes is the dead end for the case where the cause has been dealt with.
+    is DesktopSyncState.Halted -> "Stopped: ${state.reason} - retry"
     is DesktopSyncState.Failed -> "Couldn't reach the server"
+}
+
+/**
+ * Writes any uncaught throwable to `crash.log` beside the vault.
+ *
+ * The packaged app has no console: jpackage's launcher replaces whatever went wrong with a dialog
+ * saying "Failed to launch JVM" and discards the stack trace. That is close to useless — it names
+ * neither the exception nor the point of failure, and it says "launch" for a crash that can happen
+ * long after launch, which sends the reader looking in the wrong place entirely.
+ *
+ * So the app keeps its own record. The file sits next to the vault rather than in a temp directory
+ * because that is the one path the user can already be told about, and it is appended rather than
+ * replaced so a second occurrence does not erase the first.
+ *
+ * Failing to write the log must never be what takes the app down, hence the `runCatching`. The
+ * previous handler is still called afterwards, so nothing about normal JVM behaviour changes.
+ */
+private fun installCrashLog(directory: Path) {
+    val previous = Thread.getDefaultUncaughtExceptionHandler()
+    Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+        runCatching {
+            Files.createDirectories(directory)
+            val trace = StringWriter().also { error.printStackTrace(PrintWriter(it)) }
+            val entry = buildString {
+                append("---- ").append(Instant.now()).append(" on thread ")
+                append(thread.name).appendLine(" ----")
+                append(trace).appendLine()
+            }
+            Files.writeString(
+                directory.resolve("crash.log"),
+                entry,
+                StandardOpenOption.CREATE,
+                StandardOpenOption.APPEND,
+            )
+        }
+        previous?.uncaughtException(thread, error)
+    }
 }

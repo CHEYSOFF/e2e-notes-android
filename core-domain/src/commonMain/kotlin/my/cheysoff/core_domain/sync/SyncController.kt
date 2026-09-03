@@ -36,6 +36,20 @@ interface SyncController {
 
     /** Runs a pass and suspends until it ends, returning the same value [state] then holds. */
     suspend fun syncNow(trigger: SyncTrigger): SyncPassState
+
+    /**
+     * Forgets a recorded halt and runs one pass.
+     *
+     * Only ever in response to a person asking. A halt means the engine found something it cannot
+     * fix and stopping was the correct response, so clearing one automatically — on a timer, or as
+     * error recovery — would convert a deliberate stop into a loop that halts and resumes forever.
+     *
+     * The likely result is [SyncPassState.Halted] again, with the same reason, because the cause is
+     * usually still there. That is a success for this method: the point is that a halt whose cause
+     * *has* been fixed — the app updated after an unsupported payload, the device re-paired after a
+     * revocation — is no longer a dead end that needs a reinstall to escape.
+     */
+    suspend fun clearHaltAndSync(): SyncPassState
 }
 
 /**
@@ -52,6 +66,12 @@ enum class SyncTrigger {
 
     /** The user pulled the notes list down. */
     MANUAL_REFRESH,
+
+    /**
+     * A timer, while the app is open and unlocked. Nobody is watching a spinner for this one, so
+     * it is the trigger that must never announce that it did nothing.
+     */
+    PERIODIC,
 }
 
 /**

@@ -1,6 +1,7 @@
 package my.cheysoff.desktop.app
 
 import my.cheysoff.core_crypto.sync.Base64Url
+import my.cheysoff.core_domain.sync.PeriodicSyncPolicy
 import my.cheysoff.core_sync_engine.SyncOutcome
 import my.cheysoff.core_sync_net.DeviceCredentials
 import my.cheysoff.core_sync_net.http.ServerEndpoint
@@ -10,7 +11,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import my.cheysoff.core_pairing.protocol.RendezvousUrl
@@ -133,15 +141,6 @@ class AppController(
     val credentialStoreName: String? = vault.credentialStoreDescription
 
     /**
-     * The ARK a completed pairing produced, held between the SAS confirmation and the passphrase
-     * being chosen.
-     *
-     * A private field rather than a value on [Screen], because [screen] is Compose state that the
-     * runtime keeps, snapshots and reads from arbitrary threads. Cleared and zeroed by
-     * [abandonPairing], which every path out of pairing goes through — including the successful one,
-     * once `setUp` has copied it.
-     */
-    /**
      * What the last sync pass did, for the workspace to show.
      *
      * Held here rather than in the workspace because a pass outlives the screen that started it:
@@ -154,6 +153,21 @@ class AppController(
     /** Built when the vault opens, and only when this device is actually enrolled on a server. */
     private var syncService: DesktopSyncService? = null
 
+    /** Cancelled and replaced whenever a vault opens, so a locked vault stops pushing. */
+    private var localEditJob: Job? = null
+
+    /** The timer-triggered pass. Lives exactly as long as an open vault does -- see [lock]. */
+    private var periodicSyncJob: Job? = null
+
+    /**
+     * The ARK a completed pairing produced, held between the SAS confirmation and the passphrase
+     * being chosen.
+     *
+     * A private field rather than a value on [Screen], because [screen] is Compose state that the
+     * runtime keeps, snapshots and reads from arbitrary threads. Cleared and zeroed by
+     * [abandonPairing], which every path out of pairing goes through -- including the successful
+     * one, once `setUp` has copied it.
+     */
     private var pairedArk: ByteArray? = null
 
     /**
@@ -510,6 +524,17 @@ class AppController(
 
     /** Closes the vault: the store, then the keys. */
     fun lock() {
+        // Both triggers die with the vault they belong to. Until there was a timer this was
+        // survivable -- the edit watcher only fires on a write, and nothing writes while locked --
+        // but a loop that outlived the lock would call runPass every minute against a closed store
+        // and a service holding keys the session has just zeroed.
+        localEditJob?.cancel()
+        localEditJob = null
+        periodicSyncJob?.cancel()
+        periodicSyncJob = null
+        syncService = null
+        syncState = DesktopSyncState.Unavailable
+
         (screen as? Screen.Open)?.let { open ->
             open.store.close()
             open.session.close()
@@ -571,8 +596,43 @@ class AppController(
             }
         }
         syncState = if (syncService == null) DesktopSyncState.Unavailable else DesktopSyncState.Idle
-    }
 
+        // The triggers, rebuilt whenever the pipeline is. Both are started only when there is a
+        // service for them to drive: a vault with no server would otherwise run a timer for the
+        // sole purpose of returning early once a minute.
+        localEditJob?.cancel()
+        localEditJob = null
+        periodicSyncJob?.cancel()
+        periodicSyncJob = null
+
+        if (syncService == null) return
+
+        // Push what was just typed, without pushing on every keystroke. A pass previously ran only
+        // on unlock and on the title-bar control, so a note written and left alone stayed on this
+        // machine indefinitely while the app cheerfully reported its last successful sync.
+        // Debounced rather than immediate because the editor autosaves as you type, and a pass per
+        // character would be absurd.
+        localEditJob = open.repository.localWrites
+            .drop(1)
+            .debounce(LOCAL_EDIT_SYNC_DELAY_MS)
+            .onEach { syncNow() }
+            .launchIn(scope)
+
+        // And a pass on a timer, which is the only trigger that does not require this machine to
+        // have done something. Without it a laptop left open never learns about a note written on
+        // the phone -- while displaying the accurate, and in that moment deeply misleading, result
+        // of its last pass.
+        periodicSyncJob = scope.launch {
+            while (isActive) {
+                delay(PeriodicSyncPolicy.INTERVAL_MS)
+                val shouldRun = PeriodicSyncPolicy.shouldRun(
+                    passRunning = syncState is DesktopSyncState.Syncing,
+                    halted = syncState is DesktopSyncState.Halted,
+                )
+                if (shouldRun) runPass(clearHalt = false)
+            }
+        }
+    }
     /**
      * The sync endpoint for a rendezvous address, or null when this build will not talk to it.
      *
@@ -585,36 +645,82 @@ class AppController(
         ServerEndpoint(server.base)
     } catch (e: IllegalArgumentException) {
         null
+
     }
 
     /**
-     * Runs one sync pass, if this device can sync at all.
+     * Runs one sync pass, if this device can sync at all. Returns immediately; the pass runs on
+     * [scope].
      *
-     * Foreground and on demand, deliberately: there is no timer and no background service, because
-     * a desktop that synced while locked would need key material available while locked, and
-     * lock-on-close is one of this app's stronger properties.
+     * Foreground only, deliberately: there is no background service, because a desktop that synced
+     * while locked would need key material available while locked, and lock-on-close is one of this
+     * app's stronger properties. There IS a timer now -- see [periodicSyncJob] -- but it runs only
+     * while a vault is open, which is the same window this method is callable in.
      *
      * Concurrent calls are refused rather than queued. Two passes at once would each push the same
      * dirty rows and the second would take a `409` on every one of them -- correct, since the merge
      * is idempotent, but a guaranteed round trip of conflicts for no reason.
      */
     fun syncNow() {
+        scope.launch { runPass(clearHalt = false) }
+    }
+
+    /**
+     * Forgets a recorded halt and runs one pass, because a person asked.
+     *
+     * A halt does not clear itself and nothing else may clear it -- see `SyncStore.clearHalt`. The
+     * expected outcome is the same halt again; what this removes is the dead end for the case where
+     * the cause has actually been dealt with.
+     */
+    fun clearHaltAndSync() {
+        scope.launch { runPass(clearHalt = true) }
+    }
+
+    /**
+     * One pass, suspending until it ends.
+     *
+     * Separate from [syncNow] so the periodic loop can measure its interval from the *end* of a
+     * pass. A loop that launched and slept would measure between starts, and on a connection slow
+     * enough to make a pass outlast the interval it would queue ticks behind a pass that is already
+     * doing their work.
+     */
+    private suspend fun runPass(clearHalt: Boolean) {
         val service = syncService ?: return
+        // Checked and set with no suspension in between, so two calls landing on this dispatcher
+        // cannot both get past it.
         if (syncState is DesktopSyncState.Syncing) return
         syncState = DesktopSyncState.Syncing
-        scope.launch {
+        run {
             syncState = try {
-                when (val outcome = withContext(Dispatchers.IO) { service.syncOnce() }) {
-                    is SyncOutcome.Completed -> DesktopSyncState.Done(outcome.stats.applied)
+                when (
+                    val outcome = withContext(Dispatchers.IO) {
+                        if (clearHalt) service.clearHaltAndSyncOnce() else service.syncOnce()
+                    }
+                ) {
+                    is SyncOutcome.Completed -> {
+                        // The engine wrote straight into the record store, which the repository's
+                        // in-memory snapshot knows nothing about. Without this the screen keeps
+                        // showing what it held before the pass -- and a message saying twenty-six
+                        // notes arrived, over an empty list, is worse than no message at all.
+                        (screen as? Screen.Open)?.repository?.refreshFromStore()
+                        DesktopSyncState.Done(outcome.stats.applied)
+                    }
                     is SyncOutcome.Deferred -> DesktopSyncState.Deferred
                     // A halt is persisted and does not clear itself, so this device will not sync
                     // again until somebody deals with it. Named on screen rather than logged.
                     is SyncOutcome.Halted -> DesktopSyncState.Halted(outcome.reason.name)
-                    // Another pass beat this one to it; its result will land through the same
-                    // state, so there is nothing to report and nothing to retry.
-                    SyncOutcome.AlreadyRunning -> DesktopSyncState.Syncing
+                    // Another pass beat this one to it and will report its own result. Resolved
+                    // to Idle rather than left at Syncing: with the guard at the top of this
+                    // method, a state that stays Syncing means every later call returns
+                    // immediately and this device never syncs again until it restarts.
+                    SyncOutcome.AlreadyRunning -> DesktopSyncState.Idle
                 }
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
+                // Throwable, not Exception. A NoClassDefFoundError from a runtime missing a module
+                // is an Error, and catching only Exception left `syncState` stuck at Syncing --
+                // which the guard above then reads as "a pass is in flight", disabling sync for
+                // the rest of the session with no message and nothing in the UI to explain it.
+                // That is exactly how a packaged build failed here once already.
                 DesktopSyncState.Failed(e.message ?: e::class.java.simpleName)
             }
         }
@@ -690,3 +796,11 @@ class AppController(
                 "minute. Add words or other characters."
     }
 }
+
+/**
+ * How long to wait after the last local edit before pushing.
+ *
+ * Long enough to cover the editor's 600 ms autosave and an ordinary pause in typing, short enough
+ * that a note written and left alone reaches the other device while the person still expects it to.
+ */
+private const val LOCAL_EDIT_SYNC_DELAY_MS = 2_500L

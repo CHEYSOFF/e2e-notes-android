@@ -40,4 +40,14 @@ internal class FakeSyncController(
         _state.value = next
         return next
     }
+
+    /** Recorded separately, because the notes list must never be the thing that clears a halt. */
+    var haltsCleared: Int = 0
+        private set
+
+    override suspend fun clearHaltAndSync(): SyncPassState {
+        haltsCleared++
+        _state.value = next
+        return next
+    }
 }

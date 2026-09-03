@@ -639,6 +639,62 @@ class SyncEngineTest {
     }
 
     /**
+     * Clearing the halt is what makes it recoverable rather than terminal.
+     *
+     * The cause is usually still there, so the next pass usually stops on the same thing again --
+     * which is correct, and is asserted separately below. What matters here is that the engine
+     * *looks*, because the alternative is that a person who fixed the cause (updated the app after
+     * an unsupported payload, re-paired after a revocation) has no way to say so short of a
+     * reinstall that costs them their local library.
+     */
+    @Test
+    fun `a cleared halt lets the engine run again`() = runBlocking {
+        val store = RecordingStore()
+        store.recordHalt(HaltReason.UNSUPPORTED_PAYLOAD_VERSION)
+        val transport = ScriptedTransport()
+
+        assertEquals(
+            "precondition: it refuses while halted",
+            HaltReason.UNSUPPORTED_PAYLOAD_VERSION,
+            (engine(store, transport).runPass() as SyncOutcome.Halted).reason,
+        )
+        assertEquals(0, transport.pulls.size)
+
+        store.clearHalt()
+        val outcome = engine(store, transport).runPass()
+
+        assertTrue("a cleared halt must run, not refuse: $outcome", outcome is SyncOutcome.Completed)
+        assertEquals("and it must actually reach the server", 1, transport.pulls.size)
+    }
+
+    /**
+     * The honest half of the promise: clearing a halt repairs nothing.
+     *
+     * If the condition is still true the engine finds it again and stops again, and the UI copy is
+     * written against exactly that ("Try again", never "Fix"). A build that cleared a halt and then
+     * *stayed* running against a rolled-back server would be the data-loss path the halt exists to
+     * prevent.
+     */
+    @Test
+    fun `clearing a halt whose cause remains halts again on the next pass`() = runBlocking {
+        val store = RecordingStore()
+        store.put(stored(note(content = "version two", rowClock = hlc(20)), lastSyncedSeq = 2L))
+        val rolledBack = { ScriptedTransport(pages = listOf(openedPage(note(content = "version one", rowClock = hlc(10))))) }
+        engine(store, rolledBack()).runPass()
+        assertEquals(HaltReason.SERVER_ROLLED_BACK, store.halt())
+
+        store.clearHalt()
+        val outcome = engine(store, rolledBack()).runPass()
+
+        assertEquals(
+            "the same server, the same rollback, the same refusal",
+            HaltReason.SERVER_ROLLED_BACK,
+            (outcome as SyncOutcome.Halted).reason,
+        )
+        assertEquals(HaltReason.SERVER_ROLLED_BACK, store.halt())
+    }
+
+    /**
      * The halt outlives the process, because so does the thing that caused it. An engine that
      * forgot its halt on restart would resume syncing against precisely the server it refused to
      * trust.

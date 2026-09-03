@@ -10,6 +10,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import my.cheysoff.core_crypto.SecureUnlockManager
 import my.cheysoff.notes.sync.ApplicationScope
+import my.cheysoff.notes.sync.PeriodicSync
 import my.cheysoff.notes.sync.SyncOnUnlock
 import javax.inject.Inject
 
@@ -31,6 +32,14 @@ class MainApplication : Application() {
      */
     @Inject
     lateinit var syncOnUnlock: dagger.Lazy<SyncOnUnlock>
+
+    /**
+     * The timer-triggered pass, which is what makes a note written on another device turn up here
+     * without anyone asking. `dagger.Lazy` and started on [appScope] for the same reasons as
+     * [syncOnUnlock] -- it resolves the same graph.
+     */
+    @Inject
+    lateinit var periodicSync: dagger.Lazy<PeriodicSync>
 
     /**
      * The app-scoped coroutine scope. Object construction only — no disk, no Keystore — so unlike
@@ -74,5 +83,9 @@ class MainApplication : Application() {
         // (Keystore, device identity, preferences) happens on Dispatchers.IO. There is nothing to
         // sync until an unlock, which is by definition later than this.
         appScope.launch { syncOnUnlock.get().start() }
+        // And every minute after that, for as long as the app stays unlocked. Its loop is started
+        // and cancelled by the same `unlocked` flow the line above collects, so this adds a
+        // trigger and not a second answer to "may we sync right now".
+        appScope.launch { periodicSync.get().start() }
     }
 }

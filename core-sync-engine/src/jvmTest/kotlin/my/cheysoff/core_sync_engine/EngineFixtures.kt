@@ -137,6 +137,11 @@ class RecordingStore(
         writes += "halt=$reason"
     }
 
+    override suspend fun clearHalt() {
+        halt = null
+        writes += "halt=cleared"
+    }
+
     /** Puts a row in place without going through the engine, for a test's starting state. */
     fun put(row: StoredRecord) {
         rows[key(row.record.type, row.record.uuid)] = row

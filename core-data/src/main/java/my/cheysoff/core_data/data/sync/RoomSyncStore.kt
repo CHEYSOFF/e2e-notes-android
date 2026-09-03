@@ -230,4 +230,6 @@ class RoomSyncStore(
     /** Idempotent, keeping the first reason — the guard is in [SyncStateDao.recordHalt]. */
     override suspend fun recordHalt(reason: HaltReason) =
         syncStateDao.recordHalt(accountId, reason.name)
+
+    override suspend fun clearHalt() = syncStateDao.clearHalt(accountId)
 }

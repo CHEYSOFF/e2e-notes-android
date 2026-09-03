@@ -7,6 +7,9 @@ import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.desktop.keychain.NoCredentialStore
 import my.cheysoff.desktop.store.RecordNotesRepository
 import my.cheysoff.desktop.store.RecordStore
+import my.cheysoff.core_crypto.sync.AccountRootKey
+import my.cheysoff.desktop.vault.PairedEnrolment
+import my.cheysoff.desktop.vault.DeviceKeyPair
 import my.cheysoff.desktop.vault.AccountOrigin
 import my.cheysoff.desktop.vault.DesktopVault
 import my.cheysoff.desktop.vault.SetupResult
@@ -85,5 +88,37 @@ class DemoVaultProvisioner {
         // Long enough to satisfy PassphrasePolicy; obviously a fixture, so nobody is tempted to
         // reuse it for anything that holds real notes.
         const val PASSPHRASE = "demo-vault-passphrase"
+    }
+    /**
+     * A vault that looks like one produced by pairing: it carries a sync identity, so opening it
+     * exercises the sync path that a standalone vault never touches.
+     *
+     * That distinction is the whole reason this exists. A standalone vault unlocks without ever
+     * constructing a transport, so it cannot reproduce a failure in the code that only a paired
+     * device runs.
+     *
+     *     ./gradlew :desktop:test --tests '*DemoVaultProvisioner*'      *         -Dmanana.pairedVault=PATH -Dmanana.pairedServer=https://host
+     */
+    @Test
+    fun provisionPaired() {
+        val target = System.getProperty("manana.pairedVault")
+        val server = System.getProperty("manana.pairedServer")
+        assumeNotNull(target)
+        assumeNotNull(server)
+
+        val directory = Paths.get(target).toAbsolutePath()
+        val vault = DesktopVault(directory = directory, credentialStore = NoCredentialStore)
+        val created = vault.setUp(
+            PASSPHRASE.toCharArray(),
+            AccountOrigin.PAIRED,
+            AccountRootKey.generateArk(),
+            PairedEnrolment(
+                serverUrl = server!!,
+                deviceId = "test-device-id",
+                deviceKey = DeviceKeyPair.generate(),
+            ),
+        )
+        check(created is SetupResult.Created) { "could not set up a paired vault: " + created }
+        println("provisioned PAIRED vault at " + directory + " for " + server)
     }
 }

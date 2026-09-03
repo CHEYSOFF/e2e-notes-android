@@ -421,5 +421,23 @@ class RecordStore private constructor(private val connection: Connection) : Auto
         }
     }
 
+    /**
+     * Clears the halt, so the next pass runs instead of refusing. See `SyncStore.clearHalt` for
+     * what this does and does not fix -- in short, the next pass usually halts again, and that is
+     * the intended outcome.
+     *
+     * An UPDATE rather than an upsert: a device with no `sync_state` row has never pulled and
+     * cannot be halted, so inserting one would invent a cursor for an account it knows nothing
+     * about.
+     */
+    fun clearHalt(accountId: String) {
+        connection.prepareStatement(
+            "UPDATE sync_state SET halt = NULL WHERE account_id = ?",
+        ).use { statement ->
+            statement.setString(1, accountId)
+            statement.executeUpdate()
+        }
+    }
+
     override fun close() = connection.close()
 }
