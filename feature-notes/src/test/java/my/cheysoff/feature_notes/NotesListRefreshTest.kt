@@ -45,6 +45,29 @@ class NotesListRefreshTest {
     }
 
     /**
+     * A pull-to-refresh must not clear a halt.
+     *
+     * Every halt is a condition the engine cannot repair, and stopping was the correct response --
+     * so the only thing allowed to clear one is a person who went to Settings and pressed the
+     * control that says so. A gesture people make absent-mindedly, on a list, while looking for
+     * something else, is the opposite of that: it would turn every deliberate stop into a
+     * halt-resume loop against the very server the engine refused to trust.
+     */
+    @Test
+    fun `pulling down never clears a halt`() = runTest {
+        syncController.answerWith(SyncPassState.Halted("The server was rolled back."))
+        val vm = viewModel()
+
+        vm.onIntent(NotesListIntent.RefreshRequested)
+        advanceUntilIdle()
+        vm.onIntent(NotesListIntent.RefreshRequested)
+        advanceUntilIdle()
+
+        assertEquals("a refresh asked for an ordinary pass, twice", 2, syncController.triggers.size)
+        assertEquals("and cleared nothing", 0, syncController.haltsCleared)
+    }
+
+    /**
      * The list is a Room `Flow` and stays on screen throughout: `refreshing` drives a spinner over
      * a usable list, and `isLoading` — which gates the whole screen — must not be touched. Taking
      * someone's notes away for the duration of a network call would be the worse trade.

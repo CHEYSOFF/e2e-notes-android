@@ -149,6 +149,12 @@ class PeriodicSyncLoopTest {
             throw AssertionError("the loop must suspend on a pass, not fire and forget")
         }
 
+        override suspend fun clearHaltAndSync(): SyncPassState {
+            // A halt is cleared only when a person asks. A timer that cleared one would turn a
+            // deliberate stop into a halt-resume loop against the very server it refused to trust.
+            throw AssertionError("the timer must never clear a halt")
+        }
+
         override suspend fun syncNow(trigger: SyncTrigger): SyncPassState {
             triggers += trigger
             if (passDurationMs > 0) {

@@ -76,6 +76,16 @@ interface SyncStateDao {
     suspend fun recordHalt(accountId: String, reason: String)
 
     /**
+     * Clears the halt for [accountId]. No-op when there is no row, which is the same as healthy.
+     *
+     * An UPDATE rather than an upsert, deliberately: a device with no `sync_state` row has never
+     * pulled and cannot be halted, and inserting one here would fabricate a cursor of 0 for an
+     * account this device knows nothing about.
+     */
+    @Query("UPDATE sync_state SET haltReason = '' WHERE accountId = :accountId")
+    suspend fun clearHalt(accountId: String)
+
+    /**
      * Forgets everything about an account's sync position.
      *
      * The re-baseline path: after a server rollback, the engine halts and the user is asked to

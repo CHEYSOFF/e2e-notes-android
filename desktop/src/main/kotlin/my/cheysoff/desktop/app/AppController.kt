@@ -362,7 +362,7 @@ class AppController(
                     passRunning = syncState is DesktopSyncState.Syncing,
                     halted = syncState is DesktopSyncState.Halted,
                 )
-                if (shouldRun) runPass()
+                if (shouldRun) runPass(clearHalt = false)
             }
         }
         screen = Screen.Open(session, repository, store)
@@ -388,7 +388,18 @@ class AppController(
      * is idempotent, but a guaranteed round trip of conflicts for no reason.
      */
     fun syncNow() {
-        scope.launch { runPass() }
+        scope.launch { runPass(clearHalt = false) }
+    }
+
+    /**
+     * Forgets a recorded halt and runs one pass, because a person asked.
+     *
+     * A halt does not clear itself and nothing else may clear it -- see `SyncStore.clearHalt`. The
+     * expected outcome is the same halt again; what this removes is the dead end for the case where
+     * the cause has actually been dealt with.
+     */
+    fun clearHaltAndSync() {
+        scope.launch { runPass(clearHalt = true) }
     }
 
     /**
@@ -399,7 +410,7 @@ class AppController(
      * enough to make a pass outlast the interval it would queue ticks behind a pass that is already
      * doing their work.
      */
-    private suspend fun runPass() {
+    private suspend fun runPass(clearHalt: Boolean) {
         val service = syncService ?: return
         // Checked and set with no suspension in between, so two calls landing on this dispatcher
         // cannot both get past it.
@@ -407,7 +418,11 @@ class AppController(
         syncState = DesktopSyncState.Syncing
         run {
             syncState = try {
-                when (val outcome = withContext(Dispatchers.IO) { service.syncOnce() }) {
+                when (
+                    val outcome = withContext(Dispatchers.IO) {
+                        if (clearHalt) service.clearHaltAndSyncOnce() else service.syncOnce()
+                    }
+                ) {
                     is SyncOutcome.Completed -> {
                         // The engine wrote straight into the record store, which the repository's
                         // in-memory snapshot knows nothing about. Without this the screen keeps
