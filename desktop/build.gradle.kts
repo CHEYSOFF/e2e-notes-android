@@ -120,6 +120,14 @@ compose.desktop {
             // `macOS` block below is filled in properly even though `packageDmg` can only run on a
             // Mac. Leaving it out would mean the first person with a Mac has to invent a bundle ID,
             // and a bundle ID that changes after a release is a different application to the OS.
+            // jlink builds the bundled runtime from the modules it can SEE being used, and a JDBC
+            // driver is loaded reflectively -- so `java.sql` is invisible to it and gets stripped.
+            // The packaged app then dies with NoClassDefFoundError: java/sql/DriverManager the
+            // first time it opens the record store, which is immediately after the passphrase.
+            // Nothing catches this in development: every test and `:desktop:run` uses a full JDK,
+            // where the module is always present. Only the installed build can fail this way.
+            modules("java.sql")
+
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
 
             packageName = "Manana"
