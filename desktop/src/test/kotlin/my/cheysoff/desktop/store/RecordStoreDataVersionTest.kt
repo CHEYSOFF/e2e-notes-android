@@ -41,6 +41,19 @@ class RecordStoreDataVersionTest {
         assertEquals(12L, store.cursor(account))
     }
 
+    /**
+     * The re-baseline that Task 7 adds pulls from `since = 0`, so its committable seq starts low
+     * and climbs back up past whatever the device already held. `saveCursor`'s `MAX(cursor,
+     * excluded.cursor)` is what stops that pull from ever writing a cursor behind the one already
+     * stored -- this pins that guard directly, independent of the engine that relies on it.
+     */
+    @Test
+    fun `the cursor never moves backwards`() {
+        store.saveCursor(account, 12L)
+        store.saveCursor(account, 5L)
+        assertEquals(12L, store.cursor(account))
+    }
+
     /** A vault written before this column existed must open, not throw. */
     @Test
     fun `a store opened twice keeps its version`() {

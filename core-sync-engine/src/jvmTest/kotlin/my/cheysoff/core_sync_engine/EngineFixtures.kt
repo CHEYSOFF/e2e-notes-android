@@ -176,17 +176,22 @@ class ScriptedTransport(
     private val pushResponses: List<PushResponse> = emptyList(),
     private val onChanges: (Int) -> Unit = {},
     private val onPush: (Int) -> Unit = {},
+    /** When set, every `changesSince` call throws it instead of answering. */
+    private val failOnPull: SyncTransportException? = null,
 ) : SyncTransport {
 
-    /** Every `(since, limit)` this transport was asked for. */
-    val pulls = mutableListOf<Pair<Long, Int>>()
+    /** Every `changesSince` call, in order. The tests assert on `since`, not just on the result. */
+    val pulls = mutableListOf<PullRequest>()
 
     /** Every batch this transport was handed. */
     val pushes = mutableListOf<List<PushRequest>>()
 
+    data class PullRequest(val since: Long, val limit: Int)
+
     override suspend fun changesSince(since: Long, limit: Int): ChangePage {
         onChanges(pulls.size)
-        pulls += since to limit
+        pulls += PullRequest(since, limit)
+        failOnPull?.let { throw it }
         if (pages.isEmpty()) return ChangePage(emptyList(), hasMore = false)
         return pages[minOf(pulls.size - 1, pages.size - 1)]
     }
