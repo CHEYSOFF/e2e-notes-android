@@ -135,16 +135,10 @@ class Migration6to7Test {
 
     private fun openMigrated(): NoteDatabase =
         Room.databaseBuilder(ctx, NoteDatabase::class.java, dbName)
-            .addMigrations(
-                NoteDatabase.MIGRATION_1_2,
-                NoteDatabase.MIGRATION_2_3,
-                NoteDatabase.MIGRATION_3_4,
-                NoteDatabase.MIGRATION_4_5,
-                NoteDatabase.MIGRATION_5_6,
-                NoteDatabase.MIGRATION_6_7,
-                NoteDatabase.MIGRATION_7_8,
-                NoteDatabase.MIGRATION_8_9,
-            )
+            // The whole chain, spread rather than listed: a hand-written list is a second copy of
+            // `ALL_MIGRATIONS` that goes stale silently, which is how `Migration4to5Test` came to
+            // be red for the life of schema v6.
+            .addMigrations(*NoteDatabase.ALL_MIGRATIONS)
             .build()
 
     /**
