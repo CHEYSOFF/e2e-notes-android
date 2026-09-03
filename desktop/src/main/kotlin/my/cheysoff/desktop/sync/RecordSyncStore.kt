@@ -151,6 +151,8 @@ class RecordSyncStore(
 
     override suspend fun recordHalt(reason: HaltReason) = store.recordHalt(accountId, reason.name)
 
+    override suspend fun clearHalt() = store.clearHalt(accountId)
+
     /**
      * The `createdAt` of a record this device already holds, or null.
      *

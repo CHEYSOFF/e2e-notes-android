@@ -195,3 +195,17 @@ fun syncCheckAvailable(status: SyncStatus): Boolean = when (status) {
     // worse.
     else -> true
 }
+
+/**
+ * Whether the "Try again" action is offered — only while the engine is actually halted.
+ *
+ * A halt is the one state where every other control provably does nothing: the engine refuses at
+ * the top of each pass, so pulling the notes list down, waiting for the timer, and unlocking again
+ * all have exactly no effect. This is the only thing that can change the situation, and it is
+ * confined to that state because clearing a halt that is not there is a button doing nothing.
+ *
+ * What it must never be is *automatic*. Every halt is a condition the engine cannot repair, and
+ * clearing one on a timer would turn a deliberate stop into a halt-resume loop — see
+ * `SyncStore.clearHalt`, which is where that reasoning lives.
+ */
+fun syncRetryAvailable(status: SyncStatus): Boolean = status == SyncStatus.HALTED

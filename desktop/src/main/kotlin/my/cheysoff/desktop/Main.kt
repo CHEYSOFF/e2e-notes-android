@@ -79,8 +79,13 @@ fun main(args: Array<String>) {
                     }
                 },
                 syncLabel = syncLabelOf(controller.syncState),
-                onSync = if (controller.syncState is DesktopSyncState.Unavailable) null
-                else controller::syncNow,
+                // A halted engine refuses every ordinary pass, so the control has to do something
+                // different rather than something that provably will not work.
+                onSync = when (controller.syncState) {
+                    is DesktopSyncState.Unavailable -> null
+                    is DesktopSyncState.Halted -> controller::clearHaltAndSync
+                    else -> controller::syncNow
+                },
                 onExit = ::exitApplication,
             )
         } else {
@@ -182,7 +187,11 @@ internal fun syncLabelOf(state: DesktopSyncState): String? = when (state) {
     is DesktopSyncState.Done ->
         if (state.applied == 0) "Synced, nothing new" else "Synced, ${state.applied} new"
     DesktopSyncState.Deferred -> "Server asked to wait"
-    is DesktopSyncState.Halted -> "Stopped: ${state.reason}"
+    // Named, and phrased as an invitation to look again rather than a verdict. A halt does not
+    // clear itself and clicking this is the only way to ask the engine to re-check -- which, for
+    // most reasons, will find the same thing and stop again. That is the honest outcome; what the
+    // control removes is the dead end for the case where the cause has been dealt with.
+    is DesktopSyncState.Halted -> "Stopped: ${state.reason} - retry"
     is DesktopSyncState.Failed -> "Couldn't reach the server"
 }
 
