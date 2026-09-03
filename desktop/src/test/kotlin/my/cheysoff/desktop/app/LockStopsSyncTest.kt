@@ -9,7 +9,7 @@ import my.cheysoff.desktop.keychain.NoCredentialStore
 import my.cheysoff.desktop.vault.AccountOrigin
 import my.cheysoff.desktop.vault.DesktopVault
 import my.cheysoff.desktop.vault.DeviceKeyPair
-import my.cheysoff.desktop.vault.PairedEnrolment
+import my.cheysoff.desktop.vault.ServerEnrolment
 import my.cheysoff.desktop.vault.SetupResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -50,7 +50,7 @@ class LockStopsSyncTest {
             passphrase.toCharArray(),
             AccountOrigin.PAIRED,
             AccountRootKey.generateArk(),
-            PairedEnrolment(
+            ServerEnrolment(
                 serverUrl = "https://notes.example.com",
                 deviceId = "device-id",
                 deviceKey = DeviceKeyPair.generate(),
@@ -65,10 +65,13 @@ class LockStopsSyncTest {
             controller.unlock(passphrase.toCharArray())
             awaitUntil("the vault to open") { controller.screen is AppController.Screen.Open }
 
-            assertTrue(
-                "a paired vault must come up able to sync, but was ${controller.syncState}",
-                controller.syncState !is DesktopSyncState.Unavailable,
-            )
+            // Waited for, not asserted straight after the screen: `open` publishes the screen
+            // before it attaches the sync pipeline, so an open screen does not yet imply an
+            // attached one. Reading `syncState` at that moment is a race that passes or fails on
+            // scheduling. The timeout is what fails the test if it never attaches.
+            awaitUntil("sync to be attached") {
+                controller.syncState !is DesktopSyncState.Unavailable
+            }
 
             controller.lock()
 
