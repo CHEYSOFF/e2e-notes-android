@@ -180,6 +180,11 @@ private fun lastPassLine(sync: SyncPassState): String {
         if (summary.applied > 0) add("applied ${summary.applied}")
         if (summary.conflictCopies > 0) add("kept ${summary.conflictCopies} conflicting copy")
         if (summary.unreadable > 0) add("couldn't read ${summary.unreadable}")
+        // Worded as a fact about this app, not about the data: the records are fine, they are on
+        // the other device, and the fix is to update this one. "Couldn't read" would describe
+        // damage and send someone looking for a problem that does not exist -- see the same
+        // distinction in the desktop app's `unlockDiagnosticsMessage`.
+        if (summary.ignored > 0) add("skipped ${summary.ignored} needing a newer version of the app")
     }
     if (parts.isEmpty()) return "The last sync had nothing to send or receive."
     return "The last sync ${parts.joinToString(", ")}."
