@@ -991,7 +991,7 @@ Then confirm every module with a test source directory reported. A module that s
 
 - [ ] **Step 3: Confirm the payload is unchanged**
 
-`RecordPayloadWireFormatTest` and `RecordPayloadWireContractTest` must pass **unmodified**. This plan adds no field and no type; if either golden test needed editing, something in it was wrong.
+`RecordPayloadWireFormatTest` must pass **unmodified**. This plan adds no field and no type; if either golden test needed editing, something in it was wrong.
 
 - [ ] **Step 4: Commit, PR, merge**
 
