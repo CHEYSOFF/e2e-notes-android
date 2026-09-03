@@ -557,24 +557,6 @@ class AppController(
     }
 
     /**
-     * What to tell the user about what [RecordNotesRepository.load] found, if anything.
-     *
-     * The two halves are kept apart deliberately. [LoadDiagnostics.total] is damage -- a record
-     * some other build could still read, that this one could not -- and is said out loud rather
-     * than logged, because a silent count is how a partial data loss becomes a surprise months
-     * later. [LoadDiagnostics.newerType] is not damage at all: it is this build being older than
-     * the one that wrote the record, and the wording says exactly that rather than borrowing the
-     * "could not be read" phrasing that would tell a healthy account it is corrupt.
-     */
-    private fun unlockDiagnosticsMessage(diagnostics: LoadDiagnostics): String? {
-        val damaged = diagnostics.total.takeIf { it > 0 }
-            ?.let { "$it record(s) on disk could not be read and are being left untouched." }
-        val newer = diagnostics.newerType.takeIf { it > 0 }
-            ?.let { "$it record(s) were written by a newer version of the app and are waiting for an update." }
-        return listOfNotNull(damaged, newer).takeIf { it.isNotEmpty() }?.joinToString(" ")
-    }
-
-    /**
      * Build the record pipeline for [session], if this vault has a server at all.
      *
      * Called on every unlock, and again after a claim: a vault created on this computer has no
@@ -818,3 +800,25 @@ class AppController(
  * that a note written and left alone reaches the other device while the person still expects it to.
  */
 private const val LOCAL_EDIT_SYNC_DELAY_MS = 2_500L
+
+/**
+ * What to tell the user about what [RecordNotesRepository.load] found, if anything.
+ *
+ * The two halves are kept apart deliberately. [LoadDiagnostics.total] is damage -- a record some
+ * other build could still read, that this one could not -- and is said out loud rather than
+ * logged, because a silent count is how a partial data loss becomes a surprise months later.
+ * [LoadDiagnostics.newerType] is not damage at all: it is this build being older than the one that
+ * wrote the record, and the wording says exactly that rather than borrowing the "could not be
+ * read" phrasing that would tell a healthy account it is corrupt.
+ *
+ * A top-level function rather than a method on [AppController]: it is a pure function of
+ * [diagnostics] alone, and keeping it that way is what lets [AppControllerTest] call it directly
+ * instead of standing up a whole controller. `internal` so that test can reach it.
+ */
+internal fun unlockDiagnosticsMessage(diagnostics: LoadDiagnostics): String? {
+    val damaged = diagnostics.total.takeIf { it > 0 }
+        ?.let { "$it record(s) on disk could not be read and are being left untouched." }
+    val newer = diagnostics.newerType.takeIf { it > 0 }
+        ?.let { "$it record(s) were written by a newer version of the app and are waiting for an update." }
+    return listOfNotNull(damaged, newer).takeIf { it.isNotEmpty() }?.joinToString(" ")
+}
