@@ -14,13 +14,17 @@ import java.util.UUID
 /**
  * `RecordSyncStore.dataVersion()` against a real [RecordStore].
  *
- * One test: the regression pin for the bug fixed in `RoomSyncStore.dataVersion()`, where a device
- * that had pulled at least once but never had `saveDataVersion` called reported generation 0
- * instead of the current one. That bug lived in the phone's `?:`, which does not fire on the 0 its
- * `NOT NULL DEFAULT 0` column leaves behind -- `RecordSyncStore`'s `data_version` column has no
- * default and genuinely stays `NULL` after `saveCursor`, so its `?:` already fired correctly. This
- * test exists so the two platforms' agreement on `SyncStore`'s contract stays checked on both
- * sides, not just the one that had a bug.
+ * The final review's Finding 1 caught a second dead path here alongside the phone's: a device
+ * that had pulled at least once but never had `saveDataVersion` called reported the *current*
+ * generation rather than the genuinely-unrecorded one, because `store.dataVersion(accountId)`
+ * returns `null` for two different states -- no row at all, and a row whose `data_version` column
+ * is `NULL` -- and the old `?: SyncEngine.DATA_VERSION` could not tell them apart. That masked the
+ * exact state `SyncEngine`'s generation write exists to correct, on every desktop account, always
+ * -- this is "the device the whole release exists to protect", per the finding.
+ *
+ * `hasSyncStateRow` is what makes the distinction possible: a `null` column *with* a row means
+ * "pulled, unrecorded, behind" (reads as `0`); `null` with *no* row means "never pulled" (reads as
+ * current, since the next pull starts at 0 and fetches everything anyway).
  */
 class RecordSyncStoreTest {
 
@@ -38,9 +42,14 @@ class RecordSyncStoreTest {
     @After fun tearDown() = store.close()
 
     @Test
-    fun `a device that has pulled but never recorded a version reports the current generation`() = runTest {
+    fun `a device that has never pulled reports the current generation`() = runTest {
+        assertEquals(SyncEngine.DATA_VERSION, syncStore.dataVersion())
+    }
+
+    @Test
+    fun `a device that has pulled but never recorded a version reports zero, not the current generation`() = runTest {
         syncStore.saveCursor(12L)
 
-        assertEquals(SyncEngine.DATA_VERSION, syncStore.dataVersion())
+        assertEquals(0, syncStore.dataVersion())
     }
 }

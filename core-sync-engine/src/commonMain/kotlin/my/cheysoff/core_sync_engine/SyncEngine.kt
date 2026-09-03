@@ -175,7 +175,8 @@ class SyncEngine(
         // ordinary apply. Neither trips `RejectReason.ROLLBACK_SUSPECTED`. That reject exists for a
         // server that has stopped being trustworthy, where an emptied account would read as "delete
         // everything"; here the client is asking for the replay and the server is known-good.
-        val rebaselining = store.dataVersion() < DATA_VERSION
+        val storedVersion = store.dataVersion()
+        val rebaselining = storedVersion < DATA_VERSION
         val startCursor = if (rebaselining) 0L else store.cursor()
         var committable = startCursor
         var frozen = false
@@ -185,7 +186,7 @@ class SyncEngine(
             val page = try {
                 transport.changesSince(since, pageLimit)
             } catch (failure: SyncTransportException) {
-                return finishPull(committable, startCursor, stats, stop(failure), rebaselining)
+                return finishPull(committable, startCursor, stats, stop(failure), storedVersion)
             }
 
             for (incoming in page.records) {
@@ -198,19 +199,19 @@ class SyncEngine(
                             if (stats.unreadable > UNREADABLE_RECORD_LIMIT) {
                                 return finishPull(
                                     committable, startCursor, stats,
-                                    halt(HaltReason.RECORDS_UNREADABLE), rebaselining,
+                                    halt(HaltReason.RECORDS_UNREADABLE), storedVersion,
                                 )
                             }
                         }
 
                         RecordFault.MISLABELLED -> return finishPull(
                             committable, startCursor, stats,
-                            halt(HaltReason.RECORD_MISLABELLED), rebaselining,
+                            halt(HaltReason.RECORD_MISLABELLED), storedVersion,
                         )
 
                         RecordFault.UNSUPPORTED_PAYLOAD_VERSION -> return finishPull(
                             committable, startCursor, stats,
-                            halt(HaltReason.UNSUPPORTED_PAYLOAD_VERSION), rebaselining,
+                            halt(HaltReason.UNSUPPORTED_PAYLOAD_VERSION), storedVersion,
                         )
 
                         // The one fault the cursor may pass. A record this build cannot represent
@@ -229,7 +230,7 @@ class SyncEngine(
                             applyIncoming(incoming.record, incoming.seq, incoming.createdAt)
                         stats += applied.stats
                         applied.stop?.let {
-                            return finishPull(committable, startCursor, stats, it, rebaselining)
+                            return finishPull(committable, startCursor, stats, it, storedVersion)
                         }
                         if (!frozen) committable = incoming.seq
                     }
@@ -247,34 +248,45 @@ class SyncEngine(
             if (end <= since) break
             since = end
         }
-        return finishPull(committable, startCursor, stats, null, rebaselining)
+        return finishPull(committable, startCursor, stats, null, storedVersion)
     }
 
     /**
-     * Persists the cursor if it moved, records a completed re-baseline, and packages the phase's
-     * result.
+     * Persists the cursor if it moved, records the generation on a completed pull, and packages
+     * the phase's result.
      *
-     * @param rebaselining whether this pull started from 0 to recover records a lower format
-     *   generation skipped. Threaded in as a parameter rather than read from a field: the engine
-     *   runs one pass at a time under [pass], but a field here would be pass state that outlives
-     *   the pass that owns it.
+     * @param storedVersion the generation [store] reported at the *start* of this pull, before
+     *   anything below could have changed it. Threaded in as a parameter rather than re-read here:
+     *   the engine runs one pass at a time under [pass], but a field would be pass state that
+     *   outlives the pass that owns it, and re-reading the store would race whatever [saveCursor]
+     *   just did.
      */
     private suspend fun finishPull(
         committable: Long,
         startCursor: Long,
         stats: PassStats,
         stop: SyncOutcome?,
-        rebaselining: Boolean,
+        storedVersion: Int,
     ): Phase {
         // Written even when the phase is stopping: everything below `committable` was applied, and
         // an unwritten cursor after a halt would replay the whole account on the next re-baseline.
         // Only forwards, and only if it moved -- a store write per empty page is pure noise.
         if (committable > startCursor) store.saveCursor(committable)
-        // Only on a pull that reached its end with nothing stopping it. A re-baseline cut short by
-        // a dropped connection has to run again in full; recording the generation here would tell
-        // the device it had caught up while the records the interruption cost it are still behind
-        // its cursor.
-        if (rebaselining && stop == null) store.saveDataVersion(DATA_VERSION)
+        // Fires on ANY completed pull whose stored generation differs from this build's, not only
+        // a re-baselining one (`storedVersion < DATA_VERSION`). A build's first-ever pull for an
+        // account leaves the generation unrecorded -- Android's column defaults to 0, and the
+        // desktop's has no row yet at all -- and gating this solely on `rebaselining` left that
+        // state permanently unrecorded on every platform: nothing else in production ever calls
+        // `saveDataVersion`, so a device that reached "unrecorded" this way stayed unrecorded
+        // forever, and could never detect a future generation bump. `!=` closes that, at the cost
+        // of one redundant write the one time a build's own generation happens to already match
+        // what was stored -- which never loses information, only repeats it.
+        //
+        // Still gated on the pull having completed (`stop == null`): a re-baseline cut short by a
+        // dropped connection has to run again in full, and recording the generation here would
+        // tell the device it had caught up while the records the interruption cost it are still
+        // behind its cursor.
+        if (stop == null && storedVersion != DATA_VERSION) store.saveDataVersion(DATA_VERSION)
         return Phase(stats, stop)
     }
 

@@ -637,16 +637,21 @@ class RoomSyncStoreTest {
     /**
      * `advanceCursor`'s INSERT never names `dataVersion`, so a device that has pulled at least
      * once but never had `saveDataVersion` called sits at the column's own `NOT NULL DEFAULT 0` --
-     * not at `null`. `SyncStore.dataVersion()` must still read that as "nothing recorded": `0` can
-     * never be a genuine generation, since [SyncEngine.DATA_VERSION] starts at 1 and only
-     * increases. The desktop's `RecordSyncStore` reaches the same answer for the same reason, but
-     * gets there through a genuinely `NULL` column rather than through this guard.
+     * a real, genuinely stored `0`, not `null`.
+     *
+     * This must read back as `0`, **not** as [SyncEngine.DATA_VERSION]: an earlier version of
+     * [RoomSyncStore.dataVersion] masked `0` to the current generation on the theory that it was
+     * indistinguishable from "no row", and that mask is exactly why `SyncEngine`'s generation
+     * write never fired for a device in this state — the engine read it as already current and so
+     * never wrote anything to correct it. `0` can never be a value [SyncEngine.saveDataVersion]
+     * itself wrote, since [SyncEngine.DATA_VERSION] starts at 1 and only increases, so `0` is a
+     * safe, unambiguous "behind" that the next completed pull corrects.
      */
     @Test
-    fun `a device that has pulled but never recorded a version reports the current generation`() = runTest {
+    fun `a device that has pulled but never recorded a version reports zero, not the current generation`() = runTest {
         store.saveCursor(12L)
 
-        assertEquals(SyncEngine.DATA_VERSION, store.dataVersion())
+        assertEquals(0, store.dataVersion())
     }
 
     /**
