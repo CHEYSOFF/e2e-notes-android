@@ -115,6 +115,10 @@ class ReplicaStore(
         if (halted == null) halted = reason
     }
 
+    override suspend fun clearHalt() {
+        halted = null
+    }
+
     // ── What the harness needs on top ──────────────────────────────────────────────────────────
 
     /** Every row, for the local write path and the convergence assertions. */

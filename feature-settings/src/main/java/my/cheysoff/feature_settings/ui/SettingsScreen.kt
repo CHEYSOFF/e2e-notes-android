@@ -79,6 +79,7 @@ import my.cheysoff.feature_settings.model.biometricRowInteractive
 import my.cheysoff.feature_settings.model.biometricRowSubtitle
 import my.cheysoff.feature_settings.model.SyncStatus
 import my.cheysoff.feature_settings.model.syncCheckAvailable
+import my.cheysoff.feature_settings.model.syncRetryAvailable
 import my.cheysoff.feature_settings.model.syncStatus
 import my.cheysoff.feature_settings.model.syncStatusLine
 
@@ -760,10 +761,12 @@ private fun SyncSection(state: SettingsScreenState, onIntent: (SettingsIntent) -
             stored = state.serverUrl,
             error = state.serverUrlError,
             canCheck = syncCheckAvailable(status) && !state.serverCheckBusy,
+            canRetry = syncRetryAvailable(status),
             onChange = { onIntent(SettingsIntent.ServerUrlChanged(it)) },
             onSave = { onIntent(SettingsIntent.SaveServerUrl) },
             onClear = { onIntent(SettingsIntent.ClearServerUrl) },
             onCheck = { onIntent(SettingsIntent.CheckServer) },
+            onRetry = { onIntent(SettingsIntent.RetryAfterHalt) },
         )
     }
     state.serverCheckNotice?.let { FootNote(it) }
@@ -835,10 +838,12 @@ private fun ServerUrlRow(
     stored: String?,
     error: String?,
     canCheck: Boolean,
+    canRetry: Boolean,
     onChange: (String) -> Unit,
     onSave: () -> Unit,
     onClear: () -> Unit,
     onCheck: () -> Unit,
+    onRetry: () -> Unit,
 ) {
     val sw = LocalConfiguration.current.screenWidthDp
     val fieldSize = (sw * 0.038f).sp
@@ -917,6 +922,12 @@ private fun ServerUrlRow(
             }
             if (canCheck) {
                 PillButton(label = "Check server", primary = false, onClick = onCheck)
+            }
+            // "Try again", not "Fix" or "Resume": the engine will re-check and, for most reasons,
+            // stop on the same thing. Copy that promised a repair would be the one line on this
+            // screen most likely to make someone trust a second device that is not syncing.
+            if (canRetry) {
+                PillButton(label = "Try again", primary = false, onClick = onRetry)
             }
         }
     }

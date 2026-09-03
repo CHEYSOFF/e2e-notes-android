@@ -542,4 +542,65 @@ class RoomSyncStoreTest {
         store.saveCursor(12L)
         assertEquals(HaltReason.SERVER_ROLLED_BACK, store.halt())
     }
+
+    @Test
+    fun `clearing a halt makes the store healthy again`() = runTest {
+        store.recordHalt(HaltReason.UNSUPPORTED_PAYLOAD_VERSION)
+        assertEquals(HaltReason.UNSUPPORTED_PAYLOAD_VERSION, store.halt())
+
+        store.clearHalt()
+
+        assertNull("a cleared halt reads as healthy, which is what lets a pass run", store.halt())
+    }
+
+    /**
+     * Clearing is the only write here that must not create the row.
+     *
+     * A device with no `sync_state` row has never pulled and therefore cannot be halted, so an
+     * upsert would fabricate a row — and with it a cursor of 0 — for an account this device knows
+     * nothing about. A cursor of 0 is not inert: it is what `takeSnapshotOnce` reads as "before the
+     * first pull on this account", so inventing one would arm a pre-sync snapshot for an account
+     * that has none.
+     */
+    @Test
+    fun `clearing a halt that was never recorded creates nothing`() = runTest {
+        assertNull("precondition: nothing recorded", store.halt())
+
+        store.clearHalt()
+
+        assertNull(store.halt())
+        assertNull(
+            "clearing must not have invented a sync_state row",
+            database.syncStateDao.get(account),
+        )
+    }
+
+    /** A halt cleared and then re-detected is recorded again, rather than being sticky either way. */
+    @Test
+    fun `a halt can be recorded again after being cleared`() = runTest {
+        store.recordHalt(HaltReason.SERVER_ROLLED_BACK)
+        store.clearHalt()
+
+        store.recordHalt(HaltReason.DEVICE_REVOKED)
+
+        assertEquals(
+            "the first-reason guard is scoped to a live halt, not to all of history",
+            HaltReason.DEVICE_REVOKED,
+            store.halt(),
+        )
+    }
+
+    @Test
+    fun `clearing a halt does not disturb the cursor`() = runTest {
+        store.saveCursor(12L)
+        store.recordHalt(HaltReason.SERVER_ROLLED_BACK)
+
+        store.clearHalt()
+
+        assertEquals(
+            "the cursor is where the account is, and clearing a halt says nothing about that",
+            12L,
+            store.cursor(),
+        )
+    }
 }

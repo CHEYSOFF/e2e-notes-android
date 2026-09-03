@@ -4,6 +4,7 @@ import my.cheysoff.core_domain.sync.SyncPassState
 import my.cheysoff.core_domain.sync.SyncPassSummary
 import my.cheysoff.feature_settings.model.SyncStatus
 import my.cheysoff.feature_settings.model.syncCheckAvailable
+import my.cheysoff.feature_settings.model.syncRetryAvailable
 import my.cheysoff.feature_settings.model.syncStatus
 import my.cheysoff.feature_settings.model.syncStatusLine
 import org.junit.Assert.assertEquals
@@ -280,5 +281,22 @@ class SyncRowTest {
         val line = syncStatusLine(SyncStatus.UNREACHABLE).lowercase()
         assertTrue(line, line.contains("reach"))
         assertFalse("no sync was attempted: $line", line.contains("sync failed"))
+    }
+
+    /**
+     * "Try again" is offered in exactly one state, and it is the one where nothing else works.
+     *
+     * A halt makes every other control inert: the engine refuses at the top of each pass, so a
+     * pull-to-refresh, the timer and another unlock all provably do nothing. This is the only
+     * thing that can change the situation — and offering it anywhere else would be a button with
+     * no halt to clear.
+     */
+    @Test
+    fun `retry is offered only while the engine is halted`() {
+        assertTrue("a halt is the one state it belongs in", syncRetryAvailable(SyncStatus.HALTED))
+
+        SyncStatus.entries
+            .filter { it != SyncStatus.HALTED }
+            .forEach { assertFalse("$it offered a retry", syncRetryAvailable(it)) }
     }
 }
