@@ -244,6 +244,7 @@ class DefaultSyncController @Inject constructor(
                 pushed = outcome.stats.pushed,
                 conflictCopies = outcome.stats.conflictCopies,
                 unreadable = outcome.stats.unreadable,
+                ignored = outcome.stats.ignored,
             )
         )
 
