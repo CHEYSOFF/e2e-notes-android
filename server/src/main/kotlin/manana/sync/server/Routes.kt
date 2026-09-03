@@ -447,13 +447,19 @@ private fun authorizeDevice(deps: ServerDeps, body: ByteArray): Reply {
         return error(UNAUTHORIZED, "replay_detected", "This signed request has already been used.")
     }
 
-    val deviceId = deps.store.enrolDevice(request.accountId, newKey, sealedLabel)
-        ?: return error(HttpStatusCode.Conflict, "device_exists", "That key is already enrolled.")
+    // 201 for a new row, 200 for a retry, and a revoked key is refused as revoked rather than as
+    // "already enrolled" -- which is true of it, and useless to whoever has to act on it.
+    val (status, deviceId) = when (val outcome = deps.store.enrolDevice(request.accountId, newKey, sealedLabel)) {
+        is EnrolOutcome.Enrolled -> HttpStatusCode.Created to outcome.deviceId
+        is EnrolOutcome.AlreadyEnrolled -> HttpStatusCode.OK to outcome.deviceId
+        EnrolOutcome.Revoked -> return error(
+            HttpStatusCode.Forbidden,
+            "device_revoked",
+            "That key was revoked. Pair again to get a new one.",
+        )
+    }
 
-    return Reply(
-        HttpStatusCode.Created,
-        JSON.encodeToString(AuthorizeResponse(deviceId, deps.clock.nowMillis())),
-    )
+    return Reply(status, JSON.encodeToString(AuthorizeResponse(deviceId, deps.clock.nowMillis())))
 }
 
 /**
