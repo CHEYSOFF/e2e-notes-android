@@ -64,4 +64,14 @@ data class SyncStateEntity(
      */
     @ColumnInfo(defaultValue = "''")
     val haltReason: String = "",
+
+    /**
+     * The record-format generation this device last completed a pull under, or `0` before one has
+     * been recorded.
+     *
+     * Not on the wire and not per-record: it is a fact about *this install's* build, and it exists
+     * so that a device which skipped record types it did not understand can re-pull them once it
+     * does. See `SyncEngine`'s re-baseline.
+     */
+    @ColumnInfo(defaultValue = "0") val dataVersion: Int = 0,
 )

@@ -135,6 +135,8 @@ data class SyncPassSummary(
     val conflictCopies: Int = 0,
     /** Records that would not open. Surfaced because it is the early warning for a halt. */
     val unreadable: Int = 0,
+    /** Records skipped because this build does not implement their type. See `PassStats.ignored`. */
+    val ignored: Int = 0,
 ) {
     /** True when the pass moved nothing — the ordinary steady state, not a failure. */
     val quiet: Boolean get() = received == 0 && applied == 0 && pushed == 0

@@ -10,6 +10,7 @@ import my.cheysoff.core_domain.sync.RecordType
 import my.cheysoff.core_sync_engine.HaltReason
 import my.cheysoff.core_sync_engine.MergedWrite
 import my.cheysoff.core_sync_engine.StoredRecord
+import my.cheysoff.core_sync_engine.SyncEngine
 import my.cheysoff.core_sync_engine.SyncStore
 
 /**
@@ -242,4 +243,27 @@ class RoomSyncStore(
         syncStateDao.recordHalt(accountId, reason.name)
 
     override suspend fun clearHalt() = syncStateDao.clearHalt(accountId)
+
+    /**
+     * The raw stored value, with only a genuinely absent row falling back to
+     * [SyncEngine.DATA_VERSION] — **not** a stored `0`.
+     *
+     * An earlier version of this method also masked `0`, on the theory that it was
+     * indistinguishable from "no row" and so had to mean the same thing. That was wrong, and it is
+     * why [SyncEngine]'s generation write never fired for a device that reached `0` honestly:
+     * `advanceCursor`'s INSERT never names `dataVersion`, so *every* device's first completed pull
+     * leaves this column at its own `NOT NULL DEFAULT 0` -- a real, meaningful "pulled once,
+     * generation unrecorded, therefore behind" -- and masking it to [SyncEngine.DATA_VERSION] told
+     * the engine that state was already current, so it never wrote anything to correct it. A
+     * device could sit at that masked `0` forever.
+     *
+     * `0` can never be a genuine *recorded* generation -- [SyncEngine.DATA_VERSION] starts at 1
+     * and only increases -- so returning it here loses nothing a caller could have written; it
+     * only stops pretending an unrecorded row is a current one.
+     */
+    override suspend fun dataVersion(): Int =
+        syncStateDao.dataVersion(accountId) ?: SyncEngine.DATA_VERSION
+
+    override suspend fun saveDataVersion(version: Int) =
+        syncStateDao.saveDataVersion(accountId, version)
 }

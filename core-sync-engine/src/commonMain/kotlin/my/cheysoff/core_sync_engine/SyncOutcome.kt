@@ -135,6 +135,15 @@ data class PassStats(
     val conflictCopies: Int = 0,
     /** Records that would not open and were skipped. The cursor did not advance past them. */
     val unreadable: Int = 0,
+    /**
+     * Records skipped because this build does not implement their type. The cursor DID advance
+     * past these — unlike [unreadable] — so they will not be offered again.
+     *
+     * Counted rather than dropped silently because "your other device is writing things this one
+     * cannot show you" is a fact a person may need, and because a number that is quietly always
+     * non-zero is how a rollout mistake stays invisible.
+     */
+    val ignored: Int = 0,
 ) {
 
     /**
@@ -155,6 +164,7 @@ data class PassStats(
         conflicts = conflicts + other.conflicts,
         conflictCopies = conflictCopies + other.conflictCopies,
         unreadable = unreadable + other.unreadable,
+        ignored = ignored + other.ignored,
     )
 
     companion object {

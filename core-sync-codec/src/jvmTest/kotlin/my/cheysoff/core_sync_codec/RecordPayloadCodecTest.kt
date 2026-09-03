@@ -157,9 +157,11 @@ class RecordPayloadCodecTest {
     }
 
     @Test
-    fun `an unknown record type is refused`() {
+    fun `an unknown record type decodes as UnknownType, not Malformed`() {
+        // See RecordPayloadUnknownTypeTest for why: a type this build has never heard of is
+        // evidence of nothing, and must not be treated as damage.
         val text = encoded().replaceFirst("\"recType\":\"note\"", "\"recType\":\"attachment\"")
-        assertTrue(decode(text) is PayloadResult.Malformed)
+        assertTrue(decode(text) is PayloadResult.UnknownType)
     }
 
     @Test

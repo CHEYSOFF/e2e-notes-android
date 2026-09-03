@@ -15,6 +15,7 @@ import my.cheysoff.core_domain.sync.RecordType
 import my.cheysoff.core_domain.sync.SyncRecord
 import my.cheysoff.core_sync_engine.HaltReason
 import my.cheysoff.core_sync_engine.MergedWrite
+import my.cheysoff.core_sync_engine.SyncEngine
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -601,6 +602,71 @@ class RoomSyncStoreTest {
             "the cursor is where the account is, and clearing a halt says nothing about that",
             12L,
             store.cursor(),
+        )
+    }
+
+    // -- the data version --------------------------------------------------------------------------
+
+    @Test
+    fun `a data version round-trips`() = runTest {
+        assertNull("a device that has never pulled has no version", database.syncStateDao.dataVersion(account))
+
+        // saveDataVersion is an UPDATE, never an upsert (see its doc), so the round trip is only
+        // meaningful for a device that has a row -- i.e. one that has completed a pull, which is
+        // exactly when the engine calls it in production.
+        store.saveCursor(5L)
+        database.syncStateDao.saveDataVersion(account, 2)
+
+        assertEquals(2, database.syncStateDao.dataVersion(account))
+    }
+
+    /**
+     * Saving the version must not invent a cursor. A row conjured here would claim this device had
+     * pulled up to 0 on an account it has never contacted, and `takeSnapshotOnce` reads a cursor of
+     * 0 as "before the first pull".
+     */
+    @Test
+    fun `saving a data version does not disturb the cursor`() = runTest {
+        store.saveCursor(12L)
+
+        database.syncStateDao.saveDataVersion(account, 2)
+
+        assertEquals(12L, store.cursor())
+    }
+
+    /**
+     * `advanceCursor`'s INSERT never names `dataVersion`, so a device that has pulled at least
+     * once but never had `saveDataVersion` called sits at the column's own `NOT NULL DEFAULT 0` --
+     * a real, genuinely stored `0`, not `null`.
+     *
+     * This must read back as `0`, **not** as [SyncEngine.DATA_VERSION]: an earlier version of
+     * [RoomSyncStore.dataVersion] masked `0` to the current generation on the theory that it was
+     * indistinguishable from "no row", and that mask is exactly why `SyncEngine`'s generation
+     * write never fired for a device in this state — the engine read it as already current and so
+     * never wrote anything to correct it. `0` can never be a value [SyncEngine.saveDataVersion]
+     * itself wrote, since [SyncEngine.DATA_VERSION] starts at 1 and only increases, so `0` is a
+     * safe, unambiguous "behind" that the next completed pull corrects.
+     */
+    @Test
+    fun `a device that has pulled but never recorded a version reports zero, not the current generation`() = runTest {
+        store.saveCursor(12L)
+
+        assertEquals(0, store.dataVersion())
+    }
+
+    /**
+     * `saveDataVersion` is an UPDATE, never an upsert -- see [clearHalt] for why a missing row
+     * must stay missing. This checks the row itself, not just what `dataVersion` reads back,
+     * because a `dataVersion` of null is also what an inserted-then-unset row would report; the
+     * only way to be sure nothing was fabricated is to look for the row.
+     */
+    @Test
+    fun `saving a data version against a missing row writes nothing and creates no row`() = runTest {
+        database.syncStateDao.saveDataVersion(account, 2)
+
+        assertNull(
+            "an UPDATE against a missing row must not fabricate one",
+            database.syncStateDao.get(account),
         )
     }
 }

@@ -129,6 +129,16 @@ enum class RecordFault {
      * destroys the newer device's data with no error anywhere.
      */
     UNSUPPORTED_PAYLOAD_VERSION,
+
+    /**
+     * The record opened and parsed, and names a type this build does not implement.
+     *
+     * The only fault the engine may page **past**. See [SyncEngine]'s pull loop for why that is
+     * safe here and for nothing else: a record this build cannot represent could not have been
+     * stored even if it had been accepted, so advancing past it loses nothing that was ever going
+     * to be kept.
+     */
+    UNKNOWN_TYPE,
 }
 
 /**

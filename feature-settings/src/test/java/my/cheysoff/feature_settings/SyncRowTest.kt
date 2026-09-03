@@ -260,6 +260,26 @@ class SyncRowTest {
     }
 
     /**
+     * A device a version behind must say so. The records are not lost and nothing is broken, but
+     * "some notes here are missing parts this app cannot show" is a fact the person needs in order
+     * to know the answer is to update -- and it is invisible on the screen that would otherwise
+     * report a completely successful sync.
+     */
+    @Test
+    fun `a pass that ignored records says so, and points at the reason`() {
+        val line = syncStatusLine(
+            SyncStatus.SYNC_RAN,
+            SyncPassState.Completed(SyncPassSummary(received = 4, applied = 3, ignored = 1)),
+        )
+
+        assertTrue(
+            "the exact wording must appear, not merely a stray \"1\": $line",
+            line.contains("skipped 1 needing a newer version of the app"),
+        )
+        assertFalse("it is not a failure: $line", line.contains("failed", ignoreCase = true))
+    }
+
+    /**
      * A halt shows the engine's own sentence, because each halt reason names a different thing a
      * person has to decide and none of them clears by itself.
      */

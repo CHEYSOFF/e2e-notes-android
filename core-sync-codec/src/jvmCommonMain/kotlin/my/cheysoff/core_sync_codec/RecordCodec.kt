@@ -37,6 +37,9 @@ sealed interface OpenResult {
 
     /** Decrypted and authentic, but not a payload this build can parse. */
     data class Malformed(val reason: String) : OpenResult
+
+    /** Decrypted, authentic, well-formed, and of a type this build does not implement. */
+    data class UnknownType(val wireKey: String) : OpenResult
 }
 
 /**
@@ -79,6 +82,7 @@ class RecordCodec(private val keys: AccountKeys) {
                 is PayloadResult.Malformed -> OpenResult.Malformed(result.reason)
                 is PayloadResult.UnsupportedVersion ->
                     OpenResult.UnsupportedVersion(result.payloadVersion, result.serializerVersion)
+                is PayloadResult.UnknownType -> OpenResult.UnknownType(result.wireKey)
 
                 is PayloadResult.Ok ->
                     if (blindedIdOf(result.payload) != blindedId) {
