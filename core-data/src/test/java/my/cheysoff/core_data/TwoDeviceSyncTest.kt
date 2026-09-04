@@ -91,6 +91,7 @@ class TwoDeviceSyncTest {
                 when (type) {
                     RecordType.NOTE -> database.noteDao.noteRow(uuid)?.createdAt
                     RecordType.FOLDER -> database.folderDao.folderRow(uuid)?.createdAt
+                    RecordType.SKETCH -> error("sketch storage lands in Task 6")
                 }
             },
             clock = ClockObserver { clock.observe(it) },

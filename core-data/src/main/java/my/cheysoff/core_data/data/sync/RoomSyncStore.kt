@@ -84,6 +84,12 @@ class RoomSyncStore(
                 contentBaseline = null,
             )
         }
+
+        // Sketch storage (a `sketches` table, a `SketchDao`, `RecordRows.toRecord(SketchEntity)`)
+        // is Task 6's. Erroring rather than returning null: null here reads as "no such record",
+        // which would make every sketch pull look like new-record-not-yet-arrived forever instead
+        // of the loud crash a missing storage layer deserves.
+        RecordType.SKETCH -> error("sketch storage lands in Task 6")
     }
 
     /**
@@ -162,6 +168,11 @@ class RoomSyncStore(
                     )
                 )
             }
+
+            // A silent no-op branch here would be the worst possible failure mode: a sketch would
+            // merge successfully in `Merge`, the engine would think it wrote it, and the drawing
+            // would vanish with nothing anywhere saying so. Task 6 adds the `sketches` write.
+            RecordType.SKETCH -> error("sketch storage lands in Task 6")
         }
 
         write.conflictCopy?.let { copy ->
@@ -193,6 +204,8 @@ class RoomSyncStore(
             noteDao.recordNoteSeen(uuid, seq, contentBaseline?.toString().orEmpty())
 
         RecordType.FOLDER -> folderDao.recordFolderSeen(uuid, seq)
+
+        RecordType.SKETCH -> error("sketch storage lands in Task 6")
     }
 
     /**
@@ -222,6 +235,8 @@ class RoomSyncStore(
             sealedCounter = sealedRowClock.counter,
             sealedNode = sealedRowClock.node,
         )
+
+        RecordType.SKETCH -> error("sketch storage lands in Task 6")
     }
 
     /**

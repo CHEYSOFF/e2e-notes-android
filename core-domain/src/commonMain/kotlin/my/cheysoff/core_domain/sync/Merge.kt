@@ -228,6 +228,11 @@ object Merge {
     private fun updatedAtCompanion(type: RecordType): String? = when (type) {
         RecordType.NOTE -> FieldClocks.CONTENT
         RecordType.FOLDER -> null
+        // Whether a sketch's `updatedAt` should drag along `strokes` the way a note's drags along
+        // `content` is a merge-policy decision Task 6 owns, not one to make silently here by
+        // guessing `null`. Erroring is loud rather than wrong: nothing calls `merge` with a SKETCH
+        // record yet, so this is unreachable until that task wires one up.
+        RecordType.SKETCH -> error("sketch merge behaviour (updatedAt companion) lands in Task 6")
     }
 
     /** `max(the field's own clock, the companion field's clock)`. See [mergeUpdatedAt]. */

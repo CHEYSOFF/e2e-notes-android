@@ -32,6 +32,10 @@ object PayloadFields {
     const val DELETED_AT = "deletedAt"
     const val NAME = "name"
     const val COLOR_ARGB = "colorArgb"
+    const val NOTE_ID = "noteId"
+    const val ANCHOR = "anchor"
+    const val ORDER = "order"
+    const val STROKES = "strokes"
 
     /** A note's eleven columns, in the order they are serialised. */
     val NOTE_COLUMNS: Set<String> = linkedSetOf(
@@ -44,8 +48,20 @@ object PayloadFields {
         NAME, COLOR_ARGB, CREATED_AT, UPDATED_AT, IS_DELETED, DELETED_AT,
     )
 
+    /**
+     * A sketch's eight columns, in the order they are serialised.
+     *
+     * `createdAt` rides along the same way it does for [NOTE_COLUMNS]: on the wire and in
+     * [columnsOf], but excluded from `FieldClocks.SKETCH_FIELDS` because no write path ever moves
+     * it once a sketch is created.
+     */
+    val SKETCH_COLUMNS: Set<String> = linkedSetOf(
+        NOTE_ID, ANCHOR, ORDER, STROKES, CREATED_AT, UPDATED_AT, IS_DELETED, DELETED_AT,
+    )
+
     fun columnsOf(type: RecordType): Set<String> = when (type) {
         RecordType.NOTE -> NOTE_COLUMNS
         RecordType.FOLDER -> FOLDER_COLUMNS
+        RecordType.SKETCH -> SKETCH_COLUMNS
     }
 }
