@@ -236,14 +236,17 @@ class RoomNotesRepository @Inject constructor(
      * the device that did the deleting; `RoomSyncStore.applyMerged`'s SKETCH branch enacts the same
      * rule for a sketch that *arrives* pointing at a note this device already knows is gone.
      *
-     * **Each sketch gets its own [stamp], not the note's.** `deleteFolder` shares one stamp across
-     * many rows because unfiling N notes and trashing the folder is one user gesture the account's
-     * history should record as one moment. Deleting a note's sketches is not that: each sketch is
-     * its own record with its own dirty flag and its own push, and what makes every one of them
-     * dirty is a real, distinct clock advance — not a borrowed one. Sharing the note's stamp would
-     * still set `dirty = 1` correctly, but "own clock bump" is the brief's own wording for a reason:
-     * a shared clock here would be indistinguishable, from the next merge's point of view, from N+1
-     * fields of one record changing together, which they are not.
+     * **Each sketch gets its own HLC, not the note's — but shares the note's `deletedAt`.**
+     * `deleteFolder` shares one whole stamp across many rows because unfiling N notes and trashing
+     * the folder is one user gesture the account's history should record as one moment. A sketch's
+     * tombstone is that AND something more: each sketch is its own record with its own dirty flag
+     * and its own push, so it still needs a real, distinct HLC advance — not a borrowed one, and
+     * "own clock bump" is the brief's own wording for exactly that. But the *wall-clock* instant is
+     * different: three drawings tombstoned by one note-delete are, honestly, one deletion event,
+     * and giving them the note's own `deletedAt` — rather than three slightly different
+     * `System.currentTimeMillis()` reads — is what lets [restoreNote] tell "tombstoned BY THIS
+     * delete" apart from "the user deleted this sketch individually, earlier": an exact match on
+     * `deletedAt` against the note's own, not a heuristic.
      */
     override suspend fun deleteNote(id: String) {
         // Soft: the row stays, flagged and stamped, until the user restores it or the retention
@@ -263,7 +266,9 @@ class RoomNotesRepository @Inject constructor(
                 val sketchStamp = stamp()
                 sketchDao.softDeleteSketch(
                     uuid = sketch.uuid,
-                    timestamp = sketchStamp.wallMs,
+                    // The note's own wall-clock instant, not the sketch's own — see this method's
+                    // KDoc. Everything else (the HLC) is still this write's own.
+                    timestamp = stamp.wallMs,
                     hlcMs = sketchStamp.hlc.ms,
                     hlcCounter = sketchStamp.hlc.counter,
                     hlcNode = sketchStamp.hlc.node,
@@ -273,10 +278,28 @@ class RoomNotesRepository @Inject constructor(
         }
     }
 
+    /**
+     * Restores the note, then un-tombstones exactly the sketches [deleteNote] tombstoned along
+     * with it — never every sketch under the note, and never through `ON DELETE CASCADE`'s mirror
+     * image either.
+     *
+     * The note's `deletedAt` is read BEFORE `noteDao.restoreNote` clears it, because that value is
+     * the only thing distinguishing "this sketch died when the note did" from "this sketch was
+     * already dead beforehand": [SketchDao.sketchesDeletedAtForNote] matches sketches whose own
+     * `deletedAt` equals it exactly. A sketch the user deleted individually before the note was
+     * ever trashed carries a different `deletedAt` and is correctly left alone — restoring the note
+     * must not resurrect a drawing the user deliberately deleted.
+     *
+     * If the note was never actually in Trash, `noteRow(id)?.deletedAt` is null and no sketch query
+     * runs at all: `restoreNote`'s own KDoc already notes it carries no `isDeleted` guard and is a
+     * harmless no-op-ish re-stamp in that case, and null can never equal a real sketch `deletedAt`
+     * regardless, so skipping the query changes nothing but avoids a pointless one.
+     */
     override suspend fun restoreNote(id: String) {
         val stamp = stamp()
         database.withTransaction {
             val prior = noteDao.rowClock(id)
+            val deletedAt = noteDao.noteRow(id)?.deletedAt
             noteDao.restoreNote(
                 id = id,
                 hlcMs = stamp.hlc.ms,
@@ -284,6 +307,18 @@ class RoomNotesRepository @Inject constructor(
                 hlcNode = stamp.hlc.node,
                 fieldHlc = noteFieldHlc(prior, TOMBSTONE_FIELDS, stamp),
             )
+            if (deletedAt != null) {
+                sketchDao.sketchesDeletedAtForNote(id, deletedAt).forEach { sketch ->
+                    val sketchStamp = stamp()
+                    sketchDao.restoreSketch(
+                        uuid = sketch.uuid,
+                        hlcMs = sketchStamp.hlc.ms,
+                        hlcCounter = sketchStamp.hlc.counter,
+                        hlcNode = sketchStamp.hlc.node,
+                        fieldHlc = sketchFieldHlc(sketch.clocks(), TOMBSTONE_FIELDS, sketchStamp),
+                    )
+                }
+            }
         }
     }
 

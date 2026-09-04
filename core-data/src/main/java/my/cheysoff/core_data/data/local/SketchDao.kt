@@ -140,4 +140,35 @@ interface SketchDao {
             "WHERE isDeleted = 1 AND deletedAt IS NOT NULL AND deletedAt > 0 AND deletedAt <= :threshold"
     )
     suspend fun purgeSketchesDeletedBefore(threshold: Long): Int
+
+    /**
+     * Every sketch under [noteId] tombstoned at exactly [deletedAt] — the set
+     * `RoomNotesRepository.restoreNote` un-tombstones.
+     *
+     * The exact match is the whole trick: `deleteNote` stamps every sketch it cascades to with the
+     * note's own `deletedAt` (one deletion event, one wall-clock instant), so this query finds
+     * precisely "tombstoned BY THIS deletion" and nothing else. A sketch the user deleted
+     * individually before the note was ever deleted carries its own, different `deletedAt` and is
+     * correctly excluded — restoring the note must not resurrect it.
+     */
+    @Query("SELECT * FROM sketches WHERE noteId = :noteId AND isDeleted = 1 AND deletedAt = :deletedAt")
+    suspend fun sketchesDeletedAtForNote(noteId: String, deletedAt: Long): List<SketchEntity>
+
+    /**
+     * Brings one sketch back out of Trash. Mirrors `NoteDao.restoreNote`: clears the tombstone,
+     * bumps the clock and marks the row dirty so the un-delete is pushed — a restore the other
+     * device never hears about is not a restore.
+     */
+    @Query(
+        "UPDATE sketches SET isDeleted = 0, deletedAt = NULL, " +
+            "hlcMs = :hlcMs, hlcCounter = :hlcCounter, hlcNode = :hlcNode, fieldHlc = :fieldHlc, dirty = 1 " +
+            "WHERE uuid = :uuid"
+    )
+    suspend fun restoreSketch(
+        uuid: String,
+        hlcMs: Long,
+        hlcCounter: Int,
+        hlcNode: String,
+        fieldHlc: String,
+    )
 }
