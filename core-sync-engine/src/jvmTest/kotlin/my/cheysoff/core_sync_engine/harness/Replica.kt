@@ -278,6 +278,12 @@ class Replica(
             FieldClocks.UPDATED_AT to FieldValue.of(stampMs.toString()),
             FieldClocks.DELETED to FieldValue.of(SyncValues.FALSE, null),
         )
+
+        // The convergence harness has no sketch-writing gesture yet -- Task 6 adds one alongside
+        // the storage it drives. Erroring rather than a plausible-looking `mapOf` means a fixture
+        // someone wires up before that lands fails loudly at the harness, not by quietly
+        // convergence-testing a shape nothing real ever produces.
+        RecordType.SKETCH -> error("sketch harness fixtures land in Task 6")
     }
 
     // ── Driving the engine ─────────────────────────────────────────────────────────────────────

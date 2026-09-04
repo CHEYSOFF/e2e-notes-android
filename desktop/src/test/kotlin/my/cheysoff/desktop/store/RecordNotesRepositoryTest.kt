@@ -120,9 +120,12 @@ class RecordNotesRepositoryTest {
     @Test
     fun `a row of a type this build does not implement is reported separately from damage`() = runTest {
         repository.saveNote(note("a"))
-        val blindedId = codec.blindedIdOf("sketch", "u1")
+        // "attachment" rather than "sketch": the latter is now RecordType.SKETCH's real wire key,
+        // and RecordNotesRepository.load errors loudly on it until Task 6 wires up its storage --
+        // exactly the crash this test must not trigger while proving the true-unknown-type path.
+        val blindedId = codec.blindedIdOf("attachment", "u1")
         val plaintext = """
-            {"v":1,"serializer":1,"recType":"sketch","uuid":"u1",
+            {"v":1,"serializer":1,"recType":"attachment","uuid":"u1",
              "hlc":"1-0-node","fields":{},"clocks":{},"del":false}
         """.trimIndent().encodeToByteArray()
         store.put(blindedId, RecordEnvelope.seal(keys.kContent, blindedId, plaintext))

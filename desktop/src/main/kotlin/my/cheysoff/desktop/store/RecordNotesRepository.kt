@@ -192,6 +192,14 @@ class RecordNotesRepository private constructor(
 
                             RecordType.FOLDER -> FolderRecords.fromPayload(payload)
                                 ?.let { folders[it.folder.id] = it } ?: malformed++
+
+                            // Storage for a sketch record is Task 6's (a `sketches` map here, the
+                            // equivalent of `NoteRecords`/`FolderRecords`). Erroring rather than
+                            // falling through to `malformed++`: a malformed count tells the user
+                            // their data is damaged, which a sketch this build simply cannot store
+                            // yet is not -- and silently mis-reporting it that way would send
+                            // someone chasing corruption that does not exist.
+                            RecordType.SKETCH -> error("sketch storage lands in Task 6")
                         }
                     }
                 }
