@@ -23,12 +23,12 @@ class RecordPayloadUnknownTypeTest {
 
     @Test
     fun `an unknown record type decodes as UnknownType, not Malformed`() {
-        // "attachment" rather than "sketch": the latter is now RecordType.SKETCH's real wire key,
-        // so it would exercise the known-type path instead of the one this test is about.
-        val result = RecordPayloadCodec.decode(bytesWithRecType("attachment"))
+        // See UNIMPLEMENTED_TEST_RECORD_TYPE's own doc for why this must not be a plausible
+        // feature name: "sketch" and then "attachment" both were, and both went on to become real.
+        val result = RecordPayloadCodec.decode(bytesWithRecType(UNIMPLEMENTED_TEST_RECORD_TYPE))
 
         assertTrue("expected UnknownType, got $result", result is PayloadResult.UnknownType)
-        assertEquals("attachment", (result as PayloadResult.UnknownType).wireKey)
+        assertEquals(UNIMPLEMENTED_TEST_RECORD_TYPE, (result as PayloadResult.UnknownType).wireKey)
     }
 
     @Test
