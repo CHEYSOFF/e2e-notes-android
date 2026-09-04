@@ -122,6 +122,32 @@ class SketchDeletionTest {
         ),
     )
 
+    /** A wire-shaped `SyncRecord` for a note, the same shape `RoomSyncStoreTest.noteRecord` builds. */
+    private fun noteRecord(
+        id: String = "n1",
+        rowClock: Hlc,
+        isDeleted: String = "0",
+        deletedAtWire: String? = null,
+        title: String = "Title",
+        content: String = "Body",
+        updatedAt: String = "1000",
+    ) = SyncRecord(
+        type = RecordType.NOTE,
+        uuid = id,
+        rowClock = rowClock,
+        fieldClocks = emptyMap(),
+        fields = mapOf(
+            FieldClocks.TITLE to FieldValue.of(title),
+            FieldClocks.CONTENT to FieldValue.of(content, "plain"),
+            FieldClocks.CHECKLIST to FieldValue.of(""),
+            FieldClocks.PINNED to FieldValue.of("0"),
+            FieldClocks.FAVORITE to FieldValue.of("0"),
+            FieldClocks.FOLDER to FieldValue.of(null),
+            FieldClocks.UPDATED_AT to FieldValue.of(updatedAt),
+            FieldClocks.DELETED to FieldValue.of(isDeleted, deletedAtWire),
+        ),
+    )
+
     // -- 1. deleting a note cascades to its sketches, by reconciliation not cascade ----------
 
     /**
@@ -427,6 +453,145 @@ class SketchDeletionTest {
         val stored = database.sketchDao.sketchRow("s1")!!
         assertFalse(stored.isDeleted)
         assertFalse("the remote's own version is not dirty", stored.dirty)
+    }
+
+    // -- Task 1 (sketch canvas plan): a NOTE tombstone arriving reconciles this device's own ----
+    // -- live sketches. The desktop has no sketch-aware delete path at all, so it is a
+    // -- permanently sketch-unaware deleter: every note it deletes tombstones only the note, and
+    // -- without this, a phone that already holds the sketch live would keep it forever.
+
+    /**
+     * Falsifiability (removing the guard): verified by making the trigger fire on every merged
+     * NOTE write, not only a live-to-deleted transition — `aMergedNoteWriteThatDoesNotDeleteTheNoteLeavesItsSketchesAlone`
+     * below failed as a result. See the task report for the exact failure text.
+     *
+     * Falsifiability (removing the clock bump): verified by writing the tombstone at the
+     * sketch's own existing row clock instead of a fresh bump — this test's own
+     * "must have moved forward" assertions failed. See the report.
+     */
+    @Test
+    fun aNoteTombstoneArrivingTombstonesTheLiveSketchesThisDeviceAlreadyHolds() = runTest {
+        notesRepository.saveNote(Note(id = "n1", title = "Title", content = "Body"))
+        sketchesRepository.saveSketch(sketch("s1", "n1"))
+        sketchesRepository.saveSketch(sketch("s2", "n1"))
+        val s1Before = database.sketchDao.sketchRow("s1")!!
+        val s2Before = database.sketchDao.sketchRow("s2")!!
+
+        // A remote push -- e.g. from the desktop, which has no sketch-aware delete path -- tombstones
+        // the note and nothing else. This device already holds both sketches live.
+        syncStore.applyMerged(
+            MergedWrite(
+                record = noteRecord(id = "n1", rowClock = hlc(5_000), isDeleted = "1", deletedAtWire = "4500"),
+                dirty = false,
+                seq = 10L,
+                contentBaseline = null,
+                conflictCopy = null,
+            )
+        )
+
+        val note = database.noteDao.noteRow("n1")!!
+        assertTrue("the note itself must be tombstoned", note.isDeleted)
+
+        val s1After = database.sketchDao.sketchRow("s1")!!
+        val s2After = database.sketchDao.sketchRow("s2")!!
+
+        assertTrue("s1 must be tombstoned", s1After.isDeleted)
+        assertTrue("s2 must be tombstoned", s2After.isDeleted)
+        assertNotNull("s1 needs a tombstone stamp to ever be purgeable", s1After.deletedAt)
+        assertNotNull("s2 needs a tombstone stamp to ever be purgeable", s2After.deletedAt)
+        assertEquals(
+            "a sketch tombstoned by this arrival must carry the note's own deletedAt",
+            note.deletedAt,
+            s1After.deletedAt,
+        )
+        assertEquals(
+            "a sketch tombstoned by this arrival must carry the note's own deletedAt",
+            note.deletedAt,
+            s2After.deletedAt,
+        )
+        assertTrue("s1 must be dirty so its tombstone is pushed", s1After.dirty)
+        assertTrue("s2 must be dirty so its tombstone is pushed", s2After.dirty)
+        assertTrue("s1 must have moved forward in the account's history", s1After.rowHlc() > s1Before.rowHlc())
+        assertTrue("s2 must have moved forward in the account's history", s2After.rowHlc() > s2Before.rowHlc())
+        assertNotEquals(
+            "each sketch's tombstone must be its own clock bump, not a shared stamp",
+            s1After.rowHlc(),
+            s2After.rowHlc(),
+        )
+        assertTrue(
+            "a tombstoned sketch must not render",
+            sketchesRepository.getSketchesForNote("n1").first().isEmpty(),
+        )
+    }
+
+    /**
+     * Re-stamping on every merged note write -- not only the write that actually deletes the note
+     * -- would keep every sketch permanently dirty and endlessly re-pushed.
+     */
+    @Test
+    fun aMergedNoteWriteThatDoesNotDeleteTheNoteLeavesItsSketchesAlone() = runTest {
+        notesRepository.saveNote(Note(id = "n1", title = "Title", content = "Body"))
+        sketchesRepository.saveSketch(sketch("s1", "n1"))
+        val before = database.sketchDao.sketchRow("s1")!!
+
+        syncStore.applyMerged(
+            MergedWrite(
+                record = noteRecord(id = "n1", rowClock = hlc(5_000), isDeleted = "0", title = "Renamed"),
+                dirty = false,
+                seq = 10L,
+                contentBaseline = null,
+                conflictCopy = null,
+            )
+        )
+
+        assertFalse("the note itself stays live", database.noteDao.noteRow("n1")!!.isDeleted)
+        val after = database.sketchDao.sketchRow("s1")!!
+        assertFalse("a live note's merged write must not touch its sketches", after.isDeleted)
+        assertNull(after.deletedAt)
+        assertEquals(
+            "the sketch's clock must not move for an unrelated note write",
+            before.rowHlc(),
+            after.rowHlc(),
+        )
+        assertEquals("the sketch's dirty flag must be untouched", before.dirty, after.dirty)
+    }
+
+    /**
+     * The sketches this reconciliation tombstones must still come back when the note is restored
+     * -- exactly the `restoreNote` contract `deleteNote`'s own cascade relies on, which is why this
+     * reconciliation shares the note's `deletedAt` with the sketches it tombstones.
+     */
+    @Test
+    fun sketchesTombstonedByAnArrivingNoteTombstoneAreRestoredWithTheNote() = runTest {
+        notesRepository.saveNote(Note(id = "n1", title = "Title", content = "Body"))
+        sketchesRepository.saveSketch(sketch("s1", "n1"))
+
+        syncStore.applyMerged(
+            MergedWrite(
+                record = noteRecord(id = "n1", rowClock = hlc(5_000), isDeleted = "1", deletedAtWire = "4500"),
+                dirty = false,
+                seq = 10L,
+                contentBaseline = null,
+                conflictCopy = null,
+            )
+        )
+        assertTrue(
+            "precondition: the sketch must be tombstoned by the arrival",
+            database.sketchDao.sketchRow("s1")!!.isDeleted,
+        )
+
+        notesRepository.restoreNote("n1")
+
+        val restored = database.sketchDao.sketchRow("s1")!!
+        assertFalse(
+            "the sketch tombstoned by the arriving note tombstone must come back with it",
+            restored.isDeleted,
+        )
+        assertNull(restored.deletedAt)
+        assertTrue(
+            "the restored drawing must render again",
+            sketchesRepository.getSketchesForNote("n1").first().map { it.id }.contains("s1"),
+        )
     }
 
     // -- 3. a sketch whose note this device does not have yet is kept, not discarded --------

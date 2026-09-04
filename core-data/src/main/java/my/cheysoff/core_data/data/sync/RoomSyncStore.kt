@@ -4,6 +4,7 @@ import androidx.room.withTransaction
 import my.cheysoff.core_data.data.local.FolderDao
 import my.cheysoff.core_data.data.local.NoteDao
 import my.cheysoff.core_data.data.local.NoteDatabase
+import my.cheysoff.core_data.data.local.NoteEntity
 import my.cheysoff.core_data.data.local.SketchDao
 import my.cheysoff.core_data.data.local.SketchEntity
 import my.cheysoff.core_data.data.local.SyncStateDao
@@ -46,11 +47,15 @@ import my.cheysoff.core_sync_engine.SyncStore
  * first-halt-wins rule — are enforcements of rules stated elsewhere, put in SQL so that no future
  * caller can get them wrong.
  *
- * The one genuine exception is [reconcileAgainstNote], in [applyMerged]'s SKETCH branch: whether an
- * arriving sketch is stored live or corrected to a tombstone depends on this device's own local
- * state (the sketch's note), which `Merge` cannot see — a merge compares two versions of the *same*
- * record, and this is a rule about *two different* records. See that method's KDoc, and Task 7's
- * `RoomNotesRepository.deleteNote` for the other half of the same rule.
+ * The genuine exceptions are [reconcileAgainstNote] and [tombstoneLiveSketchesOf], the two halves
+ * of one rule enacted in both directions `applyMerged` can see it from: whether a sketch is live or
+ * tombstoned depends on this device's own local state of *a different record* (the sketch's note),
+ * which `Merge` cannot see — a merge compares two versions of the *same* record. The SKETCH branch
+ * runs [reconcileAgainstNote] when a sketch arrives pointing at a note this device already knows is
+ * gone; the NOTE branch runs [tombstoneLiveSketchesOf] when a note arrives and turns out to be the
+ * one transitioning into deleted, for the sketches this device already holds live under it. See
+ * both methods' KDoc, and Task 7's `RoomNotesRepository.deleteNote` for the local-delete cascade
+ * these two mirror on the sync-arrival side.
  */
 class RoomSyncStore(
     private val database: NoteDatabase,
@@ -163,19 +168,24 @@ class RoomSyncStore(
     override suspend fun applyMerged(write: MergedWrite): Unit = database.withTransaction {
         when (write.record.type) {
             RecordType.NOTE -> {
-                noteDao.applyRemoteNote(
-                    RecordRows.toNoteEntity(
+                val existing = noteDao.noteRow(write.record.uuid)
+                val merged = RecordRows.toNoteEntity(
+                    record = write.record,
+                    createdAt = RecordRows.createdAtFor(
+                        existing = existing?.createdAt,
+                        remote = write.remoteCreatedAt,
                         record = write.record,
-                        createdAt = RecordRows.createdAtFor(
-                            existing = noteDao.noteRow(write.record.uuid)?.createdAt,
-                            remote = write.remoteCreatedAt,
-                            record = write.record,
-                        ),
-                        dirty = write.dirty,
-                        lastSyncedSeq = write.seq,
-                        contentBaseline = write.contentBaseline,
-                    )
+                    ),
+                    dirty = write.dirty,
+                    lastSyncedSeq = write.seq,
+                    contentBaseline = write.contentBaseline,
                 )
+                noteDao.applyRemoteNote(merged)
+                // Only on the transition into deleted -- see [tombstoneLiveSketchesOf]'s KDoc for
+                // why re-stamping on every merged note write is the trap this guard exists to avoid.
+                if (merged.isDeleted && existing?.isDeleted != true) {
+                    tombstoneLiveSketchesOf(merged)
+                }
             }
 
             RecordType.FOLDER -> {
@@ -283,6 +293,96 @@ class RoomSyncStore(
                 newClock = entity.rowHlc(),
             ),
         )
+    }
+
+    /**
+     * The other direction of [reconcileAgainstNote]'s rule: a **note** arrives and turns out to be
+     * deleted, and this device already holds one or more of its sketches live. Called from
+     * [applyMerged]'s NOTE branch only on the transition into deleted (see the guard there) —
+     * never on every merged note write, or every sketch under every synced note would be
+     * re-stamped and left permanently dirty.
+     *
+     * **Why this exists at all.** The desktop has no sketch-aware delete path — it tombstones a
+     * note and nothing else — so it is a *permanently* sketch-unaware deleter, not merely a build
+     * that has not shipped the feature yet. Without this, a note deleted there would leave every
+     * device that already held its sketches live stuck with an orphan: never shown (no UI reaches
+     * a sketch under a deleted note), never tombstoned, and therefore never reaped by
+     * `RoomNotesRepository.purgeExpiredTrash`.
+     *
+     * **`deletedAt` is shared with [note], its own clock is not.** Matches
+     * `RoomNotesRepository.deleteNote`'s cascade exactly, and for the same reason: every sketch
+     * tombstoned by this one note reconciliation died at the same wall-clock instant — one
+     * deletion event — which is also the exact value `RoomNotesRepository.restoreNote` compares
+     * against (`SketchDao.sketchesDeletedAtForNote`, `>=`) to tell "tombstoned by this delete"
+     * apart from "already deleted beforehand". A sketch's row clock, in contrast, is its own
+     * per-record sync history and must still move forward in it.
+     *
+     * **Why the clock is a fresh bump, not [note]'s row clock or the sketch's own unchanged one.**
+     * [reconcileAgainstNote] can safely reuse the arriving *sketch's own* row clock for its DELETED
+     * field because that clock is, by construction, at least as new as every field already on that
+     * same record. Nothing here is true of a *different* record: [note]'s row clock says nothing
+     * about how far any particular sketch's own history has already moved (a sketch can hold a
+     * locally-unsynced edit newer than the note's incoming tombstone), so reusing it — or, worse,
+     * leaving the sketch's row clock untouched — could fail to advance past the sketch's current
+     * clock at all, which is exactly what "own clock bump ... so it propagates" in the brief rules
+     * out: a write that does not strictly advance a row's clock is not guaranteed to beat what
+     * another device already has for it. [bumpedClock] mints a value strictly greater than the
+     * sketch's own prior clock, chaining through [floor] so that two sketches under the same note
+     * — even ones that started at an identical clock — still end up with distinct clocks, the same
+     * property `deleteNote`'s per-sketch `stamp()` calls give for the local cascade.
+     *
+     * This does not disturb [reconcileAgainstNote]'s own documented property (the reachable
+     * equal-clock branch that converges only via `Merge.takeGreater`'s lexical tiebreak): that
+     * property is about clocks [reconcileAgainstNote] mints for an *arriving* sketch, and this
+     * method never touches it. A strictly-advancing bump also cannot itself create a new instance
+     * of that reachable branch, since equal clocks are exactly what it is built to avoid.
+     */
+    private suspend fun tombstoneLiveSketchesOf(note: NoteEntity) {
+        var floor: Hlc? = null
+        sketchDao.activeSketchesForNote(note.id).forEach { sketch ->
+            val current = sketch.rowHlc()
+            val base = floor?.takeIf { it > current } ?: current
+            val bumped = bumpedClock(base)
+            floor = bumped
+            sketchDao.softDeleteSketch(
+                uuid = sketch.uuid,
+                // The note's own wall-clock instant, not the sketch's own -- see this method's
+                // KDoc.
+                timestamp = note.deletedAt ?: sketch.updatedAt,
+                hlcMs = bumped.ms,
+                hlcCounter = bumped.counter,
+                hlcNode = bumped.node,
+                fieldHlc = FieldClocks.stamp(
+                    previousSerialized = sketch.fieldHlc,
+                    previousRowClock = current,
+                    allFields = FieldClocks.SKETCH_FIELDS,
+                    touched = setOf(FieldClocks.DELETED),
+                    newClock = bumped,
+                ),
+            )
+        }
+    }
+
+    /**
+     * The next clock strictly after [current], by the textbook HLC send rule
+     * ([HlcGenerator.next]'s own algorithm) — but derived from [current] itself rather than minted
+     * by a generator, because [RoomSyncStore] has no HLC generator of its own (unlike
+     * `RoomNotesRepository`, which mints through the device's injected `SyncClock`): the clocks it
+     * writes either arrive already decided by a merge, or — here — are reuses of an existing valid
+     * clock, never fresh readings attributed to this device.
+     *
+     * [current]'s own node is kept rather than replaced, since node has no bearing on whether this
+     * value is *greater* than what it replaces — [Hlc]'s ordering is `(ms, counter, node)`, and
+     * `node` only breaks a tie between two clocks whose `(ms, counter)` already match, which never
+     * happens here: this always produces a value strictly greater in `(ms, counter)` alone.
+     */
+    private fun bumpedClock(current: Hlc): Hlc {
+        val now = wallClock()
+        return when {
+            now > current.ms -> Hlc(ms = now, counter = 0, node = current.node)
+            current.counter == Int.MAX_VALUE -> Hlc(ms = current.ms + 1, counter = 0, node = current.node)
+            else -> Hlc(ms = current.ms, counter = current.counter + 1, node = current.node)
+        }
     }
 
     override suspend fun recordSeen(
