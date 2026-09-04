@@ -287,8 +287,7 @@ enum class RecordType(val wireKey: String, val fields: Set<String>) {
      *
      * No body in the [Merge] sense either — `strokes` is a plain LWW field like any other, not a
      * contested text a user typed live on two devices — so it does not get a conflict copy. Storage
-     * (`RoomSyncStore`/`RecordRows`) and the desktop's mapping land in Task 6; see their `SKETCH`
-     * branches, which error loudly rather than dropping a drawing silently.
+     * is `RoomSyncStore`/`RecordRows`'s `SKETCH` branches, mirroring `FOLDER`'s for the same reason.
      */
     SKETCH("sketch", FieldClocks.SKETCH_FIELDS);
 

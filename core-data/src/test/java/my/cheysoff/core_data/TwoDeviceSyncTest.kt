@@ -81,7 +81,7 @@ class TwoDeviceSyncTest {
         val repository = RoomNotesRepository(database.noteDao, database.folderDao, database, clock)
 
         val store = RoomSyncStore(
-            database, database.noteDao, database.folderDao, database.syncStateDao,
+            database, database.noteDao, database.folderDao, database.sketchDao, database.syncStateDao,
             accountId = "acct",
         )
 
@@ -91,7 +91,7 @@ class TwoDeviceSyncTest {
                 when (type) {
                     RecordType.NOTE -> database.noteDao.noteRow(uuid)?.createdAt
                     RecordType.FOLDER -> database.folderDao.folderRow(uuid)?.createdAt
-                    RecordType.SKETCH -> error("sketch storage lands in Task 6")
+                    RecordType.SKETCH -> database.sketchDao.sketchRow(uuid)?.createdAt
                 }
             },
             clock = ClockObserver { clock.observe(it) },

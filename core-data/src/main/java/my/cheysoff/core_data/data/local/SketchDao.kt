@@ -45,13 +45,56 @@ interface SketchDao {
     suspend fun highestRowClock(): RowClock?
 
     /**
-     * Writes a sketch **in full**, sync columns included — the only statement that writes this
-     * table. `@Upsert` rather than `@Insert(onConflict = REPLACE)` for the same reason
-     * `NoteDao.applyRemoteNote` gives: REPLACE deletes and reinserts, which would not matter for a
-     * row with no other table pointing at it, but would still discard whatever the caller did not
-     * think to pass — @Upsert updates the existing row in place instead. The caller (currently only
-     * `RoomSketchesRepository`) owns every column, including the clocks.
+     * Writes a sketch **in full**, sync columns included — the path both a local save
+     * ([RoomSketchesRepository][my.cheysoff.core_data.data.RoomSketchesRepository]) and a merged
+     * remote record ([RoomSyncStore][my.cheysoff.core_data.data.sync.RoomSyncStore]) take. `@Upsert`
+     * rather than `@Insert(onConflict = REPLACE)` for the same reason `NoteDao.applyRemoteNote`
+     * gives: REPLACE deletes and reinserts, which would not matter for a row with no other table
+     * pointing at it, but would still discard whatever the caller did not think to pass — @Upsert
+     * updates the existing row in place instead. The caller owns every column, including the
+     * clocks.
+     *
+     * Unlike notes and folders there is no separate "merged" write path here (no
+     * `applyRemoteSketch`): a sketch has no editor-owned partial-update statement to keep distinct
+     * from it, because nothing yet writes one field of a sketch without the others — the same is
+     * true of [FolderDao.applyRemoteFolder], which is exactly this method's shape.
      */
     @Upsert
     suspend fun upsertSketch(sketch: SketchEntity)
+
+    // ── What the sync engine reads and writes. The mirror of NoteDao's/FolderDao's block. ──────
+
+    /** Every sketch the server has not acknowledged, oldest row clock first. */
+    @Query("SELECT * FROM sketches WHERE dirty = 1 ORDER BY hlcMs ASC, hlcCounter ASC, hlcNode ASC, uuid ASC")
+    suspend fun dirtySketches(): List<SketchEntity>
+
+    /**
+     * §3.2's two rules as one statement — see `NoteDao.acknowledgeNotePush` for the argument in
+     * full.
+     *
+     * A sketch has no `contentSyncedHlc`: it can never produce a conflict copy (only notes have a
+     * body worth preserving that way — see `RoomSyncStore.applyMerged`), so `Baselines.advance`
+     * has nothing to advance for one, exactly as for a folder.
+     */
+    @Query(
+        """
+        UPDATE sketches SET
+            lastSyncedSeq = :seq,
+            dirty = CASE
+                WHEN hlcMs = :sealedMs AND hlcCounter = :sealedCounter AND hlcNode = :sealedNode
+                THEN 0 ELSE dirty END
+        WHERE uuid = :uuid
+        """
+    )
+    suspend fun acknowledgeSketchPush(
+        uuid: String,
+        seq: Long,
+        sealedMs: Long,
+        sealedCounter: Int,
+        sealedNode: String,
+    )
+
+    /** `NoteDao.recordNoteSeen` for a sketch: the seq, and nothing else. */
+    @Query("UPDATE sketches SET lastSyncedSeq = :seq WHERE uuid = :uuid")
+    suspend fun recordSketchSeen(uuid: String, seq: Long)
 }
