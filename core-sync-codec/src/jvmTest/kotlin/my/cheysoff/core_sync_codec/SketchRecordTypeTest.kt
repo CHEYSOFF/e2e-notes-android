@@ -1,8 +1,13 @@
 package my.cheysoff.core_sync_codec
 
+import my.cheysoff.core_domain.sync.FieldClocks
+import my.cheysoff.core_domain.sync.FieldValue
+import my.cheysoff.core_domain.sync.Hlc
 import my.cheysoff.core_domain.sync.RecordType
+import my.cheysoff.core_domain.sync.SyncRecord
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
@@ -39,5 +44,57 @@ class SketchRecordTypeTest {
         RecordType.SKETCH.fields.forEach { field ->
             assertNotNull("no column mapping for '$field'", SyncRecords.columnsFor(field))
         }
+    }
+
+    /**
+     * `SketchRecordsTest` pins this rule on the desktop path; this is the same rule on the
+     * `SyncRecords` path the phone uses. Without `anchor` in `NUMERIC_COLUMNS`, a non-numeric
+     * anchor passes this boundary check and `RecordRows.toSketchEntity` silently substitutes 0 --
+     * moving the drawing to the top of the note, on this device only, with nothing anywhere saying
+     * why.
+     */
+    @Test
+    fun `a non-numeric anchor refuses the record rather than defaulting`() {
+        val record = SyncRecord(
+            type = RecordType.SKETCH,
+            uuid = "s1",
+            rowClock = Hlc(1_700_000_000_000L, 0, "nodea"),
+            fieldClocks = emptyMap(),
+            fields = mapOf(
+                FieldClocks.NOTE_ID to FieldValue.of("n1"),
+                FieldClocks.ANCHOR to FieldValue.of("2"),
+                FieldClocks.ORDER to FieldValue.of("0"),
+                FieldClocks.STROKES to FieldValue.of(""),
+                FieldClocks.UPDATED_AT to FieldValue.of("100"),
+                FieldClocks.DELETED to FieldValue.of("0", null),
+            ),
+        )
+        val payload = SyncRecords.toPayload(record, createdAt = 100L)
+        val corrupted = payload.copy(fields = payload.fields + (PayloadFields.ANCHOR to "not-a-number"))
+
+        assertNull(SyncRecords.fromPayload(corrupted))
+    }
+
+    /** The sibling check: `order` gets the same refusal, for the same reason. */
+    @Test
+    fun `a non-numeric order refuses the record rather than defaulting`() {
+        val record = SyncRecord(
+            type = RecordType.SKETCH,
+            uuid = "s1",
+            rowClock = Hlc(1_700_000_000_000L, 0, "nodea"),
+            fieldClocks = emptyMap(),
+            fields = mapOf(
+                FieldClocks.NOTE_ID to FieldValue.of("n1"),
+                FieldClocks.ANCHOR to FieldValue.of("2"),
+                FieldClocks.ORDER to FieldValue.of("0"),
+                FieldClocks.STROKES to FieldValue.of(""),
+                FieldClocks.UPDATED_AT to FieldValue.of("100"),
+                FieldClocks.DELETED to FieldValue.of("0", null),
+            ),
+        )
+        val payload = SyncRecords.toPayload(record, createdAt = 100L)
+        val corrupted = payload.copy(fields = payload.fields + (PayloadFields.ORDER to "not-a-number"))
+
+        assertNull(SyncRecords.fromPayload(corrupted))
     }
 }
