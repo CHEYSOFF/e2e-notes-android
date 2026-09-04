@@ -286,9 +286,13 @@ class RoomNotesRepository @Inject constructor(
      * The note's `deletedAt` is read BEFORE `noteDao.restoreNote` clears it, because that value is
      * the only thing distinguishing "this sketch died when the note did" from "this sketch was
      * already dead beforehand": [SketchDao.sketchesDeletedAtForNote] matches sketches whose own
-     * `deletedAt` equals it exactly. A sketch the user deleted individually before the note was
-     * ever trashed carries a different `deletedAt` and is correctly left alone — restoring the note
-     * must not resurrect a drawing the user deliberately deleted.
+     * `deletedAt` is at or after it. `>=` rather than `==` because the note's tombstone and each
+     * sketch's tombstone are independently clocked records — a note deleted concurrently on two
+     * devices can converge to a note `deletedAt` earlier than a sketch tombstoned by that same
+     * deletion on the other device, since each record's DELETED field merges on its own clock. A
+     * sketch the user deleted individually before the note was ever trashed still carries a
+     * strictly earlier `deletedAt` and is correctly left alone either way — restoring the note must
+     * not resurrect a drawing the user deliberately deleted.
      *
      * If the note was never actually in Trash, `noteRow(id)?.deletedAt` is null and no sketch query
      * runs at all: `restoreNote`'s own KDoc already notes it carries no `isDeleted` guard and is a

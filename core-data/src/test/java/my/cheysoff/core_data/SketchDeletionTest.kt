@@ -287,6 +287,49 @@ class SketchDeletionTest {
     }
 
     /**
+     * The concurrent-merge shape F3 exists for: the note's tombstone and each sketch's tombstone
+     * are independently clocked records, so a note deleted concurrently on two devices can merge
+     * to a note `deletedAt` that differs from a sketch tombstoned by the very same event on the
+     * *other* device. An exact match then leaves the sketch stranded in Trash with no per-sketch
+     * restore UI to recover it. This seeds that shape directly — the note and the sketch tombstoned
+     * at two different instants, exactly as two independently-merged records would land — rather
+     * than through `deleteNote`, which always stamps both at one shared instant and so can never
+     * produce it on a single device.
+     */
+    @Test
+    fun `restoring a note un-tombstones a sketch whose merged deletedAt is later than the note's`() = runTest {
+        notesRepository.saveNote(Note(id = "n1", title = "Title", content = "Body"))
+        sketchesRepository.saveSketch(sketch("s1", "n1"))
+
+        val noteDeletedAt = 1_000L
+        val sketchDeletedAt = 1_500L // later: as if the sketch's own DELETED field won the merge
+        database.noteDao.softDeleteNote(
+            id = "n1",
+            timestamp = noteDeletedAt,
+            hlcMs = noteDeletedAt,
+            hlcCounter = 0,
+            hlcNode = node,
+            fieldHlc = "",
+        )
+        database.sketchDao.softDeleteSketch(
+            uuid = "s1",
+            timestamp = sketchDeletedAt,
+            hlcMs = sketchDeletedAt,
+            hlcCounter = 0,
+            hlcNode = node,
+            fieldHlc = "",
+        )
+
+        notesRepository.restoreNote("n1")
+
+        assertFalse(
+            "a sketch tombstoned at or after the note's own deletedAt must come back with it",
+            database.sketchDao.sketchRow("s1")!!.isDeleted,
+        )
+        assertNull(database.sketchDao.sketchRow("s1")!!.deletedAt)
+    }
+
+    /**
      * Falsifiability: verified by making the restore skip the per-sketch clock bump (writing
      * `isDeleted = 0` without touching `hlcMs`/`hlcCounter`/`hlcNode`/`fieldHlc`/`dirty`) — failed
      * because the sketch's row clock had not moved and `dirty` was still whatever `deleteNote`

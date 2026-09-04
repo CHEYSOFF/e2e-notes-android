@@ -142,16 +142,20 @@ interface SketchDao {
     suspend fun purgeSketchesDeletedBefore(threshold: Long): Int
 
     /**
-     * Every sketch under [noteId] tombstoned at exactly [deletedAt] — the set
+     * Every sketch under [noteId] tombstoned at [deletedAt] or later — the set
      * `RoomNotesRepository.restoreNote` un-tombstones.
      *
-     * The exact match is the whole trick: `deleteNote` stamps every sketch it cascades to with the
-     * note's own `deletedAt` (one deletion event, one wall-clock instant), so this query finds
-     * precisely "tombstoned BY THIS deletion" and nothing else. A sketch the user deleted
-     * individually before the note was ever deleted carries its own, different `deletedAt` and is
-     * correctly excluded — restoring the note must not resurrect it.
+     * `deleteNote` stamps every sketch it cascades to with the note's own `deletedAt` (one deletion
+     * event, one wall-clock instant), so an exact match already finds "tombstoned BY THIS deletion"
+     * on a single device. But the note's tombstone and each sketch's tombstone are independently
+     * clocked records: a note deleted concurrently on two devices can merge to a note `deletedAt`
+     * that is earlier than a sketch tombstoned by that very same event on the other device, because
+     * each record's DELETED field merges on its own clock. `>=` catches that case too, and a sketch
+     * the user deleted individually *before* the note was ever deleted still carries a `deletedAt`
+     * strictly earlier than the note's own and is correctly excluded either way — restoring the
+     * note must not resurrect it.
      */
-    @Query("SELECT * FROM sketches WHERE noteId = :noteId AND isDeleted = 1 AND deletedAt = :deletedAt")
+    @Query("SELECT * FROM sketches WHERE noteId = :noteId AND isDeleted = 1 AND deletedAt >= :deletedAt")
     suspend fun sketchesDeletedAtForNote(noteId: String, deletedAt: Long): List<SketchEntity>
 
     /**
