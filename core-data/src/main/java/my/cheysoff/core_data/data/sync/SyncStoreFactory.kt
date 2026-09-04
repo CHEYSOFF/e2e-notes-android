@@ -28,6 +28,7 @@ class SyncStoreFactory @Inject constructor(private val database: NoteDatabase) {
         database = database,
         noteDao = database.noteDao,
         folderDao = database.folderDao,
+        sketchDao = database.sketchDao,
         syncStateDao = database.syncStateDao,
         accountId = accountId,
     )
@@ -42,7 +43,7 @@ class SyncStoreFactory @Inject constructor(private val database: NoteDatabase) {
     suspend fun createdAtOf(type: RecordType, uuid: String): Long? = when (type) {
         RecordType.NOTE -> database.noteDao.noteRow(uuid)?.createdAt
         RecordType.FOLDER -> database.folderDao.folderRow(uuid)?.createdAt
-        RecordType.SKETCH -> error("sketch storage lands in Task 6")
+        RecordType.SKETCH -> database.sketchDao.sketchRow(uuid)?.createdAt
     }
 
     /** The pre-first-pull snapshot. See [SyncSnapshot] for when it does anything and why. */

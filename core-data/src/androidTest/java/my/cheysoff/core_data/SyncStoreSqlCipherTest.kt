@@ -80,7 +80,8 @@ class SyncStoreSqlCipherTest {
             .build()
 
     private fun storeOver(database: NoteDatabase) = RoomSyncStore(
-        database, database.noteDao, database.folderDao, database.syncStateDao, accountId = "acct",
+        database, database.noteDao, database.folderDao, database.sketchDao, database.syncStateDao,
+        accountId = "acct",
     )
 
     private fun note(rowClock: Hlc, content: String = "milk", dirty: Boolean = true) = NoteEntity(

@@ -279,11 +279,18 @@ class Replica(
             FieldClocks.DELETED to FieldValue.of(SyncValues.FALSE, null),
         )
 
-        // The convergence harness has no sketch-writing gesture yet -- Task 6 adds one alongside
-        // the storage it drives. Erroring rather than a plausible-looking `mapOf` means a fixture
-        // someone wires up before that lands fails loudly at the harness, not by quietly
-        // convergence-testing a shape nothing real ever produces.
-        RecordType.SKETCH -> error("sketch harness fixtures land in Task 6")
+        // No public gesture on this class calls `write(RecordType.SKETCH, ...)` yet -- that is a
+        // convergence-test addition for whoever exercises sketch merge scenarios here -- but the
+        // defaults themselves are real, not a placeholder: they are `SketchEntity`'s own Kotlin
+        // defaults, exactly as NOTE's and FOLDER's mirror their entities'.
+        RecordType.SKETCH -> mapOf(
+            FieldClocks.NOTE_ID to FieldValue.of(""),
+            FieldClocks.ANCHOR to FieldValue.of("0"),
+            FieldClocks.ORDER to FieldValue.of("0"),
+            FieldClocks.STROKES to FieldValue.of(""),
+            FieldClocks.UPDATED_AT to FieldValue.of(stampMs.toString()),
+            FieldClocks.DELETED to FieldValue.of(SyncValues.FALSE, null),
+        )
     }
 
     // ── Driving the engine ─────────────────────────────────────────────────────────────────────

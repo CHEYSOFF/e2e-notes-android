@@ -4,6 +4,7 @@ import androidx.room.withTransaction
 import my.cheysoff.core_data.data.local.FolderDao
 import my.cheysoff.core_data.data.local.NoteDao
 import my.cheysoff.core_data.data.local.NoteDatabase
+import my.cheysoff.core_data.data.local.SketchDao
 import my.cheysoff.core_data.data.local.SyncStateDao
 import my.cheysoff.core_domain.sync.Hlc
 import my.cheysoff.core_domain.sync.RecordType
@@ -46,6 +47,7 @@ class RoomSyncStore(
     private val database: NoteDatabase,
     private val noteDao: NoteDao,
     private val folderDao: FolderDao,
+    private val sketchDao: SketchDao,
     private val syncStateDao: SyncStateDao,
     private val accountId: String,
     private val wallClock: () -> Long = System::currentTimeMillis,
@@ -85,11 +87,16 @@ class RoomSyncStore(
             )
         }
 
-        // Sketch storage (a `sketches` table, a `SketchDao`, `RecordRows.toRecord(SketchEntity)`)
-        // is Task 6's. Erroring rather than returning null: null here reads as "no such record",
-        // which would make every sketch pull look like new-record-not-yet-arrived forever instead
-        // of the loud crash a missing storage layer deserves.
-        RecordType.SKETCH -> error("sketch storage lands in Task 6")
+        RecordType.SKETCH -> sketchDao.sketchRow(uuid)?.let { sketch ->
+            StoredRecord(
+                record = RecordRows.toRecord(sketch),
+                dirty = sketch.dirty,
+                lastSyncedSeq = sketch.lastSyncedSeq,
+                // A sketch has no body, so it can never conflict-copy and has no baseline column
+                // -- the same reasoning FOLDER's branch above gives.
+                contentBaseline = null,
+            )
+        }
     }
 
     /**
@@ -123,7 +130,15 @@ class RoomSyncStore(
                 contentBaseline = null,
             )
         }
-        return (notes + folders).sortedWith(
+        val sketches = sketchDao.dirtySketches().map { sketch ->
+            StoredRecord(
+                record = RecordRows.toRecord(sketch),
+                dirty = true,
+                lastSyncedSeq = sketch.lastSyncedSeq,
+                contentBaseline = null,
+            )
+        }
+        return (notes + folders + sketches).sortedWith(
             compareBy({ it.record.rowClock }, { it.record.type }, { it.record.uuid }),
         )
     }
@@ -169,10 +184,20 @@ class RoomSyncStore(
                 )
             }
 
-            // A silent no-op branch here would be the worst possible failure mode: a sketch would
-            // merge successfully in `Merge`, the engine would think it wrote it, and the drawing
-            // would vanish with nothing anywhere saying so. Task 6 adds the `sketches` write.
-            RecordType.SKETCH -> error("sketch storage lands in Task 6")
+            RecordType.SKETCH -> {
+                sketchDao.upsertSketch(
+                    RecordRows.toSketchEntity(
+                        record = write.record,
+                        createdAt = RecordRows.createdAtFor(
+                            existing = sketchDao.sketchRow(write.record.uuid)?.createdAt,
+                            remote = write.remoteCreatedAt,
+                            record = write.record,
+                        ),
+                        dirty = write.dirty,
+                        lastSyncedSeq = write.seq,
+                    )
+                )
+            }
         }
 
         write.conflictCopy?.let { copy ->
@@ -205,7 +230,7 @@ class RoomSyncStore(
 
         RecordType.FOLDER -> folderDao.recordFolderSeen(uuid, seq)
 
-        RecordType.SKETCH -> error("sketch storage lands in Task 6")
+        RecordType.SKETCH -> sketchDao.recordSketchSeen(uuid, seq)
     }
 
     /**
@@ -236,7 +261,13 @@ class RoomSyncStore(
             sealedNode = sealedRowClock.node,
         )
 
-        RecordType.SKETCH -> error("sketch storage lands in Task 6")
+        RecordType.SKETCH -> sketchDao.acknowledgeSketchPush(
+            uuid = uuid,
+            seq = seq,
+            sealedMs = sealedRowClock.ms,
+            sealedCounter = sealedRowClock.counter,
+            sealedNode = sealedRowClock.node,
+        )
     }
 
     /**

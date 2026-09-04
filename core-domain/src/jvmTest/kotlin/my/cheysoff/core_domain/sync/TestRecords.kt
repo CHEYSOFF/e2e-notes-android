@@ -67,6 +67,33 @@ fun folder(
     ),
 ).validate()
 
+/** A complete, valid sketch record. */
+fun sketch(
+    uuid: String = "s1",
+    rowClock: Hlc = hlc(1),
+    fieldClocks: Map<String, Hlc> = emptyMap(),
+    noteId: String = "n1",
+    anchor: Int = 0,
+    order: Int = 0,
+    strokes: String = "",
+    updatedAt: Long = 0L,
+    deleted: Boolean = false,
+    deletedAt: Long? = null,
+): SyncRecord = SyncRecord(
+    type = RecordType.SKETCH,
+    uuid = uuid,
+    rowClock = rowClock,
+    fieldClocks = fieldClocks,
+    fields = mapOf(
+        FieldClocks.NOTE_ID to FieldValue.of(noteId),
+        FieldClocks.ANCHOR to FieldValue.of(anchor.toString()),
+        FieldClocks.ORDER to FieldValue.of(order.toString()),
+        FieldClocks.STROKES to FieldValue.of(strokes),
+        FieldClocks.UPDATED_AT to FieldValue.of(updatedAt.toString()),
+        FieldClocks.DELETED to FieldValue.of(SyncValues.of(deleted), deletedAt?.toString()),
+    ),
+).validate()
+
 /** The local row wrapper, with the bookkeeping most tests do not vary. */
 fun local(
     record: SyncRecord,

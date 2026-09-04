@@ -6,6 +6,8 @@ import my.cheysoff.core_sync_codec.NoteRecords
 import my.cheysoff.core_sync_codec.NoteRow
 import my.cheysoff.core_sync_codec.OpenResult
 import my.cheysoff.core_sync_codec.RecordCodec
+import my.cheysoff.core_sync_codec.SketchRecords
+import my.cheysoff.core_sync_codec.SketchRow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -103,8 +105,22 @@ class RecordNotesRepository private constructor(
      */
     val clockObserver: ClockObserver = ClockObserver { seen -> hlc.observe(seen) }
 
-    /** Every note and folder this device holds, including the trashed ones. */
-    data class Snapshot(val notes: Map<String, NoteRow>, val folders: Map<String, FolderRow>)
+    /** Every note, folder and sketch this device holds, including the trashed ones. */
+    data class Snapshot(
+        val notes: Map<String, NoteRow>,
+        val folders: Map<String, FolderRow>,
+        val sketches: Map<String, SketchRow> = emptyMap(),
+    )
+
+    /**
+     * Every sketch this device holds, keyed by id.
+     *
+     * A plain snapshot read rather than a `Flow`, unlike [getNotes]/[getFolders]: nothing on the
+     * desktop reads or writes a sketch yet (plan 3's job), so there is no UI to keep live. This
+     * exists so [load] has somewhere real to put a sketch record instead of erroring on it or
+     * miscounting it as damage -- see `LoadDiagnostics`.
+     */
+    fun sketchRows(): Map<String, SketchRow> = state.value.sketches
 
     private val state = MutableStateFlow(initial)
 
@@ -158,6 +174,7 @@ class RecordNotesRepository private constructor(
         ): RecordNotesRepository {
             val notes = mutableMapOf<String, NoteRow>()
             val folders = mutableMapOf<String, FolderRow>()
+            val sketches = mutableMapOf<String, SketchRow>()
             var unreadable = 0
             var mislabelled = 0
             var unsupported = 0
@@ -193,13 +210,8 @@ class RecordNotesRepository private constructor(
                             RecordType.FOLDER -> FolderRecords.fromPayload(payload)
                                 ?.let { folders[it.folder.id] = it } ?: malformed++
 
-                            // Storage for a sketch record is Task 6's (a `sketches` map here, the
-                            // equivalent of `NoteRecords`/`FolderRecords`). Erroring rather than
-                            // falling through to `malformed++`: a malformed count tells the user
-                            // their data is damaged, which a sketch this build simply cannot store
-                            // yet is not -- and silently mis-reporting it that way would send
-                            // someone chasing corruption that does not exist.
-                            RecordType.SKETCH -> error("sketch storage lands in Task 6")
+                            RecordType.SKETCH -> SketchRecords.fromPayload(payload)
+                                ?.let { sketches[it.sketch.id] = it } ?: malformed++
                         }
                     }
                 }
@@ -211,7 +223,7 @@ class RecordNotesRepository private constructor(
                 hlc = generator,
                 node = node,
                 clock = clock,
-                initial = Snapshot(notes, folders),
+                initial = Snapshot(notes, folders, sketches),
                 diagnostics = LoadDiagnostics(unreadable, mislabelled, unsupported, malformed, newerType),
             )
         }

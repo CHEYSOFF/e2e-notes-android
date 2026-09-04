@@ -2,6 +2,7 @@ package my.cheysoff.core_data.data.sync
 
 import my.cheysoff.core_data.data.local.FolderEntity
 import my.cheysoff.core_data.data.local.NoteEntity
+import my.cheysoff.core_data.data.local.SketchEntity
 import my.cheysoff.core_domain.sync.FieldClocks
 import my.cheysoff.core_domain.sync.FieldValue
 import my.cheysoff.core_domain.sync.Hlc
@@ -60,6 +61,21 @@ internal object RecordRows {
             FieldClocks.COLOR to FieldValue.of(folder.colorArgb?.toString()),
             FieldClocks.UPDATED_AT to FieldValue.of(folder.updatedAt.toString()),
             FieldClocks.DELETED to FieldValue.of(SyncValues.of(folder.isDeleted), folder.deletedAt?.toString()),
+        ),
+    ).normalized()
+
+    fun toRecord(sketch: SketchEntity): SyncRecord = SyncRecord(
+        type = RecordType.SKETCH,
+        uuid = sketch.uuid,
+        rowClock = sketch.rowHlc(),
+        fieldClocks = FieldClocks.parse(sketch.fieldHlc),
+        fields = mapOf(
+            FieldClocks.NOTE_ID to FieldValue.of(sketch.noteId),
+            FieldClocks.ANCHOR to FieldValue.of(sketch.anchor.toString()),
+            FieldClocks.ORDER to FieldValue.of(sketch.sortOrder.toString()),
+            FieldClocks.STROKES to FieldValue.of(sketch.strokes),
+            FieldClocks.UPDATED_AT to FieldValue.of(sketch.updatedAt.toString()),
+            FieldClocks.DELETED to FieldValue.of(SyncValues.of(sketch.isDeleted), sketch.deletedAt?.toString()),
         ),
     ).normalized()
 
@@ -128,6 +144,39 @@ internal object RecordRows {
             hlcNode = normalized.rowClock.node,
             fieldHlc = FieldClocks.serialize(
                 RecordType.FOLDER.fields.mapNotNull { f -> normalized.fieldClocks[f]?.let { f to it } }.toMap(),
+            ),
+            dirty = dirty,
+            lastSyncedSeq = lastSyncedSeq,
+        )
+    }
+
+    /**
+     * Mirrors [toFolderEntity]: no `contentBaseline` (a sketch has no body worth conflict-copying,
+     * so it never advances one), and every field the merge decided is written straight through.
+     */
+    fun toSketchEntity(
+        record: SyncRecord,
+        createdAt: Long,
+        dirty: Boolean,
+        lastSyncedSeq: Long,
+    ): SketchEntity {
+        val normalized = record.normalized()
+        val deleted = normalized.valueOf(FieldClocks.DELETED)
+        return SketchEntity(
+            uuid = normalized.uuid,
+            noteId = normalized.valueOf(FieldClocks.NOTE_ID).parts[0].orEmpty(),
+            anchor = normalized.valueOf(FieldClocks.ANCHOR).parts[0]?.toIntOrNull() ?: 0,
+            sortOrder = normalized.valueOf(FieldClocks.ORDER).parts[0]?.toIntOrNull() ?: 0,
+            strokes = normalized.valueOf(FieldClocks.STROKES).parts[0].orEmpty(),
+            createdAt = createdAt,
+            updatedAt = normalized.valueOf(FieldClocks.UPDATED_AT).parts[0]?.toLongOrNull() ?: 0L,
+            isDeleted = SyncValues.toBoolean(deleted.parts[0]),
+            deletedAt = deleted.parts[1]?.toLongOrNull(),
+            hlcMs = normalized.rowClock.ms,
+            hlcCounter = normalized.rowClock.counter,
+            hlcNode = normalized.rowClock.node,
+            fieldHlc = FieldClocks.serialize(
+                RecordType.SKETCH.fields.mapNotNull { f -> normalized.fieldClocks[f]?.let { f to it } }.toMap(),
             ),
             dirty = dirty,
             lastSyncedSeq = lastSyncedSeq,
