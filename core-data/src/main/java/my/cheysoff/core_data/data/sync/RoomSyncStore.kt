@@ -255,6 +255,16 @@ class RoomSyncStore(
      * to mint: the row clock is already, by construction, at least as new as every field on the
      * record, so asserting DELETED as of that same instant invents no information and keeps the
      * per-field-clock invariant — "an entry absent from `fieldHlc` is at the row clock" — honest.
+     *
+     * **This is the one place in the codebase where two devices can independently produce the same
+     * clock for the same field on two different values.** Two devices that each reconcile the same
+     * incoming record deterministically stamp DELETED at that record's own row clock — not a freshly
+     * minted one — so `Merge.takeGreater`'s "should be unreachable" equal-clock branch is genuinely
+     * reachable here, across devices, rather than only in theory. It still converges, because
+     * `FieldValue("1", ts) > FieldValue("0", null)` lexically and the tombstone wins either way — but
+     * that is a property of the tiebreak's total order, not of this method, and a future change to
+     * that tiebreak (e.g. deciding equal clocks some other way) would reintroduce delete/undelete
+     * ping-pong between devices for exactly this record shape.
      */
     private suspend fun reconcileAgainstNote(entity: SketchEntity): SketchEntity {
         if (entity.isDeleted) return entity

@@ -148,6 +148,15 @@ object Merge {
      * value forever with neither able to tell it is wrong. Deciding it by a total order over the
      * values costs one comparison and makes the outcome identical on both devices even if the
      * invariant is one day broken. See [FieldValue.compareTo].
+     *
+     * It is not only a theoretical guard: `RoomSyncStore.reconcileAgainstNote` is one real, load-
+     * bearing caller of this branch. It stamps a sketch's DELETED field at the arriving record's own
+     * row clock rather than minting a fresh one, so two devices that each independently reconcile
+     * the same incoming record land on that exact same clock for DELETED while holding different
+     * values for it — the equal-clock case, for real, across devices. It converges only because
+     * `FieldValue("1", ts) > FieldValue("0", null)` here, so the tombstone wins. Changing this
+     * tiebreak without checking that call site would turn that convergence into delete/undelete
+     * ping-pong between devices.
      */
     private fun takeGreater(field: String, local: SyncRecord, remote: SyncRecord): Pair<Hlc, FieldValue> {
         val localClock = local.clockOf(field)
