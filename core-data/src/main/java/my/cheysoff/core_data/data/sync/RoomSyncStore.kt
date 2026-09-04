@@ -11,6 +11,7 @@ import my.cheysoff.core_data.data.local.SyncStateDao
 import my.cheysoff.core_domain.sync.FieldClocks
 import my.cheysoff.core_domain.sync.Hlc
 import my.cheysoff.core_domain.sync.RecordType
+import my.cheysoff.core_sync_engine.ClockObserver
 import my.cheysoff.core_sync_engine.HaltReason
 import my.cheysoff.core_sync_engine.MergedWrite
 import my.cheysoff.core_sync_engine.StoredRecord
@@ -64,6 +65,17 @@ class RoomSyncStore(
     private val sketchDao: SketchDao,
     private val syncStateDao: SyncStateDao,
     private val accountId: String,
+    /**
+     * Told about every clock [tombstoneLiveSketchesOf] mints, for the same reason
+     * `DefaultSyncController` builds one for [SyncEngine] itself: a clock this device writes but
+     * never shows to its own generator can be minted below on the very next local write, which then
+     * loses to the record it was supposed to supersede. Deliberately **not defaulted** — a no-op
+     * default is exactly how a caller forgets to wire the real one and the hazard comes back silent.
+     * `SyncStoreFactory` passes the same [my.cheysoff.core_data.data.sync.SyncClock] instance
+     * `DefaultSyncController` feeds its engine, so both paths teach the one generator every clock
+     * either of them mints.
+     */
+    private val clockObserver: ClockObserver,
     private val wallClock: () -> Long = System::currentTimeMillis,
 ) : SyncStore {
 
@@ -336,6 +348,16 @@ class RoomSyncStore(
      * property is about clocks [reconcileAgainstNote] mints for an *arriving* sketch, and this
      * method never touches it. A strictly-advancing bump also cannot itself create a new instance
      * of that reachable branch, since equal clocks are exactly what it is built to avoid.
+     *
+     * **Every bumped clock is fed to [clockObserver] before it is written.** A bump derived purely
+     * from the sketch's own prior clock (see [bumpedClock]) is guaranteed to beat that one row's
+     * history, but says nothing about the process-wide `SyncClock`/`HlcGenerator` this device mints
+     * its *next local write, of anything,* from. Without this, that generator has never been shown
+     * the tombstone's clock, and — exactly as `SyncEngine`'s own `ClockObserver` KDoc warns for a
+     * remote clock — it could mint a later write (say, `restoreNote`'s own un-tombstone) *below*
+     * this tombstone. `restoreSketch`'s `UPDATE` has no clock guard, so that would still look like a
+     * successful local restore; the damage would only surface on another device's `Merge`, which
+     * could favour the still-higher tombstone clock and leave the drawing silently dead there.
      */
     private suspend fun tombstoneLiveSketchesOf(note: NoteEntity) {
         var floor: Hlc? = null
@@ -344,6 +366,7 @@ class RoomSyncStore(
             val base = floor?.takeIf { it > current } ?: current
             val bumped = bumpedClock(base)
             floor = bumped
+            clockObserver.observe(bumped)
             sketchDao.softDeleteSketch(
                 uuid = sketch.uuid,
                 // The note's own wall-clock instant, not the sketch's own -- see this method's

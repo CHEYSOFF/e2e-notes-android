@@ -18,6 +18,7 @@ import my.cheysoff.core_domain.sync.FieldValue
 import my.cheysoff.core_domain.sync.Hlc
 import my.cheysoff.core_domain.sync.RecordType
 import my.cheysoff.core_domain.sync.SyncRecord
+import my.cheysoff.core_sync_engine.ClockObserver
 import my.cheysoff.core_sync_engine.MergedWrite
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -74,6 +75,10 @@ class SketchDeletionTest {
             sketchDao = database.sketchDao,
             syncStateDao = database.syncStateDao,
             accountId = "acct-1",
+            // Shares [clock] with both repositories above -- exactly the wiring `SyncStoreFactory`
+            // gives `RoomSyncStore` and `DefaultSyncController` in production, and the seam
+            // `theSketchTombstonesClockIsFedBackToTheSharedGenerator` below exercises directly.
+            clockObserver = ClockObserver { clock.observe(it) },
         )
     }
 
@@ -591,6 +596,91 @@ class SketchDeletionTest {
         assertTrue(
             "the restored drawing must render again",
             sketchesRepository.getSketchesForNote("n1").first().map { it.id }.contains("s1"),
+        )
+    }
+
+    /**
+     * Fix round 1: `tombstoneLiveSketchesOf`'s bump only advances the sketch's *own* row clock --
+     * it says nothing to this device's process-wide generator. Without feeding it to
+     * [ClockObserver], the shared `SyncClock` singleton `notesRepository`/`sketchesRepository` mint
+     * their next writes from has never seen the tombstone's clock, and could mint a later local
+     * write -- `restoreNote`'s own un-tombstone included -- *below* it. `restoreSketch`'s `UPDATE`
+     * has no clock guard, so that would still look like a successful local restore; the damage
+     * would only surface on another device's `Merge`, favouring the still-higher tombstone clock
+     * and leaving the drawing silently dead there. This proves the observer actually receives the
+     * bumped clock by proving its downstream effect: the shared generator's very next mint must
+     * come out strictly after it.
+     */
+    @Test
+    fun theSketchTombstonesClockIsFedBackToTheSharedGenerator() = runTest {
+        notesRepository.saveNote(Note(id = "n1", title = "Title", content = "Body"))
+        sketchesRepository.saveSketch(sketch("s1", "n1"))
+
+        syncStore.applyMerged(
+            MergedWrite(
+                record = noteRecord(id = "n1", rowClock = hlc(5_000), isDeleted = "1", deletedAtWire = "4500"),
+                dirty = false,
+                seq = 10L,
+                contentBaseline = null,
+                conflictCopy = null,
+            )
+        )
+
+        val tombstoneClock = database.sketchDao.sketchRow("s1")!!.rowHlc()
+        val nextMint = clock.next().hlc
+
+        assertTrue(
+            "the shared generator must have learned about the tombstone's clock, or this device's " +
+                "very next local write could mint BELOW a record it just accepted",
+            nextMint > tombstoneClock,
+        )
+    }
+
+    // -- Task 1 fix round 1: the widening also covers the other arrival order ----------------
+
+    /**
+     * A sketch can sync before its note (`reconcileAgainstNote`'s case 2 deliberately allows it).
+     * If that note later arrives already deleted -- first receipt, not a live-to-deleted
+     * transition -- the sketch must still be reconciled, or it is a permanent orphan reached from
+     * the other arrival order: the exact hole this task exists to close.
+     */
+    @Test
+    fun aSketchArrivingBeforeItsNoteIsTombstonedWhenTheNoteLaterArrivesAlreadyDeleted() = runTest {
+        // Deliberately no note "n1" seeded anywhere in this device's database -- the sketch arrives
+        // first, exactly as `a sketch whose note this device does not have yet is kept, not
+        // discarded` (below) exercises for the SKETCH-arrival direction.
+        syncStore.applyMerged(
+            MergedWrite(
+                record = sketchRecord(id = "s1", noteId = "n1", rowClock = hlc(3_000), strokes = "drawing-data"),
+                dirty = false,
+                seq = 3L,
+                contentBaseline = null,
+                conflictCopy = null,
+            )
+        )
+        assertFalse(
+            "precondition: an unknown note must not be treated as a deleted one",
+            database.sketchDao.sketchRow("s1")!!.isDeleted,
+        )
+
+        // The note now arrives for the first time, and it is already deleted.
+        syncStore.applyMerged(
+            MergedWrite(
+                record = noteRecord(id = "n1", rowClock = hlc(5_000), isDeleted = "1", deletedAtWire = "4500"),
+                dirty = false,
+                seq = 4L,
+                contentBaseline = null,
+                conflictCopy = null,
+            )
+        )
+
+        val stored = database.sketchDao.sketchRow("s1")!!
+        assertTrue("the sketch must be tombstoned once its note is known to be deleted", stored.isDeleted)
+        assertNotNull("it needs a tombstone stamp to ever be purgeable", stored.deletedAt)
+        assertTrue("the correction must be pushed back so other devices converge", stored.dirty)
+        assertTrue(
+            "must not render",
+            database.sketchDao.getSketchesByNoteId("n1").first().isEmpty(),
         )
     }
 

@@ -14,6 +14,7 @@ import my.cheysoff.core_domain.sync.FieldValue
 import my.cheysoff.core_domain.sync.Hlc
 import my.cheysoff.core_domain.sync.RecordType
 import my.cheysoff.core_domain.sync.SyncRecord
+import my.cheysoff.core_sync_engine.ClockObserver
 import my.cheysoff.core_sync_engine.HaltReason
 import my.cheysoff.core_sync_engine.MergedWrite
 import my.cheysoff.core_sync_engine.SyncEngine
@@ -71,6 +72,7 @@ class RoomSyncStoreTest {
             sketchDao = database.sketchDao,
             syncStateDao = database.syncStateDao,
             accountId = account,
+            clockObserver = ClockObserver {},
             wallClock = { 1_000L },
         )
     }
@@ -677,6 +679,7 @@ class RoomSyncStoreTest {
         val other = RoomSyncStore(
             database, database.noteDao, database.folderDao, database.sketchDao, database.syncStateDao,
             accountId = "acct-2",
+            clockObserver = ClockObserver {},
         )
         assertEquals(0L, other.cursor())
     }
@@ -690,6 +693,7 @@ class RoomSyncStoreTest {
 
         val restarted = RoomSyncStore(
             database, database.noteDao, database.folderDao, database.sketchDao, database.syncStateDao, account,
+            clockObserver = ClockObserver {},
         )
         assertEquals(HaltReason.SERVER_ROLLED_BACK, restarted.halt())
     }
