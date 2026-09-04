@@ -97,4 +97,47 @@ interface SketchDao {
     /** `NoteDao.recordNoteSeen` for a sketch: the seq, and nothing else. */
     @Query("UPDATE sketches SET lastSyncedSeq = :seq WHERE uuid = :uuid")
     suspend fun recordSketchSeen(uuid: String, seq: Long)
+
+    // ── Deletion by reconciliation, not cascade. See SketchEntity's KDoc and Task 7. ────────────
+
+    /**
+     * Every live sketch anchored under [noteId] — the set `RoomNotesRepository.deleteNote` walks
+     * to tombstone them one by one, each with its own clock bump, in the same transaction as the
+     * note's own tombstone. Full rows, not just ids: the caller needs each one's current clocks to
+     * compute the fieldHlc its tombstone should carry.
+     */
+    @Query("SELECT * FROM sketches WHERE noteId = :noteId AND isDeleted = 0")
+    suspend fun activeSketchesForNote(noteId: String): List<SketchEntity>
+
+    /**
+     * Sends one sketch to Trash. Mirrors `NoteDao.softDeleteNote` exactly, `isDeleted = 0` guard
+     * included: a second delete of an already-trashed sketch must not re-stamp `deletedAt` or mint
+     * a clock for a write that changed nothing.
+     */
+    @Query(
+        "UPDATE sketches SET isDeleted = 1, deletedAt = :timestamp, " +
+            "hlcMs = :hlcMs, hlcCounter = :hlcCounter, hlcNode = :hlcNode, fieldHlc = :fieldHlc, dirty = 1 " +
+            "WHERE uuid = :uuid AND isDeleted = 0"
+    )
+    suspend fun softDeleteSketch(
+        uuid: String,
+        timestamp: Long,
+        hlcMs: Long,
+        hlcCounter: Int,
+        hlcNode: String,
+        fieldHlc: String,
+    )
+
+    /**
+     * Mirrors `NoteDao.purgeNotesDeletedBefore`: the hard DELETE for trashed sketches whose
+     * retention window has passed. `RoomNotesRepository.purgeExpiredTrash` calls this alongside the
+     * note and folder purges so a tombstoned sketch never outlives the note it was tombstoned with —
+     * a sketch stamped `isDeleted` independently of its note (Task 7) must also be purged
+     * independently, on the same threshold, or it leaks forever once its note is gone.
+     */
+    @Query(
+        "DELETE FROM sketches " +
+            "WHERE isDeleted = 1 AND deletedAt IS NOT NULL AND deletedAt > 0 AND deletedAt <= :threshold"
+    )
+    suspend fun purgeSketchesDeletedBefore(threshold: Long): Int
 }

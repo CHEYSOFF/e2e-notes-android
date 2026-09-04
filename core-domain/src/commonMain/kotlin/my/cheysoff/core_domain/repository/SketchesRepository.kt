@@ -21,4 +21,15 @@ interface SketchesRepository {
      * other field is not clobbered. See `FieldClocks.SKETCH_FIELDS`.
      */
     suspend fun saveSketch(sketch: SketchData)
+
+    /**
+     * Soft-deletes one sketch by id: its own tombstone, its own fresh clock, `dirty` set so it is
+     * pushed. Mirrors `NotesRepository.deleteNote`.
+     *
+     * Before this existed, the only way to trash a single sketch was `saveSketch(copy(isDeleted =
+     * true))` — which hands `createdAt`/`updatedAt` stamping to the caller (`SketchData`'s are
+     * caller-owned, unlike `Note`'s) and leaves it to hand-roll `deletedAt` correctly too. This is
+     * the seam that does both, so nobody has to.
+     */
+    suspend fun deleteSketch(id: String)
 }
