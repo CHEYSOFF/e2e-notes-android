@@ -76,4 +76,30 @@ class StrokeCodecTest {
     fun `a future version is refused rather than guessed at`() {
         assertNull(StrokeCodec.decode("2|1x1|ff0000,1:0,0"))
     }
+
+    /**
+     * `Color.toArgb()` returns a negative `Int` for any alpha >= 0x80 -- which is to say, for any
+     * opaque colour, which is most of them. Widening that `Int` to the `Long` this codec stores
+     * sign-extends it, so an opaque black comes in as a large negative `Long`, not as
+     * `0xFF000000`. `encode` must mask back to the low 32 bits before formatting it as hex, or the
+     * text it emits fails `decode`'s own 8-digit check and the sketch that was just drawn cannot be
+     * read back.
+     */
+    @Test
+    fun `an opaque colour the way Compose would produce it round-trips`() {
+        val opaqueBlackAsComposeWouldReturnIt: Int = 0xFF000000.toInt() // -16777216
+        val colorArgb: Long = opaqueBlackAsComposeWouldReturnIt.toLong()
+
+        val sketch = Sketch(
+            width = 100,
+            height = 100,
+            strokes = listOf(Stroke(colorArgb = colorArgb, width = 4, points = listOf(Point(0, 0)))),
+        )
+
+        val encoded = StrokeCodec.encode(sketch)
+        val decoded = StrokeCodec.decode(encoded)
+
+        assertTrue(encoded.contains("ff000000"), "expected the masked 8-digit colour in: $encoded")
+        assertEquals(0xFF000000L, decoded?.strokes?.get(0)?.colorArgb, "the colour must survive the round trip")
+    }
 }
