@@ -342,3 +342,24 @@ pixels.
 - Sketch thumbnails on home-screen note cards.
 - A generic block system. One block type does not justify the abstraction; the shape is chosen so
   that turning `checklist` into a second one later is a small change rather than a rewrite.
+
+---
+
+## Amendment, 2026-09-05: inline rendering is deferred, the anchor is not
+
+The design above places a drawing **between blocks of the note's text**, and the data path built in PR #102 stores exactly that: an integer block index on the sketch record.
+
+**Rendering it there turns out not to be reachable from where the editor is today**, and the reason is worth writing down rather than rediscovering.
+
+The note body is one `BasicRichTextEditor` (`SingleNoteScreen.kt`), with `ChecklistSection` appended after it. Putting a Compose composable *between two paragraphs of that editor* needs one of:
+
+- **A marker inside the note's HTML** that the editor renders as an inline element. This is the approach the design already rejected, for a reason that has not changed: a build without sketch support loads the body, fails to resolve the marker, and re-serializes it away on the next text edit, orphaning the drawing silently. `SERIALIZER_VERSION`'s KDoc names this hazard directly.
+- **Splitting the body into several editors** around each sketch. That breaks cursor movement across the split, the undo history (`EditorHistory`), and the save path, for every note that contains a drawing.
+
+Neither is worth its price for a feature whose stated use is a few seconds of scribbling.
+
+**So: sketches render below the note's text, in the same position the checklist block already occupies**, ordered by `anchor` then uuid. The anchor keeps recording where the drawing was placed, so inline rendering is a later change to the *view* with no migration and no protocol change — the data is already right.
+
+What this costs, plainly: a drawing meant to sit after the second paragraph appears at the end of the note instead. Nothing is lost or misplaced in the data, and nothing about sync changes.
+
+**What would change this decision:** an editor that can host inline composables without a marker in the serialized body — either a richeditor release that exposes such a seam, or replacing the editor. Until then the split is the only honest route, and it is a project of its own.
