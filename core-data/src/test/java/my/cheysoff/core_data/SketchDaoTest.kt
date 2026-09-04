@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import my.cheysoff.core_data.data.RoomSketchesRepository
 import my.cheysoff.core_data.data.local.NoteDatabase
@@ -11,8 +12,10 @@ import my.cheysoff.core_data.data.local.SketchDao
 import my.cheysoff.core_data.data.local.SketchEntity
 import my.cheysoff.core_data.data.sync.SyncClock
 import my.cheysoff.core_domain.model.SketchData
+import my.cheysoff.core_domain.sync.FieldClocks
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -95,6 +98,10 @@ class SketchDaoTest {
         strokes: String = "raw",
         isDeleted: Boolean = false,
         deletedAt: Long? = null,
+        hlcMs: Long = 0L,
+        hlcCounter: Int = 0,
+        hlcNode: String = "",
+        fieldHlc: String = "",
     ) = sketchDao.upsertSketch(
         SketchEntity(
             uuid = uuid,
@@ -106,10 +113,10 @@ class SketchDaoTest {
             updatedAt = 500L,
             isDeleted = isDeleted,
             deletedAt = deletedAt,
-            hlcMs = 0L,
-            hlcCounter = 0,
-            hlcNode = "",
-            fieldHlc = "",
+            hlcMs = hlcMs,
+            hlcCounter = hlcCounter,
+            hlcNode = hlcNode,
+            fieldHlc = fieldHlc,
             dirty = false,
             lastSyncedSeq = 0L,
         )
@@ -141,6 +148,31 @@ class SketchDaoTest {
         assertEquals(original.deletedAt, back.deletedAt)
     }
 
+    /**
+     * `RoomSketchesRepository.saveSketch` always supplies `dirty = true` itself, and
+     * `SketchEntity`'s Kotlin default only matters at object-construction time — Room's generated
+     * `@Upsert` lists every column explicitly, so neither of those paths can observe what the
+     * column's own `DEFAULT` clause says. Only a raw `INSERT` that omits `dirty` from its column
+     * list forces SQLite to fall through to the DDL default, which is the one thing
+     * `MIGRATION_9_10` actually needs verified: flip that default to `0` and every write path
+     * above would keep passing while a real upgrade silently declared the whole library already
+     * uploaded. See the "flip and watch it fail" note in the fix-round log in the task report.
+     */
+    @Test
+    fun dirtyFallsThroughToTheColumnDefaultWhenAnInsertOmitsIt() {
+        database.openHelper.writableDatabase.execSQL(
+            "INSERT INTO sketches " +
+                "(uuid, noteId, anchor, sortOrder, strokes, createdAt, updatedAt, hlcMs, hlcCounter, hlcNode) " +
+                "VALUES ('s1', 'n1', 0, 0, 'x', 1, 1, 0, 0, '')"
+        )
+
+        val row = runBlocking { sketchDao.sketchRow("s1") }
+        assertTrue(
+            "a row inserted with no `dirty` in its column list must fall through to the DDL's own DEFAULT of 1",
+            row!!.dirty,
+        )
+    }
+
     @Test
     fun dirtyDefaultsToTrueOnAFreshInsertWithoutAnyoneSettingIt() = runTest {
         repository.saveSketch(sketch(id = "s1"))
@@ -164,14 +196,95 @@ class SketchDaoTest {
 
     @Test
     fun sketchesForNoteComeBackOrderedAndTiesBreakByUuid() = runTest {
-        // Three sketches, two sharing a sortOrder. The tie must break by uuid so two devices
-        // holding the same rows agree on an order rather than each picking SQLite's unspecified one.
+        // Three sketches, two sharing a sortOrder. Insert order is DELIBERATELY b, then a, then c
+        // -- the reverse of the asserted result for the tied pair -- so SQLite's natural insertion
+        // (rowid) order would produce "b, a, c" if `getSketchesByNoteId` ever lost its `uuid ASC`
+        // tie-break. Only an explicit `ORDER BY sortOrder ASC, uuid ASC` can produce "a, b, c" here.
         seedDirect(uuid = "c", noteId = "n1", sortOrder = 5)
-        seedDirect(uuid = "a", noteId = "n1", sortOrder = 1)
         seedDirect(uuid = "b", noteId = "n1", sortOrder = 1)
+        seedDirect(uuid = "a", noteId = "n1", sortOrder = 1)
 
         val ids = sketchDao.getSketchesByNoteId("n1").first().map { it.uuid }
         assertEquals(listOf("a", "b", "c"), ids)
+    }
+
+    /**
+     * Persistence fidelity for the four sync columns Task 4 flagged as the real gap this task had
+     * to close: `SketchRecords.toPayload` minted `Hlc.ZERO` for want of anywhere real to read a
+     * clock from. Seeded directly (not through the repository, which mints its own clock) so this
+     * is purely "does the store give back what was written", independent of any stamping logic.
+     */
+    @Test
+    fun clockColumnsRoundTripThroughTheStoreUnchanged() = runTest {
+        seedDirect(
+            uuid = "s1",
+            hlcMs = 424_242L,
+            hlcCounter = 7,
+            hlcNode = "nodeZ",
+            fieldHlc = "anchor=100-2-nodeZ;strokes=90-0-nodeZ",
+        )
+
+        val row = sketchDao.sketchRow("s1")!!
+        assertEquals(424_242L, row.hlcMs)
+        assertEquals(7, row.hlcCounter)
+        assertEquals("nodeZ", row.hlcNode)
+        assertEquals("anchor=100-2-nodeZ;strokes=90-0-nodeZ", row.fieldHlc)
+    }
+
+    /**
+     * The property the whole per-field-clock design rests on: `anchor` and `strokes` clock
+     * independently, so editing one cannot make the other look newer than it really is. A single
+     * row clock would let a text reflow that only moves `anchor` silently outrun a concurrent
+     * drawing edit to `strokes` on another device, or the reverse.
+     *
+     * Goes through [RoomSketchesRepository.saveSketch] on every write -- this is exactly the code
+     * path `Merge.kt`'s field-level rule will read from in Task 6, not a hand-assembled fixture.
+     */
+    @Test
+    fun editingAnchorAndEditingStrokesSeparatelyStampDifferentFieldClocks() = runTest {
+        val created = sketch(id = "s1", noteId = "n1", anchor = 1, order = 0, strokes = "v1")
+        repository.saveSketch(created)
+        val afterCreate = sketchDao.sketchRow("s1")!!
+        // A brand-new row has every field implicit at the row clock -- nothing pinned yet.
+        assertEquals("", afterCreate.fieldHlc)
+
+        // Edit ONLY anchor. `strokes` did not move, so its clock must now be written down
+        // explicitly (it is older than this write's row clock); `anchor` becomes implicit instead.
+        repository.saveSketch(created.copy(anchor = 2))
+        val afterAnchorEdit = sketchDao.sketchRow("s1")!!
+        val clocksAfterAnchorEdit = FieldClocks.parse(afterAnchorEdit.fieldHlc)
+        assertTrue(
+            "strokes must be pinned to its own clock once anchor moves without it",
+            clocksAfterAnchorEdit.containsKey(FieldClocks.STROKES),
+        )
+        assertFalse(
+            "a just-edited anchor must be implicit at the row clock, not pinned",
+            clocksAfterAnchorEdit.containsKey(FieldClocks.ANCHOR),
+        )
+
+        // Edit ONLY strokes. Now `anchor` must be the one pinned to the clock it was stamped at
+        // during the PREVIOUS write, proving the two fields are tracked independently rather than
+        // sharing one clock this write would otherwise bump on top of both.
+        repository.saveSketch(created.copy(anchor = 2, strokes = "v2"))
+        val afterStrokesEdit = sketchDao.sketchRow("s1")!!
+        val clocksAfterStrokesEdit = FieldClocks.parse(afterStrokesEdit.fieldHlc)
+        assertTrue(
+            "anchor must now be pinned to the clock it was stamped at when it was last actually edited",
+            clocksAfterStrokesEdit.containsKey(FieldClocks.ANCHOR),
+        )
+        assertFalse(
+            "a just-edited strokes must be implicit at the row clock, not pinned",
+            clocksAfterStrokesEdit.containsKey(FieldClocks.STROKES),
+        )
+        assertEquals(
+            "anchor's pinned clock must be the moment IT was actually written, not the moment strokes was",
+            afterAnchorEdit.rowHlc(),
+            clocksAfterStrokesEdit.getValue(FieldClocks.ANCHOR),
+        )
+        assertTrue(
+            "anchor's pinned clock and this write's own (strokes') row clock must differ -- that is the whole point",
+            clocksAfterStrokesEdit.getValue(FieldClocks.ANCHOR) != afterStrokesEdit.rowHlc(),
+        )
     }
 
     @Test

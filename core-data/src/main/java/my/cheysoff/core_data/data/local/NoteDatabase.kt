@@ -290,8 +290,10 @@ abstract class NoteDatabase : RoomDatabase() {
          * no repeat, so bumping the schema without writing the matching migration fails on the JVM
          * rather than on a user's device.
          *
-         * The two instrumented migration tests still assemble their own lists by hand — they are
-         * out of scope here, and #56 rewrites them onto MigrationTestHelper anyway.
+         * All four instrumented `Migration*Test` classes spread this same array
+         * (`.addMigrations(*NoteDatabase.ALL_MIGRATIONS)`) rather than assembling their own lists,
+         * confirmed by `MIGRATION_9_10` landing here and every one of them picking it up with no
+         * edit — so a schema bump only ever has one migration chain to go stale.
          *
          * Declared last because a companion object initialises its properties in source order; a
          * list placed above the migrations it names would be an array of nulls.
