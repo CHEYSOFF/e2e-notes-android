@@ -11,13 +11,16 @@ import dagger.hilt.components.SingletonComponent
 import my.cheysoff.core_crypto.SecureUnlockManager
 import my.cheysoff.core_data.data.DataStoreSettingsRepository
 import my.cheysoff.core_data.data.RoomNotesRepository
+import my.cheysoff.core_data.data.RoomSketchesRepository
 import my.cheysoff.core_data.data.local.FolderDao
 import my.cheysoff.core_data.data.local.NoteDao
 import my.cheysoff.core_data.data.local.NoteDatabase
+import my.cheysoff.core_data.data.local.SketchDao
 import my.cheysoff.core_data.data.local.SyncStateDao
 import my.cheysoff.core_data.data.sync.SyncClock
 import my.cheysoff.core_domain.repository.NotesRepository
 import my.cheysoff.core_domain.repository.SettingsRepository
+import my.cheysoff.core_domain.repository.SketchesRepository
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 import java.io.File
 import javax.inject.Singleton
@@ -37,6 +40,12 @@ abstract class DataModule {
     abstract fun bindSettingsRepository(
         dataStoreSettingsRepository: DataStoreSettingsRepository
     ): SettingsRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindSketchesRepository(
+        roomSketchesRepository: RoomSketchesRepository
+    ): SketchesRepository
 
     companion object {
         @Provides
@@ -139,6 +148,12 @@ abstract class DataModule {
         @Singleton
         fun provideSyncStateDao(database: NoteDatabase): SyncStateDao {
             return database.syncStateDao
+        }
+
+        @Provides
+        @Singleton
+        fun provideSketchDao(database: NoteDatabase): SketchDao {
+            return database.sketchDao
         }
 
         /**

@@ -148,6 +148,15 @@ object Merge {
      * value forever with neither able to tell it is wrong. Deciding it by a total order over the
      * values costs one comparison and makes the outcome identical on both devices even if the
      * invariant is one day broken. See [FieldValue.compareTo].
+     *
+     * It is not only a theoretical guard: `RoomSyncStore.reconcileAgainstNote` is one real, load-
+     * bearing caller of this branch. It stamps a sketch's DELETED field at the arriving record's own
+     * row clock rather than minting a fresh one, so two devices that each independently reconcile
+     * the same incoming record land on that exact same clock for DELETED while holding different
+     * values for it — the equal-clock case, for real, across devices. It converges only because
+     * `FieldValue("1", ts) > FieldValue("0", null)` here, so the tombstone wins. Changing this
+     * tiebreak without checking that call site would turn that convergence into delete/undelete
+     * ping-pong between devices.
      */
     private fun takeGreater(field: String, local: SyncRecord, remote: SyncRecord): Pair<Hlc, FieldValue> {
         val localClock = local.clockOf(field)
@@ -228,6 +237,13 @@ object Merge {
     private fun updatedAtCompanion(type: RecordType): String? = when (type) {
         RecordType.NOTE -> FieldClocks.CONTENT
         RecordType.FOLDER -> null
+        // `strokes` is a sketch's user-facing payload, the same role `content` plays for a note --
+        // so it is the companion, not `null`. `noteId`/`anchor`/`order` are positional bookkeeping,
+        // structurally like a note's `folderId`, which deliberately does NOT drag `updatedAt`
+        // along. This matters once a later release re-stamps `anchor` when text above a drawing is
+        // edited (plan 3): without this companion, two devices could disagree on a sketch's
+        // `updatedAt` -- and therefore its sort order -- after nothing but a text reflow.
+        RecordType.SKETCH -> FieldClocks.STROKES
     }
 
     /** `max(the field's own clock, the companion field's clock)`. See [mergeUpdatedAt]. */

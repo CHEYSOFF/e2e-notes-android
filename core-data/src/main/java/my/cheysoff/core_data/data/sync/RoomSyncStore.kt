@@ -4,7 +4,10 @@ import androidx.room.withTransaction
 import my.cheysoff.core_data.data.local.FolderDao
 import my.cheysoff.core_data.data.local.NoteDao
 import my.cheysoff.core_data.data.local.NoteDatabase
+import my.cheysoff.core_data.data.local.SketchDao
+import my.cheysoff.core_data.data.local.SketchEntity
 import my.cheysoff.core_data.data.local.SyncStateDao
+import my.cheysoff.core_domain.sync.FieldClocks
 import my.cheysoff.core_domain.sync.Hlc
 import my.cheysoff.core_domain.sync.RecordType
 import my.cheysoff.core_sync_engine.HaltReason
@@ -37,15 +40,23 @@ import my.cheysoff.core_sync_engine.SyncStore
  *
  * ## What it deliberately does not do
  *
- * It makes no decisions. Which record wins is `Merge`'s, when to move the cursor is `SyncEngine`'s,
- * and whether to sync at all is the app's. Everything here is storage, and the two places where it
- * looks like more — the forwards-only cursor and the first-halt-wins rule — are enforcements of
- * rules stated elsewhere, put in SQL so that no future caller can get them wrong.
+ * It makes almost no decisions. Which record wins is `Merge`'s, when to move the cursor is
+ * `SyncEngine`'s, and whether to sync at all is the app's. Nearly everything here is storage, and
+ * two of the three places where it looks like more — the forwards-only cursor and the
+ * first-halt-wins rule — are enforcements of rules stated elsewhere, put in SQL so that no future
+ * caller can get them wrong.
+ *
+ * The one genuine exception is [reconcileAgainstNote], in [applyMerged]'s SKETCH branch: whether an
+ * arriving sketch is stored live or corrected to a tombstone depends on this device's own local
+ * state (the sketch's note), which `Merge` cannot see — a merge compares two versions of the *same*
+ * record, and this is a rule about *two different* records. See that method's KDoc, and Task 7's
+ * `RoomNotesRepository.deleteNote` for the other half of the same rule.
  */
 class RoomSyncStore(
     private val database: NoteDatabase,
     private val noteDao: NoteDao,
     private val folderDao: FolderDao,
+    private val sketchDao: SketchDao,
     private val syncStateDao: SyncStateDao,
     private val accountId: String,
     private val wallClock: () -> Long = System::currentTimeMillis,
@@ -84,6 +95,17 @@ class RoomSyncStore(
                 contentBaseline = null,
             )
         }
+
+        RecordType.SKETCH -> sketchDao.sketchRow(uuid)?.let { sketch ->
+            StoredRecord(
+                record = RecordRows.toRecord(sketch),
+                dirty = sketch.dirty,
+                lastSyncedSeq = sketch.lastSyncedSeq,
+                // A sketch has no body, so it can never conflict-copy and has no baseline column
+                // -- the same reasoning FOLDER's branch above gives.
+                contentBaseline = null,
+            )
+        }
     }
 
     /**
@@ -117,7 +139,15 @@ class RoomSyncStore(
                 contentBaseline = null,
             )
         }
-        return (notes + folders).sortedWith(
+        val sketches = sketchDao.dirtySketches().map { sketch ->
+            StoredRecord(
+                record = RecordRows.toRecord(sketch),
+                dirty = true,
+                lastSyncedSeq = sketch.lastSyncedSeq,
+                contentBaseline = null,
+            )
+        }
+        return (notes + folders + sketches).sortedWith(
             compareBy({ it.record.rowClock }, { it.record.type }, { it.record.uuid }),
         )
     }
@@ -162,6 +192,20 @@ class RoomSyncStore(
                     )
                 )
             }
+
+            RecordType.SKETCH -> {
+                val incoming = RecordRows.toSketchEntity(
+                    record = write.record,
+                    createdAt = RecordRows.createdAtFor(
+                        existing = sketchDao.sketchRow(write.record.uuid)?.createdAt,
+                        remote = write.remoteCreatedAt,
+                        record = write.record,
+                    ),
+                    dirty = write.dirty,
+                    lastSyncedSeq = write.seq,
+                )
+                sketchDao.upsertSketch(reconcileAgainstNote(incoming))
+            }
         }
 
         write.conflictCopy?.let { copy ->
@@ -183,6 +227,64 @@ class RoomSyncStore(
         }
     }
 
+    /**
+     * Deletion by reconciliation, not cascade — the other half of the rule
+     * `RoomNotesRepository.deleteNote` enacts for a delete performed *on this device*. This is for
+     * a sketch that *arrives* pointing at a note this device already has an opinion about.
+     *
+     * Three cases, and getting the last two right is the whole point (Task 7):
+     *
+     * 1. **[entity] already says deleted.** Nothing to reconcile — trust the wire, unchanged. This
+     *    is also what a sketch cascaded by a sketch-aware deleter looks like on arrival: its own
+     *    tombstone, already correct.
+     * 2. **The note is unknown locally** ([NoteDao.noteRow] returns null). Keep [entity] exactly as
+     *    it arrived. Records arrive in `seq` order, not dependency order, so an unknown note is not
+     *    evidence of anything — it may land later in this same pull or a later one. Treating
+     *    "unknown" as "deleted" here would discard a drawing over an ordering accident, which is
+     *    the trap this method exists to avoid.
+     * 3. **The note is known and tombstoned, but [entity] arrived live anyway.** This is the case a
+     *    cascade cannot reach: a build with no sketch support deletes a note, pushes only the
+     *    note's tombstone, and the sketch — never re-pushed — later arrives (e.g. this is a new
+     *    device's first pull, or a stale device flushes an old dirty sketch after the delete) still
+     *    claiming to be live. [entity] is corrected to a tombstone before it is ever stored, and
+     *    marked dirty so the correction is pushed back — a tombstone this device does not also
+     *    publish converges nowhere.
+     *
+     * The DELETED field's clock is reset to [entity]'s own row clock rather than left at whatever
+     * (older, live) value the wire carried, or bumped to some new clock this store has no generator
+     * to mint: the row clock is already, by construction, at least as new as every field on the
+     * record, so asserting DELETED as of that same instant invents no information and keeps the
+     * per-field-clock invariant — "an entry absent from `fieldHlc` is at the row clock" — honest.
+     *
+     * **This is the one place in the codebase where two devices can independently produce the same
+     * clock for the same field on two different values.** Two devices that each reconcile the same
+     * incoming record deterministically stamp DELETED at that record's own row clock — not a freshly
+     * minted one — so `Merge.takeGreater`'s "should be unreachable" equal-clock branch is genuinely
+     * reachable here, across devices, rather than only in theory. It still converges, because
+     * `FieldValue("1", ts) > FieldValue("0", null)` lexically and the tombstone wins either way — but
+     * that is a property of the tiebreak's total order, not of this method, and a future change to
+     * that tiebreak (e.g. deciding equal clocks some other way) would reintroduce delete/undelete
+     * ping-pong between devices for exactly this record shape.
+     */
+    private suspend fun reconcileAgainstNote(entity: SketchEntity): SketchEntity {
+        if (entity.isDeleted) return entity
+        val note = noteDao.noteRow(entity.noteId) ?: return entity
+        if (!note.isDeleted) return entity
+
+        return entity.copy(
+            isDeleted = true,
+            deletedAt = note.deletedAt ?: entity.updatedAt,
+            dirty = true,
+            fieldHlc = FieldClocks.stamp(
+                previousSerialized = entity.fieldHlc,
+                previousRowClock = entity.rowHlc(),
+                allFields = FieldClocks.SKETCH_FIELDS,
+                touched = setOf(FieldClocks.DELETED),
+                newClock = entity.rowHlc(),
+            ),
+        )
+    }
+
     override suspend fun recordSeen(
         type: RecordType,
         uuid: String,
@@ -193,6 +295,8 @@ class RoomSyncStore(
             noteDao.recordNoteSeen(uuid, seq, contentBaseline?.toString().orEmpty())
 
         RecordType.FOLDER -> folderDao.recordFolderSeen(uuid, seq)
+
+        RecordType.SKETCH -> sketchDao.recordSketchSeen(uuid, seq)
     }
 
     /**
@@ -217,6 +321,14 @@ class RoomSyncStore(
 
         RecordType.FOLDER -> folderDao.acknowledgeFolderPush(
             id = uuid,
+            seq = seq,
+            sealedMs = sealedRowClock.ms,
+            sealedCounter = sealedRowClock.counter,
+            sealedNode = sealedRowClock.node,
+        )
+
+        RecordType.SKETCH -> sketchDao.acknowledgeSketchPush(
+            uuid = uuid,
             seq = seq,
             sealedMs = sealedRowClock.ms,
             sealedCounter = sealedRowClock.counter,

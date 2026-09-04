@@ -280,7 +280,16 @@ enum class RecordType(val wireKey: String, val fields: Set<String>) {
     NOTE("note", FieldClocks.NOTE_FIELDS),
 
     /** A folder. No body, so [Merge] never writes a conflict copy for one. */
-    FOLDER("folder", FieldClocks.FOLDER_FIELDS);
+    FOLDER("folder", FieldClocks.FOLDER_FIELDS),
+
+    /**
+     * A hand-drawn sketch anchored to a block inside a note.
+     *
+     * No body in the [Merge] sense either — `strokes` is a plain LWW field like any other, not a
+     * contested text a user typed live on two devices — so it does not get a conflict copy. Storage
+     * is `RoomSyncStore`/`RecordRows`'s `SKETCH` branches, mirroring `FOLDER`'s for the same reason.
+     */
+    SKETCH("sketch", FieldClocks.SKETCH_FIELDS);
 
     /**
      * How many columns [field] carries — see [FieldValue].

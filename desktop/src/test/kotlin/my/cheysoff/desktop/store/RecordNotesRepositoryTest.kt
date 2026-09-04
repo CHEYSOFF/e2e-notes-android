@@ -10,8 +10,12 @@ import my.cheysoff.core_crypto.sync.RecordEnvelope
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.model.NotesSortOrder
+import my.cheysoff.core_domain.model.SketchData
 import my.cheysoff.core_domain.model.TrashPolicy
 import my.cheysoff.core_domain.sync.FieldClocks
+import my.cheysoff.core_domain.sync.Hlc
+import my.cheysoff.core_sync_codec.SketchRecords
+import my.cheysoff.core_sync_codec.SketchRow
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -120,9 +124,15 @@ class RecordNotesRepositoryTest {
     @Test
     fun `a row of a type this build does not implement is reported separately from damage`() = runTest {
         repository.saveNote(note("a"))
-        val blindedId = codec.blindedIdOf("sketch", "u1")
+        // See UNIMPLEMENTED_TEST_RECORD_TYPE's own doc for why this must not be a plausible
+        // feature name: "sketch" and then "attachment" both were, and both went on to become real
+        // RecordTypes. "sketch" in particular would have crashed here for a while: between the
+        // record type landing and RecordNotesRepository.load wiring up its storage (this class's
+        // own `a sketch record loads into its own snapshot` test), RecordType.SKETCH errored
+        // loudly here rather than falling through -- exactly the crash this test must not trigger.
+        val blindedId = codec.blindedIdOf(UNIMPLEMENTED_TEST_RECORD_TYPE, "u1")
         val plaintext = """
-            {"v":1,"serializer":1,"recType":"sketch","uuid":"u1",
+            {"v":1,"serializer":1,"recType":"$UNIMPLEMENTED_TEST_RECORD_TYPE","uuid":"u1",
              "hlc":"1-0-node","fields":{},"clocks":{},"del":false}
         """.trimIndent().encodeToByteArray()
         store.put(blindedId, RecordEnvelope.seal(keys.kContent, blindedId, plaintext))
@@ -133,6 +143,43 @@ class RecordNotesRepositoryTest {
         assertEquals("not folded into the 'could not be read' total", 0, reloaded.diagnostics.total)
         assertEquals(1, reloaded.getNotes(NotesSortOrder.RECENTLY_EDITED).first().size)
         assertEquals(2, store.readAll().size)
+    }
+
+    /**
+     * The acceptance criterion this test exists to defend: `RecordNotesRepository.load` used to
+     * `error(...)` the instant it saw a sketch record -- see `RecordType.SKETCH -> error("sketch
+     * storage lands in Task 6")`, the stub this class carried before this task. A sketch sealed
+     * exactly the way the sync engine would write one must load cleanly, land in its own map (the
+     * equivalent of `notes`/`folders`), and must not be miscounted as damage or as an unknown type.
+     */
+    @Test
+    fun `a sketch record loads into its own snapshot, not as damage or an unknown type`() = runTest {
+        val row = SketchRow(
+            sketch = SketchData(
+                id = "sk1",
+                noteId = "a",
+                anchor = 0,
+                order = 0,
+                strokes = "1|10x10|ff000000,4:0,0",
+                createdAt = 1_000L,
+                updatedAt = 1_000L,
+            ),
+            rowClock = Hlc(1_000L, 0, "abcd1234"),
+            clocks = emptyMap(),
+            dirty = true,
+            lastSyncedSeq = 0L,
+        )
+        val payload = SketchRecords.toPayload(row, createdAt = row.sketch.createdAt)
+        val sealed = codec.seal(payload)
+        store.put(sealed.blindedId, sealed.envelope)
+
+        val reloaded = reload()
+
+        assertEquals("not damage", 0, reloaded.diagnostics.malformed)
+        assertEquals("a known, implemented type", 0, reloaded.diagnostics.newerType)
+        assertEquals(0, reloaded.diagnostics.total)
+        assertEquals(listOf("sk1"), reloaded.sketchRows().keys.toList())
+        assertEquals("1|10x10|ff000000,4:0,0", reloaded.sketchRows().getValue("sk1").sketch.strokes)
     }
 
     // -------------------------------------------------------------------------------------------

@@ -188,7 +188,8 @@ class EnvelopeSyncTransportTest {
     fun `a record of an unknown type arrives as UNKNOWN_TYPE, not UNREADABLE`() = runTest {
         // UNREADABLE means "I should have been able to read this and could not", and the engine
         // reacts by refusing to page past it. A type from a later build earns neither reaction.
-        val page = transportOver(sealedRecordWithRecType("sketch")).changesSince(0, 32)
+        // See UNIMPLEMENTED_TEST_RECORD_TYPE's own doc for why this is not a plausible feature name.
+        val page = transportOver(sealedRecordWithRecType(UNIMPLEMENTED_TEST_RECORD_TYPE)).changesSince(0, 32)
 
         val faulted = page.records.single() as IncomingRecord.Faulted
         assertEquals(RecordFault.UNKNOWN_TYPE, faulted.fault)
