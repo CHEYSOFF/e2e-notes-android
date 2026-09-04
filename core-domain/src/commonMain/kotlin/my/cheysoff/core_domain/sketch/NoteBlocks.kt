@@ -18,8 +18,8 @@ object NoteBlocks {
 
     /**
      * HTML tags this treats as a block boundary, matching the shapes `richeditor-compose`'s
-     * `toHtml()` actually emits: `<p>`, headings, lists (as a whole, not per `<li>`), block quotes
-     * and preformatted text.
+     * `toHtml()` actually emits: `<p>`, `<div>`, headings, lists (as a whole, not per `<li>`),
+     * block quotes and preformatted text.
      *
      * Changing this set moves the anchor of every sketch already saved against an existing note,
      * because the block count a sketch's index was chosen against changes retroactively for notes
