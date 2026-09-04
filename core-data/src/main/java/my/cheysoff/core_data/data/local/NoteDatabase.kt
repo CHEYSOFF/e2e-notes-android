@@ -15,10 +15,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * stale the moment the next migration lands — which is how Migration4to5Test came to be broken
  * without anyone noticing.
  */
-internal const val NOTE_DATABASE_VERSION = 9
+internal const val NOTE_DATABASE_VERSION = 10
 
 @Database(
-    entities = [NoteEntity::class, FolderEntity::class, SyncStateEntity::class],
+    entities = [NoteEntity::class, FolderEntity::class, SyncStateEntity::class, SketchEntity::class],
     version = NOTE_DATABASE_VERSION,
     exportSchema = true,
 )
@@ -26,6 +26,7 @@ abstract class NoteDatabase : RoomDatabase() {
     abstract val noteDao: NoteDao
     abstract val folderDao: FolderDao
     abstract val syncStateDao: SyncStateDao
+    abstract val sketchDao: SketchDao
 
     companion object {
         /**
@@ -236,6 +237,50 @@ abstract class NoteDatabase : RoomDatabase() {
             }
         }
 
+        // v9 -> v10: the `sketches` table. A plain CREATE TABLE — additive, nothing to backfill,
+        // because the table is brand new and empty on every install that reaches it.
+        //
+        // Mirrors `notes`'/`folders`' sync bookkeeping (see MIGRATION_6_7 and NoteEntity), with one
+        // deliberate naming difference and one deliberate omission:
+        //
+        //  - The SQL column is `sortOrder`, not `order`. `order` is a SQL keyword; it is what the
+        //    wire payload column and the FieldClocks key are called (already shipped, and
+        //    protocol), but naming the SQLite column the same would mean quoting it in every
+        //    migration and every @Query forever after — a trap for whoever writes the next one and
+        //    forgets. Only SketchEntity.toDomain needs to know the two names are the same value.
+        //  - hlcMs/hlcCounter/hlcNode carry no DEFAULT, unlike their counterparts on `notes` and
+        //    `folders`. Those got a default because the ALTER TABLE that added them ran against a
+        //    table that already held rows with no clock to backfill. `sketches` has no rows yet at
+        //    the moment this CREATE TABLE runs, so there is nothing to backfill and nothing for a
+        //    default to paper over.
+        //  - `dirty` DEFAULTs to 1 regardless — not backfill logic, but the same "assume every row
+        //    is unpublished" reasoning MIGRATION_6_7 gives in full. It is pinned in three places
+        //    that all have to agree: this DDL, SketchEntity's Kotlin default, and its
+        //    `@ColumnInfo(defaultValue = "1")`.
+        //
+        // Indexed on noteId (the by-note lookup), with no FOREIGN KEY and no ON DELETE CASCADE —
+        // see SketchEntity's KDoc for why a cascade would be wrong here: it would run on only one
+        // device, leaving the other still holding sketches that point at a note it independently
+        // deleted, and about to push them right back. Reconciling that is Task 7's job.
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `sketches` (" +
+                        "`uuid` TEXT NOT NULL, `noteId` TEXT NOT NULL, `anchor` INTEGER NOT NULL, " +
+                        "`sortOrder` INTEGER NOT NULL, `strokes` TEXT NOT NULL, " +
+                        "`createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, " +
+                        "`isDeleted` INTEGER NOT NULL DEFAULT 0, `deletedAt` INTEGER, " +
+                        "`hlcMs` INTEGER NOT NULL, `hlcCounter` INTEGER NOT NULL, " +
+                        "`hlcNode` TEXT NOT NULL, `fieldHlc` TEXT NOT NULL DEFAULT '', " +
+                        "`dirty` INTEGER NOT NULL DEFAULT 1, `lastSyncedSeq` INTEGER NOT NULL DEFAULT 0, " +
+                        "PRIMARY KEY(`uuid`))"
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_sketches_noteId` ON `sketches` (`noteId`)"
+                )
+            }
+        }
+
         /**
          * Every migration above, in order. `DataModule` spreads this into Room's builder instead
          * of listing the fields a second time, so the chain the app ships with cannot be missing a
@@ -260,6 +305,7 @@ abstract class NoteDatabase : RoomDatabase() {
             MIGRATION_6_7,
             MIGRATION_7_8,
             MIGRATION_8_9,
+            MIGRATION_9_10,
         )
     }
 }
