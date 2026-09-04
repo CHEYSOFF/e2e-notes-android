@@ -50,6 +50,7 @@ class SyncEngineRoomRebaselineTest {
             database = database,
             noteDao = database.noteDao,
             folderDao = database.folderDao,
+            sketchDao = database.sketchDao,
             syncStateDao = database.syncStateDao,
             accountId = account,
         )

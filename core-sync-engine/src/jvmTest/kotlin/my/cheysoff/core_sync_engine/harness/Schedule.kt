@@ -45,6 +45,14 @@ sealed interface Op {
     /** Trash a folder. */
     data class DeleteFolder(override val replica: Int, val folder: Int) : Op
 
+    /**
+     * Draws (or redraws) the one sketch anchored under a note — `RoomSketchesRepository.saveSketch`.
+     * One sketch per note slot, keyed off [note] the same way every other note-scoped op is, so two
+     * replicas racing to edit "the sketch on note 2" collide exactly the way two replicas racing on
+     * its title do.
+     */
+    data class SaveSketch(override val replica: Int, val note: Int, val strokes: String) : Op
+
     /** Apply everything the server has that this replica has not seen. */
     data class Pull(override val replica: Int) : Op
 
@@ -109,7 +117,7 @@ data class Schedule(val seed: Long, val ops: List<Op>) {
                 val replica = random.nextInt(replicaCount)
                 val note = random.nextInt(noteCount)
                 val folder = random.nextInt(folderCount)
-                ops += when (random.nextInt(21)) {
+                ops += when (random.nextInt(23)) {
                     0, 1, 2, 3 -> Op.SaveNote(replica, note, "body-r$replica-s$step")
                     4, 5 -> Op.Pin(replica, note, random.nextBoolean())
                     6 -> Op.Favorite(replica, note, random.nextBoolean())
@@ -122,6 +130,7 @@ data class Schedule(val seed: Long, val ops: List<Op>) {
                     13, 14, 15, 16 -> Op.Pull(replica)
                     17, 18 -> Op.Push(replica)
                     19 -> Op.CrashDuringPush(replica)
+                    20, 21 -> Op.SaveSketch(replica, note, "stroke-r$replica-s$step")
                     // Half of these move the clock backwards, which is the case the HLC's counter
                     // exists for and the one a wall-clock ordering would lose writes on.
                     else -> Op.SkewClock(replica, random.nextLong(-500L, 500L))

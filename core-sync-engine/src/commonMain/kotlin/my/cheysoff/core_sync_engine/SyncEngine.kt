@@ -520,7 +520,7 @@ class SyncEngine(
          * pulled under a lower number re-pulls its whole account once, which is cheap for a small
          * library and is not free for a large one.
          */
-        const val DATA_VERSION = 1
+        const val DATA_VERSION = 2
 
         /** The server refuses a batch of more than 64 items. */
         const val MAX_BATCH_LIMIT = 64

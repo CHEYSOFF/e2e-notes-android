@@ -186,7 +186,7 @@ class Migration7to8Test {
                 }
             }
 
-            val store = RoomSyncStore(db, db.noteDao, db.folderDao, db.syncStateDao, "acct")
+            val store = RoomSyncStore(db, db.noteDao, db.folderDao, db.sketchDao, db.syncStateDao, "acct")
             runBlocking {
                 listOf("synced", "unsynced").forEach { id ->
                     assertNull("$id claimed a baseline", store.load(RecordType.NOTE, id)!!.contentBaseline)
@@ -211,7 +211,7 @@ class Migration7to8Test {
                 c.moveToFirst()
                 assertEquals("", c.getString(0))
             }
-            val store = RoomSyncStore(db, db.noteDao, db.folderDao, db.syncStateDao, "acct")
+            val store = RoomSyncStore(db, db.noteDao, db.folderDao, db.sketchDao, db.syncStateDao, "acct")
             runBlocking { assertNull(store.halt()) }
         } finally {
             db.close()
@@ -231,7 +231,7 @@ class Migration7to8Test {
         seedV7()
         val db = openMigrated()
         try {
-            val store = RoomSyncStore(db, db.noteDao, db.folderDao, db.syncStateDao, "acct")
+            val store = RoomSyncStore(db, db.noteDao, db.folderDao, db.sketchDao, db.syncStateDao, "acct")
             runBlocking {
                 store.acknowledgePush(
                     type = RecordType.NOTE,

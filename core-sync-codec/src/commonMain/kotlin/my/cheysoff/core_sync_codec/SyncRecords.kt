@@ -115,7 +115,20 @@ object SyncRecords {
         FieldClocks.DELETED to listOf(PayloadFields.IS_DELETED, PayloadFields.DELETED_AT),
         FieldClocks.NAME to listOf(PayloadFields.NAME),
         FieldClocks.COLOR to listOf(PayloadFields.COLOR_ARGB),
+        FieldClocks.NOTE_ID to listOf(PayloadFields.NOTE_ID),
+        FieldClocks.ANCHOR to listOf(PayloadFields.ANCHOR),
+        FieldClocks.ORDER to listOf(PayloadFields.ORDER),
+        FieldClocks.STROKES to listOf(PayloadFields.STROKES),
     )
+
+    /**
+     * Which columns make up [field], or null if no [RecordType] clocks a field by that name.
+     *
+     * An `internal` accessor over [FIELD_TO_COLUMNS] rather than making the map itself public: the
+     * map's value type (a `List<String>`, ordered, meant to be indexed into) is this file's own
+     * implementation detail, and a caller outside the module has no business depending on it.
+     */
+    internal fun columnsFor(field: String): List<String>? = FIELD_TO_COLUMNS[field]
 
     /**
      * The columns that must parse as a number, checked on the way in.
@@ -125,7 +138,7 @@ object SyncRecords {
      */
     private val NUMERIC_COLUMNS = listOf(
         PayloadFields.CREATED_AT, PayloadFields.UPDATED_AT, PayloadFields.DELETED_AT,
-        PayloadFields.COLOR_ARGB,
+        PayloadFields.COLOR_ARGB, PayloadFields.ANCHOR, PayloadFields.ORDER,
     )
 
     /** [FIELD_TO_COLUMNS] inverted: column to (field, index within the field's value). */

@@ -7,11 +7,13 @@ import androidx.test.core.app.ApplicationProvider.getApplicationContext
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import my.cheysoff.core_data.data.RoomNotesRepository
+import my.cheysoff.core_data.data.RoomSketchesRepository
 import my.cheysoff.core_data.data.local.NoteDatabase
 import my.cheysoff.core_data.data.sync.RoomSyncStore
 import my.cheysoff.core_data.data.sync.SyncClock
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.model.NotesSortOrder
+import my.cheysoff.core_domain.model.SketchData
 import my.cheysoff.core_domain.sync.RecordType
 import my.cheysoff.core_domain.sync.SyncRecord
 import my.cheysoff.core_sync_engine.ChangePage
@@ -78,10 +80,17 @@ class TwoDeviceSyncTest {
          */
         val clock = SyncClock(node = { name })
 
-        val repository = RoomNotesRepository(database.noteDao, database.folderDao, database, clock)
+        val repository = RoomNotesRepository(database.noteDao, database.folderDao, database.sketchDao, database, clock)
+
+        /**
+         * Task 5's seam for a sketch, sharing [clock] with [repository] for the same reason
+         * `RoomSketchesRepository`'s own KDoc gives: one HLC generator per device, seeded from the
+         * true maximum across every table regardless of which repository seeds it first.
+         */
+        val sketches = RoomSketchesRepository(database.sketchDao, database, clock)
 
         val store = RoomSyncStore(
-            database, database.noteDao, database.folderDao, database.syncStateDao,
+            database, database.noteDao, database.folderDao, database.sketchDao, database.syncStateDao,
             accountId = "acct",
         )
 
@@ -91,6 +100,7 @@ class TwoDeviceSyncTest {
                 when (type) {
                     RecordType.NOTE -> database.noteDao.noteRow(uuid)?.createdAt
                     RecordType.FOLDER -> database.folderDao.folderRow(uuid)?.createdAt
+                    RecordType.SKETCH -> database.sketchDao.sketchRow(uuid)?.createdAt
                 }
             },
             clock = ClockObserver { clock.observe(it) },
@@ -99,6 +109,17 @@ class TwoDeviceSyncTest {
         suspend fun notes(): List<Note> = repository.getNotes(NotesSortOrder.RECENTLY_EDITED).first()
 
         suspend fun note(id: String): Note? = notes().firstOrNull { it.id == id }
+
+        /** Live sketches anchored under [noteId], through the repository seam, not the DAO. */
+        suspend fun sketchesFor(noteId: String): List<SketchData> = sketches.getSketchesForNote(noteId).first()
+
+        /**
+         * The note's own `dirty` column. There is no domain-level `Note.dirty` — it is sync
+         * bookkeeping, not something the UI renders — so this reaches one layer lower than [note],
+         * exactly the way `SketchDeletionTest` reads `database.sketchDao.sketchRow(...).dirty`
+         * directly rather than through a repository that has no reason to expose it.
+         */
+        suspend fun noteDirty(id: String): Boolean? = database.noteDao.noteRow(id)?.dirty
 
         fun close() = database.close()
     }
@@ -343,6 +364,131 @@ class TwoDeviceSyncTest {
 
         assertEquals(listOf("Work"), tablet.repository.getFolders().first().map { it.name })
         assertEquals("f1", tablet.note("n1")!!.folderId)
+    }
+
+    // -- sketches ----------------------------------------------------------------------------------
+
+    /**
+     * Task 8: the thing seven tasks of isolated work have never actually shown. A sketch is a
+     * record like a note or a folder, and it crosses the same wire through the same store. Byte-
+     * identical, not merely present — the whole argument for [SketchData.strokes] being an opaque
+     * encoded string rather than a parsed `Sketch` is that nothing on the path may re-normalise
+     * it, and an assertion that only checked "a sketch exists on the other side" would pass
+     * against a codec that quietly canonicalised the geometry on the way through.
+     */
+    @Test
+    fun `a sketch drawn on one device arrives on the other`() = runTest {
+        newDevices()
+        phone.repository.saveNote(Note(id = "n1", title = "Sketchbook", content = "", folderId = null))
+        val strokes = "1|10x10|ff00ffcc,4:0,0 5,5 10,10"
+        phone.sketches.saveSketch(
+            SketchData(
+                id = "s1", noteId = "n1", anchor = 0, order = 0, strokes = strokes,
+                createdAt = 1_000L, updatedAt = 1_000L,
+            ),
+        )
+
+        settle(phone, tablet)
+
+        val arrived = requireNotNull(tablet.sketchesFor("n1").singleOrNull()) { "the sketch never arrived" }
+        assertEquals("the strokes were not byte-identical", strokes, arrived.strokes)
+        assertEquals("n1", arrived.noteId)
+    }
+
+    /**
+     * The entire reason a sketch is its own record rather than a field on the note: editing one
+     * must not touch the note's own dirty flag. A note re-dirtied by every stroke on a drawing
+     * anchored under it would be re-pushed, and re-merged, for a change that has nothing to do
+     * with the note's own fields.
+     */
+    @Test
+    fun `editing a sketch does not make its note dirty`() = runTest {
+        newDevices()
+        phone.repository.saveNote(Note(id = "n1", title = "Doodle", content = "x", folderId = null))
+        settle(phone, tablet)
+        assertEquals("precondition: the note must start settled", false, phone.noteDirty("n1"))
+
+        phone.sketches.saveSketch(
+            SketchData(
+                id = "s1", noteId = "n1", anchor = 0, order = 0, strokes = "1|1x1|ff000000,4:0,0",
+                createdAt = 1_000L, updatedAt = 1_000L,
+            ),
+        )
+
+        assertEquals(
+            "saving a sketch must not dirty the note it is anchored under",
+            false,
+            phone.noteDirty("n1"),
+        )
+    }
+
+    /**
+     * The field-level design's payoff, and the case whole-record last-writer-wins would break:
+     * text edited on one device and a drawing edited on the other, both before either has synced.
+     * Record-level LWW sees two edits to "the note" and keeps only the later one; here they are
+     * two different records, so both survive, and there is no contest to produce a conflict copy
+     * from.
+     */
+    @Test
+    fun `a sketch and its note's text merge without contending`() = runTest {
+        newDevices()
+        phone.repository.saveNote(Note(id = "n1", title = "Trip", content = "first draft", folderId = null))
+        phone.sketches.saveSketch(
+            SketchData(
+                id = "s1", noteId = "n1", anchor = 0, order = 0, strokes = "original-drawing",
+                createdAt = 1_000L, updatedAt = 1_000L,
+            ),
+        )
+        settle(phone, tablet)
+
+        // Offline on both sides: each edits its own record without having seen the other's edit.
+        phone.repository.saveNote(phone.note("n1")!!.copy(content = "second draft"))
+        tablet.sketches.saveSketch(
+            tablet.sketchesFor("n1").single().copy(strokes = "edited-drawing", updatedAt = 2_000L),
+        )
+
+        settle(phone, tablet)
+
+        listOf(phone, tablet).forEach { device ->
+            assertEquals("the text edit was lost", "second draft", device.note("n1")!!.content)
+            assertEquals(
+                "the drawing edit was lost",
+                "edited-drawing",
+                device.sketchesFor("n1").single().strokes,
+            )
+            assertEquals("a field-level merge must not cost a conflict copy", 1, device.notes().size)
+        }
+    }
+
+    /**
+     * Task 7 made deletion a reconciliation rather than a cascade precisely so this works across
+     * devices: the phone's local delete tombstones the sketch, in the same transaction as the
+     * note, as its own record with its own clock — and that tombstone is what travels. The tablet
+     * never touches its own note row to figure this out; it learns the sketch is gone because the
+     * sketch's own tombstone arrived, exactly the case `RoomSyncStore.reconcileAgainstNote`'s KDoc
+     * describes for the device that did not do the deleting.
+     */
+    @Test
+    fun `deleting the note on one device removes its sketches on the other`() = runTest {
+        newDevices()
+        phone.repository.saveNote(Note(id = "n1", title = "Doomed", content = "x", folderId = null))
+        phone.sketches.saveSketch(
+            SketchData(
+                id = "s1", noteId = "n1", anchor = 0, order = 0, strokes = "drawing",
+                createdAt = 1_000L, updatedAt = 1_000L,
+            ),
+        )
+        settle(phone, tablet)
+        assertEquals(1, tablet.sketchesFor("n1").size)
+
+        phone.repository.deleteNote("n1")
+        settle(phone, tablet)
+
+        assertNull("the tombstone did not travel", tablet.note("n1"))
+        assertTrue(
+            "the sketch must be gone on the device that never deleted anything",
+            tablet.sketchesFor("n1").isEmpty(),
+        )
     }
 
     // -- the server ------------------------------------------------------------------------------

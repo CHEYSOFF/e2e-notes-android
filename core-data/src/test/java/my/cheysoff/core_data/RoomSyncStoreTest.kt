@@ -7,6 +7,7 @@ import kotlinx.coroutines.test.runTest
 import my.cheysoff.core_data.data.local.FolderEntity
 import my.cheysoff.core_data.data.local.NoteDatabase
 import my.cheysoff.core_data.data.local.NoteEntity
+import my.cheysoff.core_data.data.local.SketchEntity
 import my.cheysoff.core_data.data.sync.RoomSyncStore
 import my.cheysoff.core_domain.sync.FieldClocks
 import my.cheysoff.core_domain.sync.FieldValue
@@ -67,6 +68,7 @@ class RoomSyncStoreTest {
             database = database,
             noteDao = database.noteDao,
             folderDao = database.folderDao,
+            sketchDao = database.sketchDao,
             syncStateDao = database.syncStateDao,
             accountId = account,
             wallClock = { 1_000L },
@@ -140,7 +142,64 @@ class RoomSyncStoreTest {
         ),
     )
 
+    /** A sketch row exactly as it is after a local save: dirty, never pushed. */
+    private fun localSketch(
+        id: String = "s1",
+        noteId: String = "n1",
+        anchor: Int = 0,
+        order: Int = 0,
+        strokes: String = "1|10x10|ff000000,4:0,0",
+        rowClock: Hlc = clock(1_000),
+        dirty: Boolean = true,
+        lastSyncedSeq: Long = 0L,
+        isDeleted: Boolean = false,
+        createdAt: Long = 50L,
+        updatedAt: Long = 100L,
+    ) = SketchEntity(
+        uuid = id,
+        noteId = noteId,
+        anchor = anchor,
+        sortOrder = order,
+        strokes = strokes,
+        createdAt = createdAt,
+        updatedAt = updatedAt,
+        isDeleted = isDeleted,
+        deletedAt = if (isDeleted) 900L else null,
+        hlcMs = rowClock.ms,
+        hlcCounter = rowClock.counter,
+        hlcNode = rowClock.node,
+        fieldHlc = "",
+        dirty = dirty,
+        lastSyncedSeq = lastSyncedSeq,
+    )
+
+    private fun sketchRecord(
+        id: String = "s1",
+        noteId: String = "n1",
+        anchor: Int = 0,
+        order: Int = 0,
+        strokes: String = "1|10x10|ff000000,4:0,0",
+        rowClock: Hlc = clock(1_000),
+        updatedAt: String = "100",
+        isDeleted: String = "0",
+    ) = SyncRecord(
+        type = RecordType.SKETCH,
+        uuid = id,
+        rowClock = rowClock,
+        fieldClocks = emptyMap(),
+        fields = mapOf(
+            FieldClocks.NOTE_ID to FieldValue.of(noteId),
+            FieldClocks.ANCHOR to FieldValue.of(anchor.toString()),
+            FieldClocks.ORDER to FieldValue.of(order.toString()),
+            FieldClocks.STROKES to FieldValue.of(strokes),
+            FieldClocks.UPDATED_AT to FieldValue.of(updatedAt),
+            FieldClocks.DELETED to FieldValue.of(isDeleted, if (isDeleted == "1") "900" else null),
+        ),
+    )
+
     private suspend fun storedNote(id: String = "n1") = database.noteDao.noteRow(id)!!
+
+    private suspend fun storedSketch(id: String = "s1") = database.sketchDao.sketchRow(id)!!
 
     // -- §3.2 rule 1: dirty is conditional -------------------------------------------------------
 
@@ -249,6 +308,44 @@ class RoomSyncStoreTest {
         }.let { assertEquals(1, it) }
     }
 
+    // -- SKETCH mirrors FOLDER: same two rules, no body to conflict-copy -------------------------
+
+    /**
+     * The acceptance criterion this file exists to defend for SKETCH: `acknowledgePush` clears
+     * `dirty` only if the row's clock still matches the version that was sealed and sent. Clearing
+     * it unconditionally would drop an edit made while the push was in flight -- exactly the bug
+     * §3.2 rule 1 exists to prevent, and nothing distinguishes a sketch from a note or folder here.
+     */
+    @Test
+    fun `an acknowledged sketch push clears dirty when the row has not moved`() = runTest {
+        database.sketchDao.upsertSketch(localSketch(rowClock = clock(1_000)))
+
+        store.acknowledgePush(RecordType.SKETCH, "s1", clock(1_000), seq = 7L, contentBaseline = null)
+
+        assertFalse("the row was unchanged, so the push published it", storedSketch().dirty)
+        assertEquals(7L, storedSketch().lastSyncedSeq)
+    }
+
+    @Test
+    fun `an edit made while the sketch push was in flight keeps the row dirty`() = runTest {
+        database.sketchDao.upsertSketch(localSketch(rowClock = clock(1_000)))
+        // The push was sealed at 1000; a redraw landed at 2000 before the ack arrived.
+        database.sketchDao.upsertSketch(localSketch(rowClock = clock(2_000), strokes = "1|10x10|ffffffff,2:0,0"))
+
+        store.acknowledgePush(RecordType.SKETCH, "s1", clock(1_000), seq = 7L, contentBaseline = null)
+
+        assertTrue("the newer edit must still be pushed", storedSketch().dirty)
+        assertEquals("1|10x10|ffffffff,2:0,0", storedSketch().strokes)
+    }
+
+    @Test
+    fun `a sketch acknowledgement is one statement too`() = runTest {
+        database.sketchDao.upsertSketch(localSketch(rowClock = clock(1_000)))
+        countUpdates(table = "sketches") {
+            store.acknowledgePush(RecordType.SKETCH, "s1", clock(1_000), seq = 7L, contentBaseline = null)
+        }.let { assertEquals(1, it) }
+    }
+
     /**
      * Counts `UPDATE` events on [table] while [body] runs.
      *
@@ -289,6 +386,17 @@ class RoomSyncStoreTest {
         assertTrue("a NoChange must not publish a local edit", storedNote().dirty)
         assertEquals("milk", storedNote().content)
         assertEquals("500-0-$node", storedNote().contentSyncedHlc)
+    }
+
+    @Test
+    fun `recordSketchSeen moves the seq and leaves the row and its dirty flag alone`() = runTest {
+        database.sketchDao.upsertSketch(localSketch(strokes = "1|10x10|ff000000,4:0,0", dirty = true))
+
+        store.recordSeen(RecordType.SKETCH, "s1", seq = 9L, contentBaseline = null)
+
+        assertEquals(9L, storedSketch().lastSyncedSeq)
+        assertTrue("a NoChange must not publish a local edit", storedSketch().dirty)
+        assertEquals("1|10x10|ff000000,4:0,0", storedSketch().strokes)
     }
 
     // -- applyMerged -----------------------------------------------------------------------------
@@ -378,6 +486,67 @@ class RoomSyncStoreTest {
         assertEquals(7_000L, storedNote("new").createdAt)
     }
 
+    /**
+     * The acceptance criterion this file exists to defend for SKETCH's `applyMerged` branch: a
+     * merged remote sketch is written to the `sketches` table -- not silently dropped -- and is
+     * readable back with every field intact. Mirrors `FOLDER`, not `NOTE`: no conflict copy is
+     * ever produced, because only a note has a body worth preserving that way.
+     */
+    @Test
+    fun `a merged remote sketch is written and readable`() = runTest {
+        store.applyMerged(
+            MergedWrite(
+                record = sketchRecord(
+                    id = "new-sketch",
+                    noteId = "n1",
+                    anchor = 2,
+                    order = 1,
+                    strokes = "1|10x10|ff112233,6:0,0;10,10",
+                    rowClock = clock(3_000),
+                    updatedAt = "7000",
+                ),
+                dirty = false,
+                seq = 4L,
+                contentBaseline = null,
+                conflictCopy = null,
+            )
+        )
+
+        val written = storedSketch("new-sketch")
+        assertEquals("n1", written.noteId)
+        assertEquals(2, written.anchor)
+        assertEquals(1, written.sortOrder)
+        assertEquals("1|10x10|ff112233,6:0,0;10,10", written.strokes)
+        assertEquals(7_000L, written.updatedAt)
+        assertEquals(7_000L, written.createdAt)
+        assertEquals(4L, written.lastSyncedSeq)
+        assertFalse("the remote's own version is not dirty", written.dirty)
+        assertEquals(clock(3_000), written.rowHlc())
+    }
+
+    /**
+     * The full-row path, exactly like `applyRemoteNote`/`applyRemoteFolder`: a merge that decides
+     * the remote wins overwrites every column of the existing local row, including clearing
+     * `dirty` -- there is no conflict-copy branch for a sketch to fall back into instead.
+     */
+    @Test
+    fun `a merged remote sketch overwrites a locally dirty row outright`() = runTest {
+        database.sketchDao.upsertSketch(localSketch(strokes = "local-strokes", dirty = true))
+
+        store.applyMerged(
+            MergedWrite(
+                record = sketchRecord(strokes = "remote-strokes", rowClock = clock(3_000)),
+                dirty = false,
+                seq = 4L,
+                contentBaseline = null,
+                conflictCopy = null,
+            )
+        )
+
+        assertEquals("remote-strokes", storedSketch().strokes)
+        assertFalse("the remote's version replaced the local one outright", storedSketch().dirty)
+    }
+
     // -- load ------------------------------------------------------------------------------------
 
     /**
@@ -395,9 +564,18 @@ class RoomSyncStoreTest {
     }
 
     @Test
+    fun `load sees a tombstoned sketch row`() = runTest {
+        database.sketchDao.upsertSketch(localSketch(isDeleted = true))
+
+        val stored = store.load(RecordType.SKETCH, "s1")!!
+        assertEquals(FieldValue.of("1", "900"), stored.record.valueOf(FieldClocks.DELETED))
+    }
+
+    @Test
     fun `load reports an absent record as absent rather than as an empty one`() = runTest {
         assertNull(store.load(RecordType.NOTE, "nope"))
         assertNull(store.load(RecordType.FOLDER, "nope"))
+        assertNull(store.load(RecordType.SKETCH, "nope"))
     }
 
     /**
@@ -420,11 +598,11 @@ class RoomSyncStoreTest {
     /**
      * The order is part of the contract: a device offline for a week pushes the week in the order
      * it happened, and a deterministic order is what makes a failing convergence seed replay
-     * identically. Notes and folders are one stream, so a folder minted between two notes has to
-     * sort between them rather than after both.
+     * identically. Notes, folders and sketches are one stream, so a sketch minted between two
+     * notes has to sort between them rather than after all of both tables.
      */
     @Test
-    fun `dirty rows of both tables come back as one stream, oldest clock first`() = runTest {
+    fun `dirty rows of all three tables come back as one stream, oldest clock first`() = runTest {
         database.noteDao.applyRemoteNote(localNote(id = "late", rowClock = clock(3_000)))
         database.noteDao.applyRemoteNote(localNote(id = "early", rowClock = clock(1_000)))
         database.folderDao.applyRemoteFolder(
@@ -433,17 +611,30 @@ class RoomSyncStoreTest {
                 hlcMs = 2_000, hlcCounter = 0, hlcNode = node, dirty = true,
             )
         )
+        database.sketchDao.upsertSketch(localSketch(id = "midsketch", rowClock = clock(2_000, 1)))
 
         assertEquals(
-            listOf("early", "mid", "late"),
+            listOf("early", "mid", "midsketch", "late"),
             store.dirtyRecords().map { it.record.uuid },
         )
+    }
+
+    /**
+     * The acceptance criterion this file exists to defend for SKETCH's `dirtyRecords` branch: a
+     * dirty sketch is offered for pushing exactly like a dirty note or folder.
+     */
+    @Test
+    fun `a dirty sketch appears in dirtyRecords`() = runTest {
+        database.sketchDao.upsertSketch(localSketch(id = "s1", dirty = true))
+
+        assertEquals(listOf("s1"), store.dirtyRecords().map { it.record.uuid })
     }
 
     @Test
     fun `a clean row is not offered for pushing`() = runTest {
         database.noteDao.applyRemoteNote(localNote(id = "clean", dirty = false, lastSyncedSeq = 3L))
         database.noteDao.applyRemoteNote(localNote(id = "dirty", dirty = true))
+        database.sketchDao.upsertSketch(localSketch(id = "clean-sketch", dirty = false, lastSyncedSeq = 3L))
 
         assertEquals(listOf("dirty"), store.dirtyRecords().map { it.record.uuid })
     }
@@ -484,7 +675,7 @@ class RoomSyncStoreTest {
     fun `a cursor belongs to its account and is not inherited by another`() = runTest {
         store.saveCursor(12L)
         val other = RoomSyncStore(
-            database, database.noteDao, database.folderDao, database.syncStateDao,
+            database, database.noteDao, database.folderDao, database.sketchDao, database.syncStateDao,
             accountId = "acct-2",
         )
         assertEquals(0L, other.cursor())
@@ -498,7 +689,7 @@ class RoomSyncStoreTest {
         store.recordHalt(HaltReason.SERVER_ROLLED_BACK)
 
         val restarted = RoomSyncStore(
-            database, database.noteDao, database.folderDao, database.syncStateDao, account,
+            database, database.noteDao, database.folderDao, database.sketchDao, database.syncStateDao, account,
         )
         assertEquals(HaltReason.SERVER_ROLLED_BACK, restarted.halt())
     }

@@ -104,6 +104,10 @@ richeditorDesktop = "1.2.0"
 androidx-compose-material-icons-extended = { module = "androidx.compose.material:material-icons-extended", version.ref = "materialIconsExtended" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+# Multiplatform assertions for `commonTest`. Resolves to the JVM (JUnit-backed) variant under
+# `jvmTest` and the Native variant under `mingwX64Test` automatically -- this is `kotlin.test`,
+# never JUnit directly, because JUnit does not exist on Native.
+kotlin-test = { group = "org.jetbrains.kotlin", name = "kotlin-test", version.ref = "kotlin" }
 androidx-test-runner = { group = "androidx.test", name = "runner", version = "1.5.2" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }

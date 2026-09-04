@@ -90,6 +90,18 @@ object FieldClocks {
     /** `folders.colorArgb`. */
     const val COLOR = "colorArgb"
 
+    /** `sketches.noteId` — the note a sketch belongs to. */
+    const val NOTE_ID = "noteId"
+
+    /** `sketches.anchor` — the block index the sketch is pinned under. */
+    const val ANCHOR = "anchor"
+
+    /** `sketches.order` — position among sketches sharing one [ANCHOR]. */
+    const val ORDER = "order"
+
+    /** `sketches.strokes` — the encoded drawing. See `StrokeCodec`. */
+    const val STROKES = "strokes"
+
     /**
      * Every independently clocked field of a note, in the order they are serialised.
      *
@@ -104,6 +116,16 @@ object FieldClocks {
 
     /** Every independently clocked field of a folder, in the order they are serialised. */
     val FOLDER_FIELDS: Set<String> = linkedSetOf(NAME, COLOR, UPDATED_AT, DELETED)
+
+    /**
+     * Every independently clocked field of a sketch, in the order they are serialised.
+     *
+     * `id` is absent for the same reason `NOTE_FIELDS` omits it: it is the record's identity, not a
+     * value that changes. There is no `createdAt` companion left out here the way there is for a
+     * note — a sketch has no `createdAt` clock either, by the same "no write path ever moves it"
+     * argument `PayloadFields.SKETCH_COLUMNS`'s KDoc restates on the payload side.
+     */
+    val SKETCH_FIELDS: Set<String> = linkedSetOf(NOTE_ID, ANCHOR, ORDER, STROKES, UPDATED_AT, DELETED)
 
     /** Separator between entries. Neither a field key nor a hex node contains one. */
     private const val ENTRY_SEPARATOR = ";"
