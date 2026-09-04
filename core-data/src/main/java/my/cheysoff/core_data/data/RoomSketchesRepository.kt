@@ -92,6 +92,32 @@ class RoomSketchesRepository @Inject constructor(
         }
     }
 
+    /**
+     * The seam Task 7 deferred from Task 5: a soft delete for one sketch, stamped by this
+     * repository rather than by the caller. Mirrors `RoomNotesRepository.deleteNote` — read the
+     * row's prior clocks inside the transaction, then write the tombstone with a fresh stamp and
+     * `dirty = 1`, using [TOMBSTONE_FIELDS] so only the DELETED field's clock moves.
+     *
+     * `SketchData.createdAt`/`updatedAt` are caller-owned (unlike `Note`, whose repository stamps
+     * `updatedAt` itself — see this class's KDoc), which is exactly why this exists instead of
+     * leaving callers to fake a delete with `saveSketch(copy(isDeleted = true))`: that path would
+     * hand `deletedAt` and the clock to the caller too, the same trap plan 3 was warned about.
+     */
+    override suspend fun deleteSketch(id: String) {
+        val stamp = stamp()
+        database.withTransaction {
+            val prior = sketchDao.rowClock(id)
+            sketchDao.softDeleteSketch(
+                uuid = id,
+                timestamp = stamp.wallMs,
+                hlcMs = stamp.hlc.ms,
+                hlcCounter = stamp.hlc.counter,
+                hlcNode = stamp.hlc.node,
+                fieldHlc = fieldHlc(prior, TOMBSTONE_FIELDS, stamp),
+            )
+        }
+    }
+
     private fun fieldHlc(
         prior: RowClock?,
         touched: Set<String>,
@@ -124,5 +150,14 @@ class RoomSketchesRepository @Inject constructor(
             touched += FieldClocks.DELETED
         }
         return touched
+    }
+
+    private companion object {
+        /**
+         * What [deleteSketch] writes: the tombstone and nothing else. Mirrors
+         * `RoomNotesRepository.TOMBSTONE_FIELDS` — `updatedAt` is NOT here because trashing a
+         * sketch is not editing it.
+         */
+        val TOMBSTONE_FIELDS = setOf(FieldClocks.DELETED)
     }
 }

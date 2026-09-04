@@ -82,7 +82,7 @@ class RoomNotesRepositoryTest {
             // so the fixture helpers below can seed rows without ceremony.
             .allowMainThreadQueries()
             .build()
-        repository = RoomNotesRepository(database.noteDao, database.folderDao, database, clock)
+        repository = RoomNotesRepository(database.noteDao, database.folderDao, database.sketchDao, database, clock)
     }
 
     @After
@@ -926,7 +926,7 @@ class RoomNotesRepositoryTest {
         // A brand-new clock, as after a process restart — and a wall clock that has been wound
         // back to 1970 relative to what is stored.
         val rewound = SyncClock(node = { node }, wallClock = { 1_000L })
-        val restarted = RoomNotesRepository(database.noteDao, database.folderDao, database, rewound)
+        val restarted = RoomNotesRepository(database.noteDao, database.folderDao, database.sketchDao, database, rewound)
 
         restarted.saveNote(Note(id = "n1", title = "Edited", content = "Body"))
 

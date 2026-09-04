@@ -78,7 +78,7 @@ class TwoDeviceSyncTest {
          */
         val clock = SyncClock(node = { name })
 
-        val repository = RoomNotesRepository(database.noteDao, database.folderDao, database, clock)
+        val repository = RoomNotesRepository(database.noteDao, database.folderDao, database.sketchDao, database, clock)
 
         val store = RoomSyncStore(
             database, database.noteDao, database.folderDao, database.sketchDao, database.syncStateDao,

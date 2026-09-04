@@ -118,7 +118,7 @@ class AndroidPushesToServerTest {
             .addMigrations(*NoteDatabase.ALL_MIGRATIONS)
             .build()
         val clock = SyncClock(node = { "androiddevice" })
-        val repository = RoomNotesRepository(db.noteDao, db.folderDao, db, clock)
+        val repository = RoomNotesRepository(db.noteDao, db.folderDao, db.sketchDao, db, clock)
 
         val noteId = UUID.randomUUID().toString()
         repository.saveNote(

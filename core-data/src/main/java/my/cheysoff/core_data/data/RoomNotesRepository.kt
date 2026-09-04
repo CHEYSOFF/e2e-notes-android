@@ -11,6 +11,7 @@ import my.cheysoff.core_data.data.local.NoteDao
 import my.cheysoff.core_data.data.local.NoteEntity
 import my.cheysoff.core_data.data.local.NoteDatabase
 import my.cheysoff.core_data.data.local.RowClock
+import my.cheysoff.core_data.data.local.SketchDao
 import my.cheysoff.core_data.data.local.toDomain
 import my.cheysoff.core_data.data.sync.SyncClock
 import my.cheysoff.core_data.data.sync.SyncStamp
@@ -45,6 +46,7 @@ import javax.inject.Singleton
 class RoomNotesRepository @Inject constructor(
     private val noteDao: NoteDao,
     private val folderDao: FolderDao,
+    private val sketchDao: SketchDao,
     private val database: NoteDatabase,
     private val clock: SyncClock,
 ) : NotesRepository {
@@ -78,6 +80,12 @@ class RoomNotesRepository @Inject constructor(
                 if (!seeded) {
                     noteDao.highestRowClock()?.let { clock.observe(it.rowHlc()) }
                     folderDao.highestRowClock()?.let { clock.observe(it.rowHlc()) }
+                    // deleteNote (below) mints sketch clocks through this same stamp(), so this
+                    // repository's seed has to cover `sketches` too: without it, a process whose
+                    // very first write is a note deletion would tombstone that note's sketches
+                    // using a generator that never observed the table's existing high-water mark,
+                    // which is exactly the rewound-clock hazard the class KDoc describes.
+                    sketchDao.highestRowClock()?.let { clock.observe(it.rowHlc()) }
                     seeded = true
                 }
             }
@@ -108,6 +116,16 @@ class RoomNotesRepository @Inject constructor(
             previousSerialized = prior?.fieldHlc ?: "",
             previousRowClock = prior?.rowHlc(),
             allFields = FieldClocks.FOLDER_FIELDS,
+            touched = touched,
+            newClock = stamp.hlc,
+        )
+
+    /** [noteFieldHlc] for the `sketches` table — used only by [deleteNote]'s cascade below. */
+    private fun sketchFieldHlc(prior: RowClock?, touched: Set<String>, stamp: SyncStamp): String =
+        FieldClocks.stamp(
+            previousSerialized = prior?.fieldHlc ?: "",
+            previousRowClock = prior?.rowHlc(),
+            allFields = FieldClocks.SKETCH_FIELDS,
             touched = touched,
             newClock = stamp.hlc,
         )
@@ -205,6 +223,28 @@ class RoomNotesRepository @Inject constructor(
         return touched
     }
 
+    /**
+     * Soft-deletes the note, then tombstones its sketches — in the same transaction, as separate
+     * records with their own tombstones, never through `ON DELETE CASCADE`.
+     *
+     * **Why reconciliation, not cascade.** A cascade would run only on the device that performed
+     * this delete. The other device would still hold the note's tombstone but nothing telling it
+     * the note's sketches are gone — and because a dirty sketch pushes independently of its note,
+     * it would push the still-live sketch right back. `SketchEntity`'s KDoc is why the table has no
+     * foreign key at all. What both a sketch-aware and a sketch-unaware build can honour instead is:
+     * a sketch whose note is deleted is *treated* as deleted. This method is that rule enacted by
+     * the device that did the deleting; `RoomSyncStore.applyMerged`'s SKETCH branch enacts the same
+     * rule for a sketch that *arrives* pointing at a note this device already knows is gone.
+     *
+     * **Each sketch gets its own [stamp], not the note's.** `deleteFolder` shares one stamp across
+     * many rows because unfiling N notes and trashing the folder is one user gesture the account's
+     * history should record as one moment. Deleting a note's sketches is not that: each sketch is
+     * its own record with its own dirty flag and its own push, and what makes every one of them
+     * dirty is a real, distinct clock advance — not a borrowed one. Sharing the note's stamp would
+     * still set `dirty = 1` correctly, but "own clock bump" is the brief's own wording for a reason:
+     * a shared clock here would be indistinguishable, from the next merge's point of view, from N+1
+     * fields of one record changing together, which they are not.
+     */
     override suspend fun deleteNote(id: String) {
         // Soft: the row stays, flagged and stamped, until the user restores it or the retention
         // window runs out. The hard DELETE lives in purgeNote.
@@ -219,6 +259,17 @@ class RoomNotesRepository @Inject constructor(
                 hlcNode = stamp.hlc.node,
                 fieldHlc = noteFieldHlc(prior, TOMBSTONE_FIELDS, stamp),
             )
+            sketchDao.activeSketchesForNote(id).forEach { sketch ->
+                val sketchStamp = stamp()
+                sketchDao.softDeleteSketch(
+                    uuid = sketch.uuid,
+                    timestamp = sketchStamp.wallMs,
+                    hlcMs = sketchStamp.hlc.ms,
+                    hlcCounter = sketchStamp.hlc.counter,
+                    hlcNode = sketchStamp.hlc.node,
+                    fieldHlc = sketchFieldHlc(sketch.clocks(), TOMBSTONE_FIELDS, sketchStamp),
+                )
+            }
         }
     }
 
@@ -411,13 +462,20 @@ class RoomNotesRepository @Inject constructor(
 
     override suspend fun purgeExpiredTrash(now: Long): Int {
         val threshold = TrashPolicy.purgeThreshold(now)
-        // One transaction so the two deletes are one observable step. They are independent — a
-        // folder's notes were unfiled when it was trashed, so neither table references the other —
-        // but a single transaction also means Room fires one invalidation instead of two, and the
-        // Trash list re-renders once.
+        // One transaction so the three deletes are one observable step. They are independent — a
+        // folder's notes were unfiled when it was trashed, and a sketch's tombstone stamp is its
+        // own (see deleteNote), so none of the three tables references another here — but a single
+        // transaction also means Room fires one invalidation instead of three, and the Trash list
+        // re-renders once.
+        //
+        // Sketches MUST be purged on the same pass as notes and folders: a sketch is tombstoned
+        // independently of its note (Task 7's whole point) and so ages out of Trash independently
+        // too. Leaving it out would let a tombstoned sketch outlive the note it was purged with —
+        // a leak that never self-heals, since nothing else ever purges the `sketches` table.
         return database.withTransaction {
             noteDao.purgeNotesDeletedBefore(threshold) +
-                folderDao.purgeFoldersDeletedBefore(threshold)
+                folderDao.purgeFoldersDeletedBefore(threshold) +
+                sketchDao.purgeSketchesDeletedBefore(threshold)
         }
     }
 
