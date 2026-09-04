@@ -52,4 +52,30 @@ class NoteBlocksTest {
     fun `an anchor of zero means before the first block`() {
         assertEquals(0, NoteBlocks.clamp(anchor = 0, blockCount = 3))
     }
+
+    @Test
+    fun `a line break inside a paragraph does not undercount the blocks after it`() {
+        // "<p>first<br>second</p>" is real richeditor toHtml() output -- see the "line-break" case
+        // in RichEditorHtmlRoundTripTest.kt:292 -- with a second paragraph appended so a <br> that
+        // is wrongly treated as a nesting element shows up: it would leave the scanner's depth at
+        // 1 instead of 0 after the first </p>, so "Third" below would never be counted.
+        val html = "<p>first<br>second</p><p>Third</p>"
+        assertEquals(2, NoteBlocks.count(html, NoteContentFormat.HTML), "the <br> must not swallow the block after it")
+    }
+
+    @Test
+    fun `hr and img do not undercount the blocks after them either`() {
+        // Same failure shape as the <br> case: a void element with no closing tag of its own, left
+        // out of the nesting count so it cannot strand the depth above zero for the rest of the body.
+        val html = "<p>a</p><hr><img><p>b</p>"
+        assertEquals(2, NoteBlocks.count(html, NoteContentFormat.HTML), "hr/img must not swallow the block after them")
+    }
+
+    @Test
+    fun `a whitespace-only line still renders as a visible line so it still counts as a block`() {
+        // Ruling: the anchor positions a drawing among what a reader sees, and a whitespace-only
+        // line renders as a visible empty line -- isNotBlank() would make the counter disagree with
+        // the renderer. Do not "fix" this to isNotBlank().
+        assertEquals(3, NoteBlocks.count("one\n   \nthree", NoteContentFormat.PLAIN))
+    }
 }
