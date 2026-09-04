@@ -80,6 +80,7 @@ class Simulation(
                 is Op.RestoreNote -> replica.restoreNote(noteId(op.note))
                 is Op.SaveFolder -> replica.saveFolder(folderId(op.folder), op.label, op.folder.toLong())
                 is Op.DeleteFolder -> replica.deleteFolder(folderId(op.folder))
+                is Op.SaveSketch -> replica.saveSketch(sketchId(op.note), noteId(op.note), op.strokes)
                 is Op.Pull -> replica.pull()
                 is Op.Push -> replica.push()
                 // The whole batch is committed by the server and none of it is acknowledged, which
@@ -191,6 +192,7 @@ class Simulation(
     private companion object {
         fun noteId(index: Int): String = "note-$index"
         fun folderId(index: Int): String = "folder-$index"
+        fun sketchId(index: Int): String = "sketch-$index"
 
         /** One record on one line: the row clock, the field clocks, and every value. */
         fun render(record: SyncRecord): String = buildString {
