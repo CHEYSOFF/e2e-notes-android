@@ -138,7 +138,7 @@ object SyncRecords {
      */
     private val NUMERIC_COLUMNS = listOf(
         PayloadFields.CREATED_AT, PayloadFields.UPDATED_AT, PayloadFields.DELETED_AT,
-        PayloadFields.COLOR_ARGB,
+        PayloadFields.COLOR_ARGB, PayloadFields.ANCHOR, PayloadFields.ORDER,
     )
 
     /** [FIELD_TO_COLUMNS] inverted: column to (field, index within the field's value). */
