@@ -206,6 +206,22 @@ class Replica(
     }
 
     /**
+     * `RoomSketchesRepository.saveSketch`. `anchor`/`order` are left untouched — this harness
+     * keeps exactly one sketch per note slot, so nothing here ever moves them, exactly as
+     * `RoomSketchesRepository.touchedFields` only claims a field's clock when the write actually
+     * changed it.
+     */
+    fun saveSketch(uuid: String, noteId: String, strokes: String) = write(
+        type = RecordType.SKETCH,
+        uuid = uuid,
+        touched = SAVE_SKETCH_FIELDS,
+    ) { fields, stamp ->
+        fields[FieldClocks.NOTE_ID] = FieldValue.of(noteId)
+        fields[FieldClocks.STROKES] = FieldValue.of(strokes)
+        fields[FieldClocks.UPDATED_AT] = FieldValue.of(stamp.toString())
+    }
+
+    /**
      * One user action: allocate one clock, recompute the field clocks on top of the row's previous
      * ones, apply the change, mark the row dirty.
      *
@@ -279,9 +295,7 @@ class Replica(
             FieldClocks.DELETED to FieldValue.of(SyncValues.FALSE, null),
         )
 
-        // No public gesture on this class calls `write(RecordType.SKETCH, ...)` yet -- that is a
-        // convergence-test addition for whoever exercises sketch merge scenarios here -- but the
-        // defaults themselves are real, not a placeholder: they are `SketchEntity`'s own Kotlin
+        // Reached via `saveSketch` (Task 8). The defaults are `SketchEntity`'s own Kotlin
         // defaults, exactly as NOTE's and FOLDER's mirror their entities'.
         RecordType.SKETCH -> mapOf(
             FieldClocks.NOTE_ID to FieldValue.of(""),
@@ -362,5 +376,8 @@ class Replica(
 
         /** `RoomNotesRepository.SAVE_FOLDER_FIELDS`, verbatim. */
         val SAVE_FOLDER_FIELDS = setOf(FieldClocks.NAME, FieldClocks.COLOR, FieldClocks.UPDATED_AT)
+
+        /** The fields [Replica.saveSketch] actually changes. `anchor`/`order` are never among them. */
+        val SAVE_SKETCH_FIELDS = setOf(FieldClocks.NOTE_ID, FieldClocks.STROKES, FieldClocks.UPDATED_AT)
     }
 }
