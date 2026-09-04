@@ -170,6 +170,20 @@ class SketchDeletionTest {
 
         val note = database.noteDao.noteRow("n1")!!
         assertTrue("the note itself is deleted too", note.isDeleted)
+
+        // The fix-round-1 rule: every sketch tombstoned BY THIS DELETION shares the note's own
+        // wall-clock deletedAt -- it is one deletion event -- which is exactly what restoreNote
+        // uses to tell "tombstoned by this delete" apart from "already deleted beforehand".
+        assertEquals(
+            "a sketch tombstoned by this note's deletion must carry the note's own deletedAt",
+            note.deletedAt,
+            s1After.deletedAt,
+        )
+        assertEquals(
+            "a sketch tombstoned by this note's deletion must carry the note's own deletedAt",
+            note.deletedAt,
+            s2After.deletedAt,
+        )
     }
 
     @Test
@@ -192,6 +206,108 @@ class SketchDeletionTest {
 
         assertTrue(database.sketchDao.sketchRow("s1")!!.isDeleted)
         assertFalse("n2's sketch must be untouched", database.sketchDao.sketchRow("s2")!!.isDeleted)
+    }
+
+    // -- 1b. restoreNote un-tombstones exactly the sketches ITS OWN deletion tombstoned ------
+
+    /**
+     * Falsifiability: verified by running this against the pre-fix-round `restoreNote` (which
+     * calls only `noteDao.restoreNote`) — failed with both sketches still `isDeleted`. See the
+     * report for the exact assertion.
+     */
+    @Test
+    fun `restoring a note un-tombstones the sketches its own deletion tombstoned`() = runTest {
+        notesRepository.saveNote(Note(id = "n1", title = "Title", content = "Body"))
+        sketchesRepository.saveSketch(sketch("s1", "n1"))
+        sketchesRepository.saveSketch(sketch("s2", "n1"))
+        notesRepository.deleteNote("n1")
+
+        notesRepository.restoreNote("n1")
+
+        assertFalse("s1 must come back live", database.sketchDao.sketchRow("s1")!!.isDeleted)
+        assertFalse("s2 must come back live", database.sketchDao.sketchRow("s2")!!.isDeleted)
+        assertNull(database.sketchDao.sketchRow("s1")!!.deletedAt)
+        assertNull(database.sketchDao.sketchRow("s2")!!.deletedAt)
+        assertTrue(
+            "both drawings render again",
+            sketchesRepository.getSketchesForNote("n1").first().map { it.id }.containsAll(listOf("s1", "s2")),
+        )
+    }
+
+    /**
+     * The test that matters: nothing distinguishes "tombstoned by this note's deletion" from
+     * "the user deleted this sketch individually, earlier" except the exact `deletedAt` match the
+     * fix relies on. Getting this wrong resurrects a drawing the user deliberately deleted.
+     *
+     * Falsifiability: verified against an unconditional "un-tombstone every sketch under this
+     * note" implementation — failed with the individually-deleted sketch coming back live. See
+     * the report.
+     */
+    @Test
+    fun `restoring a note does not resurrect a sketch that was deleted individually beforehand`() = runTest {
+        notesRepository.saveNote(Note(id = "n1", title = "Title", content = "Body"))
+        sketchesRepository.saveSketch(sketch("individually-deleted", "n1"))
+        sketchesRepository.saveSketch(sketch("cascaded", "n1"))
+
+        // Seeded directly at a fixed, deliberately old instant -- rather than through
+        // `sketchesRepository.deleteSketch`, which stamps the real wall clock and could otherwise
+        // land in the same millisecond as `deleteNote` below, making the two tombstones coincide
+        // by sheer timing luck and this test's own precondition assertion flaky.
+        val individualDeletedAt = 500L
+        database.sketchDao.softDeleteSketch(
+            uuid = "individually-deleted",
+            timestamp = individualDeletedAt,
+            hlcMs = individualDeletedAt,
+            hlcCounter = 0,
+            hlcNode = node,
+            fieldHlc = "",
+        )
+
+        notesRepository.deleteNote("n1")
+        val cascadedDeletedAt = database.sketchDao.sketchRow("cascaded")!!.deletedAt
+        // Precondition: the two tombstones must NOT coincide, or this test would prove nothing.
+        assertNotEquals(individualDeletedAt, cascadedDeletedAt)
+
+        notesRepository.restoreNote("n1")
+
+        assertTrue(
+            "the individually-deleted sketch must stay deleted",
+            database.sketchDao.sketchRow("individually-deleted")!!.isDeleted,
+        )
+        assertEquals(
+            "its tombstone's own timestamp must be untouched by the note's restore",
+            individualDeletedAt,
+            database.sketchDao.sketchRow("individually-deleted")!!.deletedAt,
+        )
+        assertFalse(
+            "the sketch tombstoned by the note's own deletion must come back",
+            database.sketchDao.sketchRow("cascaded")!!.isDeleted,
+        )
+        assertEquals(listOf("cascaded"), sketchesRepository.getSketchesForNote("n1").first().map { it.id })
+    }
+
+    /**
+     * Falsifiability: verified by making the restore skip the per-sketch clock bump (writing
+     * `isDeleted = 0` without touching `hlcMs`/`hlcCounter`/`hlcNode`/`fieldHlc`/`dirty`) — failed
+     * because the sketch's row clock had not moved and `dirty` was still whatever `deleteNote`
+     * left it at (already true from the tombstone, which is why this test checks the clock
+     * strictly advanced, not just that `dirty` reads true). See the report.
+     */
+    @Test
+    fun `restored sketches are dirty with a clock strictly newer than their tombstone`() = runTest {
+        notesRepository.saveNote(Note(id = "n1", title = "Title", content = "Body"))
+        sketchesRepository.saveSketch(sketch("s1", "n1"))
+        notesRepository.deleteNote("n1")
+        val tombstoned = database.sketchDao.sketchRow("s1")!!
+
+        notesRepository.restoreNote("n1")
+
+        val restored = database.sketchDao.sketchRow("s1")!!
+        assertTrue("the restore must be pushed so the other device un-deletes it too", restored.dirty)
+        assertTrue(
+            "the restore must be its own clock bump, not a re-write at the tombstone's clock",
+            restored.rowHlc() > tombstoned.rowHlc(),
+        )
     }
 
     // -- 2. a sketch whose note is already deleted is treated as deleted on arrival ----------
