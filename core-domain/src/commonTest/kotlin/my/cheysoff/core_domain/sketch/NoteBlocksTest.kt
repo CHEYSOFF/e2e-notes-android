@@ -37,8 +37,9 @@ class NoteBlocksTest {
     @Test
     fun `content it cannot parse still returns a usable count`() {
         // Never throws: an unparseable body must cost a drawing its position, never its existence.
-        val count = NoteBlocks.count("<p>unclosed<div>", NoteContentFormat.HTML)
-        assertEquals(true, count >= 0)
+        // "<p>" opens at depth 0 and counts; "<div>" opens at depth 1 (nested, unclosed) and does
+        // not -- so the one well-formed top-level block is exactly what a usable count means here.
+        assertEquals(1, NoteBlocks.count("<p>unclosed<div>", NoteContentFormat.HTML))
     }
 
     @Test
