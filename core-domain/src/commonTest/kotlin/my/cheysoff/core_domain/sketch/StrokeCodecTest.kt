@@ -63,10 +63,12 @@ class StrokeCodecTest {
     fun `nothing unparseable throws`() {
         // Decode is fed bytes that came off a network from another device. A malformed sketch is
         // one record to refuse, never a reason to take down a sync pass.
+        // Each fixture below must use a valid 8-digit colour (ff0000 is only 6) so that the colour
+        // check does not refuse it before the branch the fixture is named for is ever reached.
         listOf(
             "", "1", "1|", "1|3277", "1|axb|ff0000,1:0,0", "1|1x1|nothex,1:0,0",
-            "1|1x1|ff0000,x:0,0", "1|1x1|ff0000,1:0", "1|1x1|ff0000,1:a,b",
-            "2|1x1|ff0000,1:0,0", "1|1x1|ff0000,1:0,0;",
+            "1|1x1|ff0000ff,x:0,0", "1|1x1|ff0000ff,1:0", "1|1x1|ff0000ff,1:a,b",
+            "2|1x1|ff0000,1:0,0", "1|1x1|ff0000ff,1:0,0;",
         ).forEach { assertNull(StrokeCodec.decode(it), "should not decode: <$it>") }
     }
 
