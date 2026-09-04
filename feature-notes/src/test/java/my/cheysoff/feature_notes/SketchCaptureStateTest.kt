@@ -1,0 +1,328 @@
+package my.cheysoff.feature_notes
+
+import my.cheysoff.core_domain.sketch.Point
+import my.cheysoff.core_domain.sketch.StrokeCodec
+import my.cheysoff.feature_notes.ui.sketch.SketchCaptureState
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * The pure state machine behind the sketch canvas -- capture, undo/redo and stroke-level erase --
+ * exercised without a device, exactly the way it is meant to be tested.
+ *
+ * Simplification happens at [SketchCaptureState.endStroke], not lazily in
+ * [SketchCaptureState.toSketch]: undo must operate on the strokes that were actually stored, the
+ * size guard has to see the real stored size, and a drawing must not visibly move the instant it is
+ * saved. A round trip through [StrokeCodec] is the join between this state machine and the existing
+ * codec, so it is asserted directly rather than assumed.
+ */
+class SketchCaptureStateTest {
+
+    private fun state(width: Int = 4096, height: Int = 4096) = SketchCaptureState(width, height)
+
+    // --- basic capture ---------------------------------------------------------------------
+
+    @Test
+    fun `a completed stroke appears in strokes`() {
+        val s = state()
+
+        s.beginStroke(0, 0)
+        s.extendStroke(10, 0)
+        s.extendStroke(20, 0)
+        s.endStroke()
+
+        assertEquals(1, s.strokes.size)
+        assertEquals(Point(0, 0), s.strokes[0].points.first())
+        assertEquals(Point(20, 0), s.strokes[0].points.last())
+    }
+
+    @Test
+    fun `a stroke with a single point is still a stroke`() {
+        val s = state()
+
+        s.beginStroke(50, 60)
+        s.endStroke()
+
+        assertEquals(1, s.strokes.size)
+        assertEquals(listOf(Point(50, 60)), s.strokes[0].points)
+    }
+
+    @Test
+    fun `ending a stroke that was never begun does nothing`() {
+        val s = state()
+
+        s.endStroke()
+
+        assertTrue(s.strokes.isEmpty())
+    }
+
+    @Test
+    fun `a straight-line stroke is simplified down to its endpoints at endStroke`() {
+        val s = state()
+
+        s.beginStroke(0, 0)
+        for (i in 1..50) s.extendStroke(i * 4, 0)
+        s.endStroke()
+
+        // Simplification happened already, not lazily in toSketch: the stored stroke itself is
+        // thin, so undo and the size guard downstream see the real, small shape.
+        assertEquals(2, s.strokes[0].points.size)
+    }
+
+    @Test
+    fun `activeStrokePoints reflects the in-progress gesture and clears on endStroke`() {
+        val s = state()
+
+        assertTrue(s.activeStrokePoints.isEmpty())
+
+        s.beginStroke(0, 0)
+        s.extendStroke(5, 5)
+        assertEquals(listOf(Point(0, 0), Point(5, 5)), s.activeStrokePoints)
+
+        s.endStroke()
+        assertTrue(s.activeStrokePoints.isEmpty())
+    }
+
+    // --- clamping ----------------------------------------------------------------------------
+
+    @Test
+    fun `coordinates outside the canvas are clamped, not dropped`() {
+        val s = state(width = 100, height = 100)
+
+        s.beginStroke(-20, -30)
+        s.extendStroke(500, 40)
+        s.extendStroke(40, 900)
+        s.endStroke()
+
+        val points = s.strokes[0].points
+        assertEquals(Point(0, 0), points.first())
+        assertTrue(points.any { it == Point(100, 40) })
+        assertTrue(points.any { it == Point(40, 100) })
+    }
+
+    // --- undo / redo -------------------------------------------------------------------------
+
+    @Test
+    fun `undo removes the last completed stroke`() {
+        val s = state()
+
+        s.beginStroke(0, 0); s.endStroke()
+        s.beginStroke(10, 10); s.endStroke()
+        assertEquals(2, s.strokes.size)
+
+        s.undo()
+
+        assertEquals(1, s.strokes.size)
+        assertEquals(Point(0, 0), s.strokes[0].points.first())
+    }
+
+    @Test
+    fun `redo restores the stroke that undo removed`() {
+        val s = state()
+
+        s.beginStroke(0, 0); s.endStroke()
+        s.beginStroke(10, 10); s.endStroke()
+        s.undo()
+
+        s.redo()
+
+        assertEquals(2, s.strokes.size)
+        assertEquals(Point(10, 10), s.strokes[1].points.first())
+    }
+
+    @Test
+    fun `a new stroke after an undo clears the redo stack`() {
+        val s = state()
+
+        s.beginStroke(0, 0); s.endStroke()
+        s.beginStroke(10, 10); s.endStroke()
+        s.undo()
+        assertTrue(s.canRedo)
+
+        s.beginStroke(20, 20); s.endStroke()
+
+        assertFalse(s.canRedo)
+        s.redo()
+        assertEquals(2, s.strokes.size)
+        assertEquals(Point(20, 20), s.strokes[1].points.first())
+    }
+
+    @Test
+    fun `undo on an empty history does nothing`() {
+        val s = state()
+
+        s.undo()
+
+        assertTrue(s.strokes.isEmpty())
+        assertFalse(s.canUndo)
+    }
+
+    @Test
+    fun `redo with nothing undone does nothing`() {
+        val s = state()
+        s.beginStroke(0, 0); s.endStroke()
+
+        s.redo()
+
+        assertEquals(1, s.strokes.size)
+        assertFalse(s.canRedo)
+    }
+
+    // --- erase ---------------------------------------------------------------------------------
+
+    @Test
+    fun `erase is stroke-level -- touching near any point of a stroke removes the whole stroke`() {
+        val s = state()
+        s.beginStroke(0, 0)
+        s.extendStroke(100, 0)
+        s.extendStroke(200, 0)
+        s.endStroke()
+
+        s.eraseAt(100, 5) // near the middle of the stroke, not exactly on a stored point
+
+        assertTrue(s.strokes.isEmpty())
+    }
+
+    @Test
+    fun `erase does nothing when nothing is within tolerance`() {
+        val s = state()
+        s.beginStroke(0, 0)
+        s.extendStroke(200, 0)
+        s.endStroke()
+
+        s.eraseAt(0, 500)
+
+        assertEquals(1, s.strokes.size)
+    }
+
+    @Test
+    fun `erase only removes the nearest stroke, leaving others intact`() {
+        val s = state()
+        s.beginStroke(0, 0); s.extendStroke(100, 0); s.endStroke()
+        s.beginStroke(0, 300); s.extendStroke(100, 300); s.endStroke()
+
+        s.eraseAt(50, 2) // right on the first stroke
+
+        assertEquals(1, s.strokes.size)
+        assertEquals(Point(0, 300), s.strokes[0].points.first())
+    }
+
+    @Test
+    fun `an erase is undoable`() {
+        val s = state()
+        s.beginStroke(0, 0); s.extendStroke(100, 0); s.endStroke()
+
+        s.eraseAt(50, 0)
+        assertTrue(s.strokes.isEmpty())
+
+        s.undo()
+
+        assertEquals(1, s.strokes.size)
+        assertEquals(Point(0, 0), s.strokes[0].points.first())
+    }
+
+    @Test
+    fun `redoing an undone erase removes the stroke again`() {
+        val s = state()
+        s.beginStroke(0, 0); s.extendStroke(100, 0); s.endStroke()
+        s.eraseAt(50, 0)
+        s.undo()
+
+        s.redo()
+
+        assertTrue(s.strokes.isEmpty())
+    }
+
+    @Test
+    fun `an erased stroke restores at its original position among the others`() {
+        val s = state()
+        s.beginStroke(0, 0); s.endStroke() // index 0
+        s.beginStroke(10, 10); s.endStroke() // index 1
+        s.beginStroke(20, 20); s.endStroke() // index 2
+
+        s.eraseAt(10, 10) // removes the middle stroke
+        assertEquals(2, s.strokes.size)
+
+        s.undo()
+
+        assertEquals(3, s.strokes.size)
+        assertEquals(Point(10, 10), s.strokes[1].points.first())
+    }
+
+    // --- toSketch / codec round trip ------------------------------------------------------------
+
+    @Test
+    fun `toSketch carries the canvas dimensions it was constructed with`() {
+        val s = state(width = 3277, height = 4096)
+        s.beginStroke(1, 1); s.endStroke()
+
+        val sketch = s.toSketch()
+
+        assertEquals(3277, sketch.width)
+        assertEquals(4096, sketch.height)
+    }
+
+    @Test
+    fun `toSketch round-trips through StrokeCodec unchanged`() {
+        val s = state()
+        s.beginStroke(0, 0)
+        s.extendStroke(50, 10)
+        s.extendStroke(120, 5)
+        s.endStroke()
+        s.beginStroke(200, 200)
+        s.endStroke() // a dot
+
+        val sketch = s.toSketch()
+        val roundTripped = StrokeCodec.decode(StrokeCodec.encode(sketch))
+
+        assertEquals(sketch, roundTripped)
+    }
+
+    @Test
+    fun `an empty capture still round-trips through StrokeCodec`() {
+        val s = state()
+
+        val sketch = s.toSketch()
+        val roundTripped = StrokeCodec.decode(StrokeCodec.encode(sketch))
+
+        assertEquals(sketch, roundTripped)
+    }
+
+    @Test
+    fun `toSketch does not include an in-progress, unfinished stroke`() {
+        val s = state()
+        s.beginStroke(0, 0)
+        s.extendStroke(10, 10)
+        // no endStroke
+
+        val sketch = s.toSketch()
+
+        assertTrue(sketch.strokes.isEmpty())
+    }
+
+    @Test
+    fun `default color and width populate a stroke drawn without any tool change`() {
+        val s = state()
+
+        s.beginStroke(0, 0)
+        s.endStroke()
+
+        assertEquals(SketchCaptureState.DEFAULT_COLOR_ARGB, s.strokes[0].colorArgb)
+        assertEquals(SketchCaptureState.DEFAULT_STROKE_WIDTH, s.strokes[0].width)
+    }
+
+    @Test
+    fun `changing colorArgb and strokeWidth before a stroke is reflected in that stroke`() {
+        val s = state()
+        s.colorArgb = 0xffff0000
+        s.strokeWidth = 32
+
+        s.beginStroke(0, 0)
+        s.endStroke()
+
+        assertEquals(0xffff0000, s.strokes[0].colorArgb)
+        assertEquals(32, s.strokes[0].width)
+    }
+}
