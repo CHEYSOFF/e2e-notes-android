@@ -55,7 +55,12 @@ object StrokeCodec {
     }
 
     private fun encodeStroke(stroke: Stroke): String {
-        val colorHex = stroke.colorArgb.toString(16).padStart(8, '0')
+        // Masked to the low 32 bits before formatting: `Color.toArgb()` returns a negative `Int`
+        // for any alpha >= 0x80 (i.e. most opaque colours), and widening that to this field's
+        // `Long` sign-extends it. Without the mask, `toString(16)` on that value emits a leading
+        // `-` or more than 8 digits, and `decode`'s 8-digit colour check refuses it -- silently
+        // losing a sketch that was never malformed, only mis-encoded. Do not remove this mask.
+        val colorHex = (stroke.colorArgb and 0xFFFFFFFFL).toString(16).padStart(8, '0')
         val points = StringBuilder()
         var prevX = 0
         var prevY = 0
