@@ -47,6 +47,11 @@ kotlin {
                 implementation(libs.atomicfu)
             }
         }
+        // `kotlin.test`, not JUnit: this source set is picked up by both `jvmTest` and
+        // `mingwX64Test`, and JUnit does not exist on Native. `StrokeCodecTest` lives here because
+        // its entire point is proving the JVM and Native encoders agree byte-for-byte -- a
+        // JVM-only test cannot demonstrate that.
+        val commonTest by getting { dependencies { implementation(libs.kotlin.test) } }
         val jvmTest by getting { dependencies { implementation(libs.junit) } }
     }
 }
