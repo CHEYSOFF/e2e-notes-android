@@ -92,6 +92,10 @@ class TwoDeviceSyncTest {
         val store = RoomSyncStore(
             database, database.noteDao, database.folderDao, database.sketchDao, database.syncStateDao,
             accountId = "acct",
+            // The same generator the engine below observes remote clocks into -- exactly the
+            // sharing `SyncStoreFactory` gives `RoomSyncStore` and `DefaultSyncController` in
+            // production.
+            clockObserver = ClockObserver { clock.observe(it) },
         )
 
         val engine = SyncEngine(
