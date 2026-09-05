@@ -1,6 +1,5 @@
 package my.cheysoff.feature_notes
 
-import android.net.Uri
 import androidx.lifecycle.SavedStateHandle
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -31,7 +30,7 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
-import org.mockito.Mockito
+import java.util.UUID
 
 /**
  * The stateful half of [SingleNoteViewModel]: what it writes, when it writes it, and what it does
@@ -115,13 +114,12 @@ class SingleNoteViewModelTest {
     )
 
     /**
-     * A stand-in for a picked photo's content Uri. [Uri] has no public constructor and every static
-     * factory (`Uri.parse`, `Uri.fromParts`, ...) is one of the android.jar stub methods that throws
-     * "not mocked" under a plain JVM unit test -- Mockito's mock, built by subclassing without ever
-     * calling those bodies, is what makes a Uri value obtainable here at all. Its content is never
-     * read: [FakeImageImporter] only records which instance it was asked to import.
+     * A stand-in for a picked photo's content uri. `ImportAttachment`/`ImageImporter` take a plain
+     * `String` (see `ImageImporter`'s own KDoc for why), so this is just a string -- no
+     * `android.net.Uri` construction, and therefore no android.jar stub, is involved at all. Its
+     * content is never read: [FakeImageImporter] only records which string it was asked to import.
      */
-    private fun fakeUri(): Uri = Mockito.mock(Uri::class.java)
+    private fun fakeUri(): String = "content://fake/${UUID.randomUUID()}"
 
     private fun attachmentData(
         id: String = "a1",
@@ -1352,6 +1350,11 @@ class SingleNoteViewModelTest {
             val saved = attachmentRepo.saved.single()
             assertEquals(2, saved.anchor)
             assertEquals(NOTE_ID, saved.noteId)
+            // Pins the requirement Task 4 built saveAttachment's carry-forward for: a UI that
+            // rebuilds an AttachmentData without setting meta must send "", never something it
+            // invented, so the repository (not this ViewModel) is the only thing that ever owns a
+            // non-empty value.
+            assertEquals("", saved.meta)
         }
 
     @Test

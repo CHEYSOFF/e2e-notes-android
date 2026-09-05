@@ -1,6 +1,5 @@
 package my.cheysoff.feature_notes
 
-import android.net.Uri
 import my.cheysoff.core_domain.model.AttachmentData
 import my.cheysoff.feature_notes.ui.attachment.ImageImporter
 import my.cheysoff.feature_notes.ui.attachment.ImportResult
@@ -10,6 +9,9 @@ import my.cheysoff.feature_notes.ui.attachment.ImportResult
  * needs a real device and cannot run under a plain JVM unit test -- see `ImageImporter.kt`'s own
  * KDoc -- so every [SingleNoteViewModel] test that exercises `ImportAttachment` goes through this
  * instead, deciding what [import] returns directly rather than actually decoding anything.
+ *
+ * [import] takes a plain `String` (matching [ImageImporter]'s own platform-free signature), so this
+ * fake needs no `android.net.Uri` at all -- there is nothing here to construct or mock.
  */
 internal class FakeImageImporter : ImageImporter {
 
@@ -32,10 +34,10 @@ internal class FakeImageImporter : ImageImporter {
         )
     )
 
-    /** Every [Uri] handed to [import], in call order. */
-    val requested = mutableListOf<Uri>()
+    /** Every uri string handed to [import], in call order. */
+    val requested = mutableListOf<String>()
 
-    override suspend fun import(uri: Uri): ImportResult {
+    override suspend fun import(uri: String): ImportResult {
         requested += uri
         return result
     }

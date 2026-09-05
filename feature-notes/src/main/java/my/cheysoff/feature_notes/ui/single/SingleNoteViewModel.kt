@@ -1,6 +1,5 @@
 package my.cheysoff.feature_notes.ui.single
 
-import android.net.Uri
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -368,6 +367,20 @@ class SingleNoteViewModel @Inject constructor(
     // to a note: an import saved just before Done->back can still be mid-flight (or written but not
     // yet re-emitted into _state) when BackClicked's blank-note guard runs, so it must join this job
     // before reading current.attachments, or the note gets purged with the image orphaned under it.
+    //
+    // Asymmetric with sketchSaveJob in one way worth naming: this job covers the WHOLE import --
+    // decode, up to four ladder re-decodes, encode and thumbnail -- not only the DB write the way
+    // sketchSaveJob does (a sketch is already-encoded Sketch data by the time SketchSaved fires).
+    // Tapping back mid-import therefore blocks navigation for the length of the encode, not just an
+    // insert. That is the correct trade -- joining only the DB write half would still race the
+    // encode that produces the AttachmentData being written -- but it is a real, felt difference
+    // from the sketch path and not an oversight.
+    //
+    // A single slot, so a second concurrent import would overwrite this reference and leave the
+    // first ungoverned by the guard. Unreachable today: the picker is a separate activity, and the
+    // toolbar replaces its icon with a progress spinner (state.isImportingAttachment) before a
+    // second tap could launch it again. sketchSaveJob has the exact same single-slot shape for the
+    // exact same reason.
     private var attachmentSaveJob: Job? = null
 
     // Serializes DB writes so an older/delayed save can't run concurrently with a newer one.
@@ -771,7 +784,7 @@ class SingleNoteViewModel @Inject constructor(
      * [SingleNoteEvent.AttachmentImportFailed] rather than silently doing nothing, because a picker
      * that appears to eat the tap is worse than a message that says which failure it was.
      */
-    private fun importAttachment(uri: Uri) {
+    private fun importAttachment(uri: String) {
         val id = noteId ?: return
         _state.update { it.copy(isImportingAttachment = true) }
         val job = viewModelScope.launch {
