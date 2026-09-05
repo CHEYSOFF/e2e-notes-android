@@ -360,10 +360,14 @@ class SyncEngine(
                 transport.push(requests)
             } catch (failure: SyncTransportException) {
                 // A batch of one that the server will refuse again for the same bytes is the one
-                // failure that must not end the pass. The row stays dirty -- nothing is lost, and
-                // it will be sent again the moment the server accepts records that size -- but
-                // every other batch still goes. Attribution is only sound for a batch of one,
-                // which is why anything large enough to provoke this was put in one.
+                // failure that must not end the pass. The row stays dirty -- nothing is lost -- and
+                // every other batch still goes. Attribution is only sound for a batch of one, which
+                // is why anything large enough to provoke this was put in one.
+                //
+                // It is NOT retried next pass: `rememberRejected` holds it for the session, so an
+                // edit or a restart is what tries it again. A server upgraded mid-session therefore
+                // goes unnoticed until one of those happens, which is the price of not re-uploading
+                // a megabyte a minute against a server that is certain to refuse it.
                 if (failure.fault == TransportFault.REJECTED && batch.size == 1) {
                     stats = stats.copy(rejected = stats.rejected + 1)
                     rememberRejected(batch.single().record)

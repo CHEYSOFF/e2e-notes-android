@@ -45,8 +45,13 @@ class SketchLimitsTest {
 
     @Test
     fun `the limit sits comfortably under the sealed envelope cap`() {
-        // ServerConfig.maxEnvelopeBytes is 256 KiB; the envelope carries more than just this text
-        // (encryption framing, the rest of the record), so the guard here must leave real headroom.
+        // The envelope carries more than just this text (encryption framing, the rest of the
+        // record), so the guard here must leave real headroom.
+        //
+        // 256 KiB was `ServerConfig.maxEnvelopeBytes` when this was written; the cap is 2 MiB now
+        // that an attachment is one record. Deliberately NOT raised to match: this asserts that a
+        // sketch stays small enough to be uncontroversial on ANY server this project has shipped,
+        // and relaxing it to track the newest cap would retire the only test holding that line.
         val envelopeCap = 256 * 1024
         assertTrue(SketchLimits.MAX_ENCODED_BYTES < envelopeCap / 2)
     }
