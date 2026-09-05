@@ -14,9 +14,13 @@ package my.cheysoff.core_crypto.sync
  * Twenty lines of table lookup avoids both problems and has no configuration to get wrong: no
  * padding, no line wrapping, no locale.
  *
- * Only encoding is provided. Blinded record IDs travel as strings and are never decoded back to
- * bytes anywhere in the protocol — the 16 raw bytes are recomputed from `K_id` when they are
- * needed, they are not recovered from the string.
+ * Encoding came first and was for a long time the only half: blinded record IDs travel as strings
+ * and are never decoded back to bytes anywhere in the protocol — the 16 raw bytes are recomputed
+ * from `K_id` when they are needed, they are not recovered from the string. [decode] exists for
+ * the one payload that genuinely round-trips: an image attachment's `bytes` and `thumbBytes` cross
+ * the wire as text through this alphabet and have to come back as the same bytes on the other
+ * device. It is deliberately here rather than in the codec, so that the two directions of one
+ * primitive cannot drift apart.
  *
  * Public rather than `internal` because `accountId` is rendered with it outside this module too:
  * the pairing bundle carries the account handle as a string, and it must be the same 22 characters
@@ -61,5 +65,47 @@ object Base64Url {
             index += 3
         }
         return out.toString()
+    }
+
+    /**
+     * [encode]'s inverse, or **null** if [text] is not unpadded base64url.
+     *
+     * Null rather than a throw, and null rather than a best-effort decode of the part that did
+     * parse. The caller is a record codec reading bytes another device wrote, and its contract is
+     * to refuse a record it cannot read rather than to substitute something: half an image, or an
+     * empty one, would render as a blank box in someone's note on every device with nothing
+     * anywhere reporting a problem. `AttachmentRecords.fromPayload` is that caller.
+     *
+     * Rejected: any character outside [ALPHABET] (`=` padding included — this encoder never emits
+     * it, so its presence means the string came from a different encoder), and a length of
+     * `4n + 1`, which is the one remainder no number of bytes can produce.
+     */
+    fun decode(text: String): ByteArray? {
+        if (text.isEmpty()) return ByteArray(0)
+        if (text.length % 4 == 1) return null
+
+        // Each 4-character group carries 3 bytes; a trailing group of 2 carries 1 and of 3
+        // carries 2 -- exactly what `encode` emits, read backwards.
+        val out = ByteArray(text.length * 3 / 4)
+        var written = 0
+        var index = 0
+        while (index < text.length) {
+            val remaining = text.length - index
+            val charsInGroup = if (remaining > 3) 4 else remaining
+            var group = 0
+            for (position in 0 until charsInGroup) {
+                val value = ALPHABET.indexOf(text[index + position])
+                if (value < 0) return null
+                group = group or (value shl (18 - 6 * position))
+            }
+            // A 2-character group encodes 1 byte and a 3-character one 2 bytes; the bits below
+            // those are padding the encoder never wrote and are ignored rather than checked, the
+            // same latitude every mainstream decoder takes.
+            for (byteIndex in 0 until charsInGroup - 1) {
+                out[written++] = ((group shr (16 - 8 * byteIndex)) and 0xFF).toByte()
+            }
+            index += 4
+        }
+        return out
     }
 }

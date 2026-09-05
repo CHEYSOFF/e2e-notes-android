@@ -58,6 +58,9 @@ class DesktopSyncService(
             // merged field: a record this device already holds keeps the value it was created with,
             // and only a record arriving for the first time needs one invented.
             createdAtOf = syncStore::createdAtOf,
+            // Asked of the store for the same reason, and one more: `meta` is opaque to this
+            // build, so pushing a hardcoded `""` would erase whatever a newer build wrote there.
+            metaOf = syncStore::metaOf,
         ),
         clock = clockObserver,
     )

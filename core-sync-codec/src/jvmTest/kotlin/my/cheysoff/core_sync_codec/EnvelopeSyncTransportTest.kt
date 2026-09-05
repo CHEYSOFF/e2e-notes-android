@@ -77,7 +77,11 @@ class EnvelopeSyncTransportTest {
     )
 
     private fun transport(api: SyncApi) =
-        EnvelopeSyncTransport(api, credentials, codec, createdAtOf = { _, _ -> 50L })
+        EnvelopeSyncTransport(
+            api, credentials, codec,
+            createdAtOf = { _, _ -> 50L },
+            metaOf = { _, _ -> "" },
+        )
 
     private fun sealed(record: SyncRecord, createdAt: Long = 50L) =
         codec.seal(SyncRecords.toPayload(record, createdAt))

@@ -1,5 +1,7 @@
 package my.cheysoff.desktop.store
 
+import my.cheysoff.core_sync_codec.AttachmentRecords
+import my.cheysoff.core_sync_codec.AttachmentRow
 import my.cheysoff.core_sync_codec.FolderRecords
 import my.cheysoff.core_sync_codec.FolderRow
 import my.cheysoff.core_sync_codec.NoteRecords
@@ -14,6 +16,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import my.cheysoff.core_domain.model.AttachmentData
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.model.NotesSortOrder
@@ -93,7 +96,7 @@ class RecordNotesRepository private constructor(
     initial: Snapshot,
     /** What could not be loaded. Zero on a healthy vault; surfaced by the UI when it is not. */
     val diagnostics: LoadDiagnostics,
-) : NotesRepository, DesktopSketches {
+) : NotesRepository, DesktopSketches, DesktopAttachments {
 
     /**
      * Folds a clock this device did not mint into the generator local writes draw from.
@@ -106,11 +109,12 @@ class RecordNotesRepository private constructor(
      */
     val clockObserver: ClockObserver = ClockObserver { seen -> hlc.observe(seen) }
 
-    /** Every note, folder and sketch this device holds, including the trashed ones. */
+    /** Every note, folder, sketch and attachment this device holds, including the trashed ones. */
     data class Snapshot(
         val notes: Map<String, NoteRow>,
         val folders: Map<String, FolderRow>,
         val sketches: Map<String, SketchRow> = emptyMap(),
+        val attachments: Map<String, AttachmentRow> = emptyMap(),
     )
 
     /**
@@ -122,6 +126,9 @@ class RecordNotesRepository private constructor(
      * miscounting it as damage -- see `LoadDiagnostics`.
      */
     fun sketchRows(): Map<String, SketchRow> = state.value.sketches
+
+    /** Every attachment this device holds, keyed by id. Mirrors [sketchRows]. */
+    fun attachmentRows(): Map<String, AttachmentRow> = state.value.attachments
 
     private val state = MutableStateFlow(initial)
 
@@ -176,6 +183,7 @@ class RecordNotesRepository private constructor(
             val notes = mutableMapOf<String, NoteRow>()
             val folders = mutableMapOf<String, FolderRow>()
             val sketches = mutableMapOf<String, SketchRow>()
+            val attachments = mutableMapOf<String, AttachmentRow>()
             var unreadable = 0
             var mislabelled = 0
             var unsupported = 0
@@ -213,6 +221,9 @@ class RecordNotesRepository private constructor(
 
                             RecordType.SKETCH -> SketchRecords.fromPayload(payload)
                                 ?.let { sketches[it.sketch.id] = it } ?: malformed++
+
+                            RecordType.ATTACHMENT -> AttachmentRecords.fromPayload(payload)
+                                ?.let { attachments[it.attachment.id] = it } ?: malformed++
                         }
                     }
                 }
@@ -224,7 +235,7 @@ class RecordNotesRepository private constructor(
                 hlc = generator,
                 node = node,
                 clock = clock,
-                initial = Snapshot(notes, folders, sketches),
+                initial = Snapshot(notes, folders, sketches, attachments),
                 diagnostics = LoadDiagnostics(unreadable, mislabelled, unsupported, malformed, newerType),
             )
         }
@@ -308,6 +319,18 @@ class RecordNotesRepository private constructor(
     override fun getSketchesForNote(noteId: String): Flow<List<SketchData>> = state.map { snapshot ->
         snapshot.sketches.values.map { it.sketch }.filter { it.noteId == noteId && !it.isDeleted }
     }
+
+    /**
+     * Attachments anchored under [noteId] that are not soft-deleted, as a live `Flow` -- the exact
+     * mirror of [getSketchesForNote], including the decision to return them unsorted. Ordering an
+     * attachment rail is a UI concern on both platforms (`:core-domain`'s `AttachmentOrdering` is
+     * what both call), not a storage one.
+     */
+    override fun getAttachmentsForNote(noteId: String): Flow<List<AttachmentData>> =
+        state.map { snapshot ->
+            snapshot.attachments.values.map { it.attachment }
+                .filter { it.noteId == noteId && !it.isDeleted }
+        }
 
     // -------------------------------------------------------------------------------------------
     // Note writes
@@ -504,19 +527,32 @@ class RecordNotesRepository private constructor(
         // `sketches` record.
         val expiredSketches = snapshot.sketches.values
             .filter { it.sketch.isDeleted && TrashPolicy.isExpired(it.sketch.deletedAt, now) }
+        // Same argument for attachments: independently tombstoned, so independently reaped.
+        // Without this a desktop-only vault leaks every tombstoned photograph forever -- and a
+        // photograph is a mebibyte, not a few hundred bytes of strokes.
+        val expiredAttachments = snapshot.attachments.values
+            .filter { it.attachment.isDeleted && TrashPolicy.isExpired(it.attachment.deletedAt, now) }
 
         expiredNotes.forEach { store.remove(codec.blindedIdOf(NoteRecords.toPayload(it))) }
         expiredFolders.forEach { store.remove(codec.blindedIdOf(FolderRecords.toPayload(it))) }
         expiredSketches.forEach {
             store.remove(codec.blindedIdOf(SketchRecords.toPayload(it, createdAt = it.sketch.createdAt)))
         }
+        expiredAttachments.forEach {
+            store.remove(
+                codec.blindedIdOf(
+                    AttachmentRecords.toPayload(it, createdAt = it.attachment.createdAt),
+                ),
+            )
+        }
 
         state.value = snapshot.copy(
             notes = snapshot.notes - expiredNotes.map { it.note.id }.toSet(),
             folders = snapshot.folders - expiredFolders.map { it.folder.id }.toSet(),
             sketches = snapshot.sketches - expiredSketches.map { it.sketch.id }.toSet(),
+            attachments = snapshot.attachments - expiredAttachments.map { it.attachment.id }.toSet(),
         )
-        expiredNotes.size + expiredFolders.size + expiredSketches.size
+        expiredNotes.size + expiredFolders.size + expiredSketches.size + expiredAttachments.size
     }
 
     // -------------------------------------------------------------------------------------------
@@ -539,6 +575,32 @@ class RecordNotesRepository private constructor(
         snapshot.putSketch(
             existing,
             existing.sketch.copy(isDeleted = true, deletedAt = now),
+            hlc.next(now),
+            TOMBSTONE_FIELDS,
+        )
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // Attachment writes
+    // -------------------------------------------------------------------------------------------
+
+    /**
+     * Soft-deletes one attachment: its own tombstone, its own fresh clock, and nothing else --
+     * the exact mirror of [deleteSketch] and of the phone's
+     * `AttachmentsRepository.deleteAttachment`. This is the desktop's only attachment write; see
+     * [DesktopAttachments] for why there is no `saveAttachment` to mirror it.
+     *
+     * A no-op, minting no clock, when [id] is unknown or already trashed -- the same idempotence
+     * guard [deleteNote] documents, for the same reason: a second delete must not re-stamp
+     * `deletedAt`.
+     */
+    override suspend fun deleteAttachment(id: String): Unit = write { snapshot ->
+        val existing = snapshot.attachments[id] ?: return@write snapshot
+        if (existing.attachment.isDeleted) return@write snapshot
+        val now = clock()
+        snapshot.putAttachment(
+            existing,
+            existing.attachment.copy(isDeleted = true, deletedAt = now),
             hlc.next(now),
             TOMBSTONE_FIELDS,
         )
@@ -645,6 +707,43 @@ class RecordNotesRepository private constructor(
         val sealed = codec.seal(SketchRecords.toPayload(row, createdAt = sketch.createdAt))
         store.put(sealed.blindedId, sealed.envelope)
         return copy(sketches = sketches + (sketch.id to row))
+    }
+
+    /**
+     * Re-clocks, re-seals and stores an attachment. The exact mirror of [putSketch] -- same shape,
+     * same reasoning, same reason [existing] is never null (the only caller is [deleteAttachment],
+     * which has already confirmed the row exists).
+     *
+     * `meta` rides inside [attachment] and is therefore preserved by construction: this method
+     * copies whatever the row held, and [AttachmentRecords] carries it through the payload
+     * verbatim. That is what a build which does not understand the column is required to do.
+     */
+    private fun Snapshot.putAttachment(
+        existing: AttachmentRow,
+        attachment: AttachmentData,
+        stamp: Hlc,
+        touched: Set<String>,
+    ): Snapshot {
+        val row = AttachmentRow(
+            attachment = attachment,
+            rowClock = stamp,
+            clocks = FieldClocks.parse(
+                FieldClocks.stamp(
+                    previousSerialized = FieldClocks.serialize(existing.clocks),
+                    previousRowClock = existing.rowClock,
+                    allFields = FieldClocks.ATTACHMENT_FIELDS,
+                    touched = touched,
+                    newClock = stamp,
+                ),
+            ),
+            dirty = existing.dirty,
+            lastSyncedSeq = existing.lastSyncedSeq,
+        )
+        val sealed = codec.seal(
+            AttachmentRecords.toPayload(row, createdAt = attachment.createdAt),
+        )
+        store.put(sealed.blindedId, sealed.envelope)
+        return copy(attachments = attachments + (attachment.id to row))
     }
 
 }

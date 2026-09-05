@@ -88,6 +88,20 @@ sealed interface IncomingRecord {
          * Null for a record whose payload omitted it, which the store then handles as before.
          */
         val createdAt: Long?,
+        /**
+         * The opaque `meta` an attachment's payload carried, or null for a record type that has no
+         * such column (every type but `ATTACHMENT`) and for a payload that omitted it.
+         *
+         * Beside the record for the same structural reason as [createdAt] and a different
+         * substantive one: `meta` is a reserved escape hatch with no clock of its own
+         * (`PayloadFields.META`), so it is not in `RecordType.fields` and `SyncRecords.fromPayload`
+         * cannot carry it. It reaches the store on `MergedWrite.remoteMeta`.
+         *
+         * Defaulted to null so that a test transport constructing records by hand does not have to
+         * think about a column no test record has. Production has exactly one producer of this
+         * class -- `EnvelopeSyncTransport` -- and it passes the real value.
+         */
+        val meta: String? = null,
     ) : IncomingRecord
 
     /** The envelope did not survive one of §4's three checks. */
