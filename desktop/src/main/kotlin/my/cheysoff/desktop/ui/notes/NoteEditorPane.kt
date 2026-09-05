@@ -66,6 +66,7 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.NoteContentFormat
+import my.cheysoff.desktop.ui.state.DisplaySketch
 import my.cheysoff.desktop.ui.state.EditorDraft
 import my.cheysoff.desktop.ui.state.SaveStatus
 import my.cheysoff.desktop.ui.theme.AccentIndigo
@@ -104,6 +105,8 @@ fun NoteEditorPane(
     onChecklistTextChange: (String, String) -> Unit,
     onToggleChecklistItem: (String) -> Unit,
     onRemoveChecklistItem: (String) -> Unit,
+    sketches: List<DisplaySketch>,
+    onDeleteSketch: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (draft == null) {
@@ -201,6 +204,8 @@ fun NoteEditorPane(
                 onToggle = onToggleChecklistItem,
                 onRemove = onRemoveChecklistItem,
             )
+
+            SketchSection(sketches = sketches, onDelete = onDeleteSketch)
 
             Spacer(Modifier.height(60.dp))
         }
