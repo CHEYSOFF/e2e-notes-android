@@ -88,6 +88,15 @@ data class AttachmentEntity(
      * without ever touching `attachments`' column set again. Pinned in three places, the same
      * discipline as `dirty`: this Kotlin default, `@ColumnInfo(defaultValue = "''")` below, and
      * `MIGRATION_10_11`'s DDL.
+     *
+     * **It must be in `PayloadFields.ATTACHMENT_COLUMNS` from the very first shipped `ATTACHMENT`
+     * record, not added later.** That is the one option this protocol does not offer — see this
+     * property's KDoc for why an added column decodes as `Malformed` on every older device. And it
+     * is deliberately **outside** `FieldClocks.ATTACHMENT_FIELDS`: it merges at the row clock, the
+     * same precedent `PayloadFields.CREATED_AT` sets for `sketches` (present on the wire, absent
+     * from `FieldClocks.SKETCH_FIELDS`, because nothing gives it a clock of its own).
+     * `RoomNotesRepository.attachmentTouchedFields` does not mention `meta` and does not need to,
+     * for the same reason.
      */
     @ColumnInfo(defaultValue = "''")
     val meta: String = "",
@@ -239,3 +248,30 @@ fun AttachmentPreviewProjection.toDomain() = AttachmentPreview(
     deletedAt = deletedAt,
     meta = meta,
 )
+
+/**
+ * The id and clocks of one attachment row — nothing else, and in particular no `bytes`.
+ *
+ * What [AttachmentDao.activeAttachmentsForNote] and [AttachmentDao.attachmentsDeletedAtForNote]
+ * select into: both are read by `RoomNotesRepository`'s tombstone cascade purely to compute each
+ * attachment's next `fieldHlc` from its current clocks, and `uuid` to address the follow-up
+ * `UPDATE` by. Neither caller has ever looked at `bytes`, `mimeType`, or any other column, so a
+ * `List<AttachmentClockRow>` for a note with twenty photos costs a few hundred bytes rather than
+ * ~20 MiB read off disk to answer a question about clocks. `RowClock` is not reused here because
+ * it carries no id — [RoomNotesRepository.deleteNote][my.cheysoff.core_data.data.RoomNotesRepository.deleteNote]
+ * needs both the id (to address the `UPDATE`) and the clocks (to compute the tombstone's `fieldHlc`)
+ * off the same row without a second query per attachment.
+ */
+data class AttachmentClockRow(
+    val uuid: String,
+    val hlcMs: Long,
+    val hlcCounter: Int,
+    val hlcNode: String,
+    val fieldHlc: String,
+) {
+    /** The row clock as one value. */
+    fun rowHlc(): Hlc = Hlc(ms = hlcMs, counter = hlcCounter, node = hlcNode)
+
+    /** Just the clock columns — see `NoteEntity.clocks`. */
+    fun clocks(): RowClock = RowClock(hlcMs, hlcCounter, hlcNode, fieldHlc)
+}
