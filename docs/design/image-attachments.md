@@ -1,220 +1,342 @@
-# Image attachments — design for issue #11
+# Image attachments — design
 
-**Status: design only. Not scheduled, nothing implemented.**
+**Status: decided. Supersedes the 2026-08 recommendation-only version of this file
+(see git history), which was written before the sync engine existed.**
 
-The issue proposes copying picked images into app-internal storage and referencing
-them from the note. That is the right instinct for keeping the database small, and
-it is the wrong instinct for this particular app, because it quietly moves the
-user's data outside the only thing that encrypts it.
+The 2026-08 analysis asked one question — files on disk versus bytes in the database —
+and answered it correctly. That answer stands and §1 keeps it. Everything after §1 is
+new: sync is real now, sketches shipped a child-record pattern this feature should
+mirror, and two of the old document's load-bearing claims turned out to be wrong.
 
-This document works out what the file-based design actually costs, proposes a
-cheaper alternative that is also *more* secure, and sizes both.
+---
 
-## The problem the issue does not mention
+## 1. Why the bytes go in the database (unchanged)
 
-Notes live in a SQLCipher-encrypted database. That encryption is the app's central
-promise — it is why there is a PIN, a PBKDF2 key wrap at 210,000 iterations, a
-biometric key in the Android Keystore, and a lockout policy.
+Notes live in a SQLCipher-encrypted database. **SQLCipher encrypts the database file and
+nothing else.** An image written to `filesDir/attachments/` is a plaintext JPEG sitting
+next to an encrypted database — the PIN, the PBKDF2 wrap at 210,000 iterations, the
+Keystore biometric key and the lockout policy all still work perfectly and protect
+nothing about that image. A user who set a PIN reasonably believes their notes are
+encrypted at rest; a photo of a passport in a note would not be, and nothing would look
+wrong.
 
-**SQLCipher encrypts the database file and nothing else.** An image written to
-`filesDir/attachments/` is a plaintext JPEG sitting next to an encrypted database.
-Every mechanism above still works perfectly and protects nothing about that image.
+The file design also costs a key derivation inside `SecureUnlockManager`, a hand-rolled
+chunked-AEAD file cipher (new, security-critical, silent on nonce reuse), a decrypting
+image loader with its disk cache explicitly disabled, new backup-exclusion rules, and an
+orphan sweep. Roughly 8–10 days, and the riskiest days are the crypto ones.
 
-That is worse than not shipping the feature. A user who has set a PIN reasonably
-believes their notes are encrypted at rest; a photo of a passport in a note would
-not be. The failure is silent — nothing looks wrong.
+A `BLOB` column in a separate `attachments` table is not "base64 in the content string".
+It is a different row in a different table, read only when an image is actually rendered.
+It inherits encryption at rest by construction, inherits the `notes.db*` backup exclusion
+PR #36 already wrote, and needs no new cryptographic code at all.
 
-Two concrete leaks follow immediately:
+**Decision: BLOB in an `attachments` table.** This has not changed.
 
-1. **Backup.** `AndroidManifest.xml` still sets `allowBackup="true"`, and
-   `res/xml/data_extraction_rules.xml` excludes only `sharedpref/secret_shared_prefs.xml`
-   and the four `notes.db*` files (PR #36). It excludes nothing under
-   `domain="file"`. Attachment files would flow straight into Android Auto Backup
-   and device-to-device transfer, while the notes referencing them would not.
-2. **Sync.** `docs/design/e2e-sync-architecture.md` has no concept of a binary
-   blob. Records are small versioned JSON payloads padded to 256-byte buckets and
-   sealed in an in-memory `RecordEnvelope`. There is no blob endpoint in the
-   server contract and no streaming construction. Attachments are not "a column
-   the sync design will pick up later"; they are their own design problem.
+### Two claims from that document that were wrong
 
-## What encryption at rest for files would actually require
+- **"Lifecycle is already handled — `ON DELETE CASCADE` plus the existing purge."**
+  A SQL cascade is invisible to the other device. Device A deletes a note, the cascade
+  silently drops its attachment rows, A pushes the note tombstone and nothing else — and
+  B, which never heard that the attachments died, pushes them back on its next pass. The
+  attachment reappears attached to a deleted note and is unreachable forever. Deletion
+  must be a **tombstone cascade**, with each attachment's own HLC minted through the
+  shared generator. This is the exact bug the sketch work hit; §6 restates the fix.
 
-### A key, which means touching the unlock path
+- **"Sync gets a real answer — an attachment row fits the existing envelope."**
+  It does not. `ServerConfig.maxEnvelopeBytes` is 256 KiB, and a 200–600 KB import
+  base64s to 270–800 KB. §4 is about that number and it is the largest single decision
+  in this document.
 
-`SecureUnlockManager` holds a 32-byte SQLCipher passphrase, available only while
-unlocked, exposed as `currentPassphrase()`. Today it has exactly one consumer:
-`DataModule` building the SQLCipher open helper.
+---
 
-Attachments would need a second. The right shape is a derived subkey rather than
-reuse of the passphrase itself —
-`K_att = HKDF(passphrase, "manana/attachments/v1")`, mirroring the key hierarchy
-already sketched in `core-crypto/sync/AccountKeys.kt` — so that the two
-cryptosystems stay separable and the attachment key rotates with the passphrase.
+## 2. Shape: an attachment is a child record, like a sketch
 
-That is a small change, but it is a change to `SecureUnlockManager`, the class that
-can render every note unreadable. It is the last place to make a hurried change.
+Sketches (PR #102/#103) established the pattern and attachments are structurally the
+same thing: a record that belongs to a note, carries an anchor and an order, is
+tombstoned when its note is, and renders in a rail below the note body.
 
-### A streaming file cipher, which does not exist here
+Attachments therefore **mirror `RecordType.SKETCH` field for field** rather than
+inventing a shape. Same anchor semantics, same ordering helper, same tombstone cascade,
+same "rendered below the body, not interleaved" placement (§8).
 
-Nothing in the repo can encrypt a file. The inventory:
+**Ruling: do not generalise sketches and attachments into one "note child record" type
+now.** The similarity is obvious and a shared abstraction is probably right eventually —
+the user has also asked for checklists to become records, which would be the third. But
+generalising today means rewriting a record type that shipped and was reviewed this week,
+on a live sync protocol, with two devices already holding data in it. The cost of waiting
+is one duplicated pattern; the cost of being wrong is a protocol break. The duplication is
+recorded in §11 as the trigger for doing it once checklists arrive.
 
-- `PassphraseCipher` — PBKDF2 + AES-GCM over a byte array, sized for a 32-byte
-  passphrase.
-- `RecordEnvelope` (`core-crypto/sync/`) — AES-256-GCM, whole payload in memory,
-  padded to 256-byte buckets. Built for small JSON records, has no production call
-  sites, and would need every attachment held in memory twice to seal or open.
-- `EncryptedSharedPreferences` — not a file API.
+---
 
-So one of:
+## 3. Import: what actually gets stored
 
-- **`androidx.security.crypto.EncryptedFile`** — already on the classpath
-  transitively. But it keys off an Android Keystore `MasterKey`, *not* off the DB
-  passphrase, so attachments would be readable whenever the device is unlocked,
-  even while the app is locked and the notes are not. That is a weaker guarantee
-  for the more sensitive data, and it decouples attachment access from the PIN
-  entirely. It is the quick option and it is the wrong one.
-- **Chunked AES-GCM, hand-rolled** — 64 KiB chunks, a random per-file nonce
-  prefix plus a chunk counter, a tag per chunk, a header carrying version and
-  nonce, and the chunk index and a final-chunk flag in the AAD so a truncated or
-  reordered file fails to open. This is correct and it is new
-  security-critical code. Nonce reuse here is catastrophic and silent.
+Never the original. Every import is decoded, downscaled, re-encoded, and capped.
 
-Either way this needs its own test suite: round-trip, wrong key, flipped
-ciphertext bit, truncated file, reordered chunks, zero-length file.
+```
+long edge      <= 1600 px
+format         JPEG, always
+alpha          flattened onto white
+hard cap       1 MiB (1,048,576 bytes) of encoded image
+thumbnail      long edge <= 320 px, JPEG q70, cap 64 KiB
+```
 
-### A decrypting image loader, with its caches disabled
+**The quality ladder.** Encode at q85. Over the cap? q75, then q65, then q55. Still over?
+Drop the long-edge cap by 30% (1600 to 1120 to 784) and run the ladder again. Reject after
+the third dimension step. A 12 MP phone photo lands at 1600/q85 in the 400–700 KB range,
+so the ladder's later rungs exist for pathological inputs (noisy, high-detail, already
+recompressed) rather than for ordinary photos.
 
-richeditor-compose 1.1.0 does provide the seam: `RichSpanStyle.Image` carries a
-`model`, and `LocalImageLoader` / `ImageLoader.load(model): ImageData` lets the app
-resolve it. So `<img src="attachment://<uuid>">` in the stored HTML can be resolved
-by a custom loader. That part is clean.
+The ladder's *decisions* are pure and unit-testable — given a source size and an encoded
+byte count, what is the next step — and live in `commonMain`. The encode itself is
+platform code. Splitting it this way is what makes the cap testable without a bitmap.
 
-The trap is caching. Coil is not currently a dependency, and adding it brings a
-**disk cache that is on by default** — it would write decoded copies of exactly the
-images we just encrypted into `cacheDir`, in plaintext, outside the database and
-outside the backup exclusions. It must be explicitly disabled, and it is precisely
-the kind of default that gets silently restored by a later refactor. The memory
-cache also needs clearing on `lock()`.
+**Ruling: JPEG always, alpha flattened to white.** Screenshots and PNG logos lose
+transparency. The alternative is carrying a second format through the ladder (PNG has no
+quality knob, so its ladder is dimensions-only), a second decode path, and a `mimeType`
+that actually varies. For a notes app the cost is a white box behind a transparent logo;
+the benefit is one format everywhere. `mimeType` is still stored, so a second format later
+is additive rather than a migration.
 
-### And the rest
+**No original-resolution copy.** If that is ever wanted, it is the file-based design in
+§1 and the full crypto bill; it is not a column that can be added later without one.
 
-- **Backup rules**: `<exclude domain="file" path="attachments/"/>` in both
-  `cloud-backup` and `device-transfer`, mirroring PR #36's reasoning.
-- **Lifecycle**: Trash is a soft delete with a retention window, so files must
-  outlive the note and be removed by `purgeExpiredTrash`, not by the delete.
-- **Orphans**: an image inserted and then removed before save leaves a file with
-  no reference. Needs a sweep, which needs a source of truth for "which files are
-  referenced" — an argument for the attachments table over parsing HTML.
-- **Previews**: the list shows text snippets. An image note wants a thumbnail,
-  which is a second decrypt path and a second cache.
+---
 
-### Size
+## 4. The envelope cap, and a bug that already exists
 
-| | |
-|---|---|
-| `attachments` table, `MIGRATION_6_7`, schema JSON, migration test | 0.5 d (well-templated) |
-| Key derivation + a new `SecureUnlockManager` accessor | 0.5 d |
-| Streaming file cipher + its test suite | **2–3 d, security-critical** |
-| Photo picker, downscale, write path | 1 d |
-| Coil + decrypting `ImageLoader`, caches disabled | 1 d |
-| Backup rules + verifying the exclusion actually holds | 0.5 d |
-| Trash integration + orphan sweep | 1–1.5 d |
-| List thumbnails | 1 d |
-| **Total** | **~8–10 days**, plus an unwritten sync design |
+A 1 MiB image base64s to 1,398,102 bytes. `maxEnvelopeBytes` is 256 KiB. Something has
+to give, and there are only two candidates.
 
-That is a week and a half, and the riskiest days are the crypto ones. Per the
-project's own test — if it is a week, write the design and do not build it — this
-should not be built as specified.
+**Chunking** — split the image across N records of at most 192 KiB so every envelope fits
+the existing cap — needs no server change at all. It costs a reassembly protocol, a
+partial-arrival UI state, per-chunk tombstones, and a new class of bug where an attachment
+exists but is missing chunk 3 forever.
 
-## The alternative: put the bytes in the database
+**Raising the cap** costs a config change and a redeploy of the user's own VPS, plus two
+fixes to byte budgets. Those two fixes are the deciding argument, because **they are
+already bugs today**:
 
-The issue rules out base64 in the content string, and it is right to: that bloats
-every list query and every note load with data no preview needs.
+| | today | |
+|---|---|---|
+| push batch | 64 items x 256 KiB = **16 MiB** | `maxRequestBytes` is 4 MiB, so `413` |
+| pull page | 32 records x 256 KiB x 4/3 = **11 MiB** | client cap is 16 MiB — no server-side byte budget at all |
 
-But **a `BLOB` column in a separate `attachments` table is not that.** It is a
-different row, in a different table, read only when an image is actually rendered.
-And it collapses almost all of the work above:
+Neither fires today because notes are small. Both are real, both are latent, and both must
+be fixed for images regardless of which option is chosen. Chunking hides them again behind
+a smaller record; raising the cap forces them into the open and fixes them.
+
+**Decision: one record per attachment, raise the caps, fix the byte budgets.**
+
+### The numbers, and why each holds
+
+| knob | from | to | where |
+|---|---|---|---|
+| `MAX_ATTACHMENT_BYTES` | — | 1 MiB | client, `commonMain` |
+| `maxEnvelopeBytes` | 256 KiB | **2 MiB** | server, `MANANA_MAX_ENVELOPE_BYTES` |
+| `maxRequestBytes` | 4 MiB | **8 MiB** | server, `MANANA_MAX_REQUEST_BYTES` |
+| `maxChangesBytes` | *(none)* | **8 MiB** | server, new |
+| push byte budget | *(none)* | **3 MiB** | `SyncEngine` |
+
+- **Push.** 3 MiB of envelopes becomes 4 MiB base64 becomes ~4.1 MiB of JSON, against an
+  8 MiB request cap. The batch is cut at whichever of 3 MiB or 64 items comes first.
+- **Pull.** 8 MiB of envelopes becomes ~10.7 MiB base64, under the client's existing 16 MiB
+  `DEFAULT_MAX_RESPONSE_BYTES`, which therefore does not change. The server stops filling a
+  page once the budget is hit and **always returns at least one record**, or a single
+  oversized record would stall the cursor forever. The client already pages by cursor until
+  a page comes back empty, so a short page is ordinary and needs no client change.
+
+### The deploy is not part of this work
+
+The server config change is committed but **not deployed** — VPS work waits for the user's
+return. Until it is deployed, an attachment envelope over 256 KiB is rejected by the live
+server. That must be survivable, so:
+
+**Requirement: a per-item `envelope_too_large` rejection must not halt the pass.** The row
+stays dirty, the item is counted, the pass continues, and the attachment syncs on the first
+pass after the redeploy. Attachments work locally on each device in the meantime. This is
+correct behaviour whatever the server is running, and it is the one thing that makes
+shipping the client ahead of the server safe.
+
+### What the server operator still learns
+
+Padding is 4 KiB buckets, so an attachment's size is revealed to within 4 KiB — the server
+learns roughly how large each photo is, and that a given record is photo-sized rather than
+note-sized. That is a real leak, it is inherent to storing an image as a record, and it is
+stated here rather than hidden.
+
+---
+
+## 5. Schema
 
 ```sql
 CREATE TABLE attachments (
-    id TEXT NOT NULL PRIMARY KEY,
-    noteId TEXT NOT NULL,
-    mimeType TEXT NOT NULL,
-    width INTEGER NOT NULL,
-    height INTEGER NOT NULL,
-    byteCount INTEGER NOT NULL,
-    createdAt INTEGER NOT NULL,
-    bytes BLOB NOT NULL,
-    FOREIGN KEY(noteId) REFERENCES notes(id) ON DELETE CASCADE
+    id            TEXT    NOT NULL PRIMARY KEY,
+    noteId        TEXT    NOT NULL,
+    anchor        INTEGER NOT NULL,
+    sortOrder     INTEGER NOT NULL,
+    mimeType      TEXT    NOT NULL,
+    width         INTEGER NOT NULL,
+    height        INTEGER NOT NULL,
+    bytes         BLOB    NOT NULL,
+    thumbWidth    INTEGER NOT NULL,
+    thumbHeight   INTEGER NOT NULL,
+    thumbBytes    BLOB    NOT NULL,
+    createdAt     INTEGER NOT NULL,
+    updatedAt     INTEGER NOT NULL,
+    isDeleted     INTEGER NOT NULL DEFAULT 0,
+    deletedAt     INTEGER,
+    hlcMs         INTEGER NOT NULL,
+    hlcCounter    INTEGER NOT NULL,
+    hlcNode       TEXT    NOT NULL,
+    fieldHlc      TEXT,
+    dirty         INTEGER NOT NULL DEFAULT 1,
+    lastSyncedSeq INTEGER
 );
 CREATE INDEX index_attachments_noteId ON attachments(noteId);
 ```
 
-What this buys:
+Following the sketch table exactly: `sortOrder` rather than `order` (a SQL keyword), **no
+foreign key and no cascade** (§6), and `dirty DEFAULT 1` pinned in all three places — the
+entity, the migration SQL, and the exported schema JSON — because a row that defaults to
+clean is a row that never syncs, and nothing fails loudly when it happens.
 
-- **Encryption at rest for free, and correctly.** SQLCipher already encrypts the
-  whole database file. No new cipher, no new key, no change to
-  `SecureUnlockManager`, no second cryptosystem to keep in step with the first.
-  Attachments become exactly as secure as notes, by construction rather than by
-  vigilance.
-- **Backup is already handled.** `notes.db*` is already excluded. Nothing new
-  leaks, and no new rule can be forgotten.
-- **Lifecycle is already handled.** `ON DELETE CASCADE` plus the existing purge.
-  No orphan sweep, because there are no loose files to orphan — a deleted row
-  takes its bytes with it.
-- **Sync gets a real answer.** An attachment row is a record with a byte payload,
-  which fits the existing envelope far better than a file does. Padding buckets
-  still need revisiting for large payloads, but there is no separate blob store to
-  design.
+`MIGRATION_10_11`. No `byteCount` column: `length(bytes)` answers it, and a stored count is
+one more thing that can disagree with the bytes.
 
-What it costs:
+**The thumbnail is not an optimisation, it is the CursorWindow fix.** Android's
+`CursorWindow` is ~2 MB and a row larger than it cannot be read through a normal cursor;
+the codebase has already met this in
+`Migration4to5Test.aNoteLargerThanTheCursorWindowDoesNotAbortTheMigration`. A 1 MiB blob
+plus overhead sits under it, but only just, and only for one row at a time. **No query that
+returns more than one row may select `bytes`.** The rail, the note list and every preview
+read `thumbBytes` (at most 64 KiB); `bytes` is selected by exactly one DAO method, by id,
+for the full-screen viewer. That rule is what keeps the cap safe rather than lucky.
 
-- **Database size.** The DB grows by roughly the total attachment bytes. For a
-  personal notes app this is the intended tradeoff; SQLite handles multi-hundred-MB
-  files without complaint.
-- **The CursorWindow limit.** Android's `CursorWindow` is ~2 MB, and a row larger
-  than it cannot be read through a normal cursor. The codebase has met this before
-  — see `Migration4to5Test.aNoteLargerThanTheCursorWindowDoesNotAbortTheMigration`.
-  The fix is a hard cap: downscale on import to a long edge of ~1600 px at JPEG
-  q80, which lands typical photos at 200–600 KB, and reject anything still over
-  ~1 MB after downscaling. Downscaling is wanted regardless — the issue asks about
-  it as an open question.
-- **Write amplification.** SQLite rewrites the row and the WAL on update. Fine for
-  insert-once, read-many attachments.
+---
 
-### Size
+## 6. Sync
 
-| | |
-|---|---|
-| `attachments` table, `MIGRATION_6_7`, schema JSON, migration test | 0.5 d |
-| Photo picker + downscale + size cap (pure, unit-testable) | 0.5 d |
-| DAO, repository method, domain model | 0.5 d |
-| Toolbar button, `LocalImageLoader` resolving `attachment://` from the DAO | 1 d |
-| List thumbnails | 0.5 d |
-| **Total** | **~3 days, no new crypto** |
+`RecordType.ATTACHMENT`, `wireKey = "attachment"`, mirroring `SKETCH`.
 
-## Recommendation
+```
+ATTACHMENT_FIELDS = { noteId, anchor, order, image, thumb, updatedAt, deleted }
 
-**Do not build the file-based design in the issue.** It is 8–10 days, its riskiest
-component is new security-critical crypto, it needs a change to
-`SecureUnlockManager`, and it silently breaks encryption at rest if any one of
-several defaults is left wrong.
+image   -> 4 parts: base64url(bytes), mimeType, width, height
+thumb   -> 3 parts: base64url(thumbBytes), thumbWidth, thumbHeight
+deleted -> 2 parts: isDeleted, deletedAt      (existing)
+```
 
-**Consider the BLOB-in-table design instead.** It is roughly three days, adds no
-cryptographic code at all, inherits encryption and backup exclusion and cascade
-deletion from machinery that already exists and is already tested, and gives sync
-a tractable story. The price is database size and a size cap on imports, both of
-which are acceptable for a personal notes app and one of which the issue already
-wanted.
+Bytes and their dimensions are **one `FieldValue`**, for the same reason `content` and
+`contentFormat` are: the merge takes a field from one side or the other, so packing them
+together makes it physically impossible to end up with one device's pixels described by
+another device's dimensions. `RecordType.partCount` gains branches for `IMAGE` and `THUMB`.
 
-If attachments are eventually expected to be large — video, scanned documents,
-originals rather than downscaled copies — then the file-based design becomes
-necessary and the full 8–10 days is the honest price. That is the fact that would
-change this recommendation, and it is worth deciding before either path is started.
+Base64 is `Base64Url` from `core-crypto-shared/commonMain` — unpadded RFC 4648 §5, already
+the project's canonical encoder, already tested. No new dependency.
 
-## What would have to be true to revisit
+No conflict copy: like a sketch, `image` is a plain LWW field, not a text two people typed
+into concurrently.
 
-- Attachments need to exceed ~1 MB each → files, and the full crypto bill.
-- `SecureUnlockManager` is free to change (it is currently being worked on for the
-  sync seam) → removes one blocker from the file design, but not the crypto.
-- The sync design grows a blob store for its own reasons → shares the cost.
+**`DATA_VERSION` 2 to 3.** A device on the older build sees `recType = "attachment"`,
+cannot map it, and — thanks to PR #101 — skips it as `RecordFault.UNKNOWN_TYPE`, counts it
+as `ignored`, and does *not* freeze or halt. Bumping the generation is what makes it pull
+from cursor 0 once after upgrading and pick up every attachment it skipped. This is
+precisely the mechanism PR #101 was built for; not bumping it would leave those attachments
+invisible forever on the upgraded device.
+
+**Deletion is a tombstone cascade, never a SQL cascade.** `deleteNote` tombstones the note's
+live attachments using the *note's* `deletedAt`, each with its own HLC minted through
+`syncClock.observe()` — never minted locally, or a later `restoreNote` can mint below the
+tombstone and the restore looks fine on this device while the other device keeps the image
+deleted. `restoreNote` restores those whose `deletedAt` is at or after the note's.
+`purgeNote` hard-deletes, scoped to that note's id. All three mirror the sketch
+implementations, which have tests proving another note's rows survive.
+
+---
+
+## 7. Import path (Android)
+
+`ActivityResultContracts.PickVisualMedia` — the photo picker needs **no runtime permission
+and no manifest permission**. The app's permission count does not change. This is worth
+protecting: `READ_MEDIA_IMAGES` would be a visible regression in an app whose premise is
+talking to nobody.
+
+Decode, downscale, ladder, thumbnail, insert — off the main thread, with a progress
+indication and a failure message that says which of "too large" or "not an image" it was.
+EXIF orientation is applied during decode; a sideways photo is the most common import bug
+there is.
+
+**The blank-note guard.** A brand-new note containing only an attachment must not be
+discarded on back-out. Both halves of the sketch fix apply: the guard must count
+attachments, *and* the pending save job must be joined before the purge, or the purge races
+the insert.
+
+---
+
+## 8. Placement and UI
+
+**Attachments render in a rail below the note body, alongside sketches — not interleaved
+with the text.** The reasoning is the sketch amendment's, unchanged: the body is a single
+`BasicRichTextEditor`, so interleaving needs either a marker in the serialised HTML (an
+attachment-unaware build re-serialises it away and orphans the image) or several editors
+(which breaks cursor movement, undo history and saving). The `anchor` is still recorded, so
+inline placement stays a later view-only change with no migration.
+
+- **Rail:** thumbnails, ordered by `sortOrder` then `createdAt`, sharing the ordering
+  helper's shape with `SketchOrdering`.
+- **Tap:** full-screen viewer, `ContentScale.Fit`, pinch-zoom and pan via
+  `detectTransformGestures`. An image viewer without zoom is the wrong feature.
+- **Delete:** from the viewer, confirmed. Attachments are **not** in Trash —
+  `TrashEntryKind` is `{NOTE, FOLDER}` — which is the same known gap sketches have,
+  recorded in §11 rather than fixed here.
+- **Desktop: render only.** The rail and the viewer work; there is no import. This mirrors
+  the sketch decision and keeps one platform's image-encoding stack out of this scope.
+
+Gesture note, learned the expensive way on the sketch canvas: the `onDragStart` of
+`detectDragGestures` only fires past touch slop, so a tap target inside a gesture-handling
+surface needs `detectTapGestures`, not a drag handler.
+
+---
+
+## 9. What is deliberately not here
+
+Video and audio. PDFs and arbitrary files. Original-resolution storage. Inline placement in
+the text flow. Desktop import. Attachments in Trash. Multi-select import. Editing or
+cropping an imported image. Sharing an attachment out to another app.
+
+Each is additive. None of them changes the schema or the record shape decided above, except
+original-resolution storage, which is the file-based design in §1.
+
+---
+
+## 10. Verification
+
+- The ladder is pure and gets a unit test per rung, including the reject case.
+- The migration gets the instrumented test the other nine have, spreading `ALL_MIGRATIONS`
+  rather than hand-building a list — the hand-built lists broke on the schema-9 bump and
+  were converted for this reason.
+- Tombstone cascade, restore and purge each get a test proving another note's attachments
+  are untouched.
+- Byte-budget batching gets a test that a batch of large envelopes is split by bytes, not by
+  count.
+- The server's changes budget gets a test that a single oversized record is still returned
+  rather than stalling the cursor.
+- `RecordPayloadWireFormatTest` must be untouched by every commit: the existing wire format
+  does not change, only what is carried in it.
+
+---
+
+## 11. Recorded follow-ups
+
+- **Generalise sketches, attachments and checklists into one note-child-record type.**
+  Trigger: checklists becoming records, which the user has already asked for. Doing it then
+  means one migration for three types instead of two migrations.
+- **Neither sketches nor attachments are in Trash.** Delete confirms and is then final. The
+  real fix is a new `TrashEntryKind`, a restore path, purge integration, and a list UI that
+  can render a drawing or a thumbnail.
+- **Deploy the server config change** (`MANANA_MAX_ENVELOPE_BYTES=2097152`,
+  `MANANA_MAX_REQUEST_BYTES=8388608`) — until then attachments sync no further than the
+  device that made them.
+- **`TOMBSTONE_FIELDS` is duplicated** across record types; a third type makes it a third
+  copy.
