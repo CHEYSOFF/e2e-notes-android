@@ -1,10 +1,13 @@
 package my.cheysoff.core_crypto.sync
 
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
- * Base64url encoding, checked against the RFC 4648 §10 test vectors with the padding removed.
+ * Base64url encoding and decoding, checked against the RFC 4648 §10 test vectors with the padding
+ * removed.
  *
  * Those seven vectors cover all three group alignments (0, 1 and 2 trailing bytes), which is where
  * a hand-rolled encoder goes wrong. The URL-safe alphabet is checked separately, because the
@@ -13,6 +16,9 @@ import org.junit.Test
 class Base64UrlTest {
 
     private fun encodeAscii(text: String) = Base64Url.encode(text.toByteArray(Charsets.US_ASCII))
+
+    private fun decodeAscii(text: String) =
+        Base64Url.decode(text)?.toString(Charsets.US_ASCII)
 
     @Test
     fun `RFC 4648 vectors encode without padding`() {
@@ -61,5 +67,53 @@ class Base64UrlTest {
     @Test
     fun `a 16-byte input encodes to 22 characters`() {
         assertEquals(22, Base64Url.encode(ByteArray(16)).length)
+    }
+
+    // -- decode ----------------------------------------------------------------------------------
+
+    @Test
+    fun `RFC 4648 vectors decode back to their bytes`() {
+        assertEquals("", decodeAscii(""))
+        assertEquals("f", decodeAscii("Zg"))
+        assertEquals("fo", decodeAscii("Zm8"))
+        assertEquals("foo", decodeAscii("Zm9v"))
+        assertEquals("foob", decodeAscii("Zm9vYg"))
+        assertEquals("fooba", decodeAscii("Zm9vYmE"))
+        assertEquals("foobar", decodeAscii("Zm9vYmFy"))
+    }
+
+    @Test
+    fun `every byte value survives a round trip`() {
+        // 0x00 and 0xFF included, and every alignment: 256 is not a multiple of three, so the
+        // slices below end on all three group boundaries.
+        val all = ByteArray(256) { it.toByte() }
+        for (length in 0..all.size) {
+            val slice = all.copyOfRange(0, length)
+            val decoded = Base64Url.decode(Base64Url.encode(slice))
+            assertArrayEquals("length $length", slice, decoded)
+        }
+    }
+
+    @Test
+    fun `the URL-safe symbols decode to their standard values`() {
+        assertArrayEquals(hex("fbfffe"), Base64Url.decode("-__-"))
+    }
+
+    @Test
+    fun `a character outside the alphabet refuses the input`() {
+        // `+` and `/` are the standard alphabet's last two symbols and are NOT this one's; `=` is
+        // padding this encoder never emits. All three mean the string came from somewhere else.
+        assertNull(Base64Url.decode("Zm9v+g"))
+        assertNull(Base64Url.decode("Zm9v/g"))
+        assertNull(Base64Url.decode("Zm9vYg=="))
+        assertNull(Base64Url.decode("not base64"))
+    }
+
+    @Test
+    fun `a length of four n plus one refuses the input`() {
+        // No number of bytes encodes to a trailing group of one character, so a string of this
+        // length is malformed however friendly it looks.
+        assertNull(Base64Url.decode("Z"))
+        assertNull(Base64Url.decode("Zm9vZ"))
     }
 }

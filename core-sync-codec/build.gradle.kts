@@ -25,6 +25,15 @@ kotlin {
                 // `api`, not `implementation`: `SyncRecord`, `Hlc` and `RecordType` appear in this
                 // module's public signatures, so every consumer needs them on its compile classpath.
                 api(project(":core-domain"))
+                // `Base64Url` -- the project's canonical unpadded RFC 4648 §5 codec, and the one
+                // an attachment's `bytes`/`thumbBytes` cross the wire through. It lives in that
+                // module's `commonMain` precisely so common code can use it (the JCA-bound crypto
+                // is in its `jvmCommonMain` and is NOT pulled in by this), so this is a dependency
+                // on pure Kotlin and adds no platform constraint to this source set. A second
+                // base64 implementation here would be a second spelling of one primitive, which is
+                // exactly the failure `Base64Url`'s own KDoc records this project having shipped
+                // once already.
+                implementation(project(":core-crypto-shared"))
                 // The payload is JSON. `kotlinx-serialization-json` is taken for its runtime only
                 // -- there is no `@Serializable` here and the compiler plugin is NOT applied, for
                 // the reasons `RecordPayloadCodec` gives: building the object key by key is what
@@ -37,6 +46,8 @@ kotlin {
             dependencies {
                 // `RecordEnvelope`, `BlindedRecordId`, `AccountKeys` -- all of them JCA-backed and
                 // therefore in that module's `jvmCommonMain`, which is why this source set exists.
+                // (`commonMain` already depends on this module for `Base64Url`; this line is what
+                // makes the JVM-only half of it visible here.)
                 implementation(project(":core-crypto-shared"))
 
                 // `EnvelopeSyncTransport` is the codec pointed at a server: it implements the

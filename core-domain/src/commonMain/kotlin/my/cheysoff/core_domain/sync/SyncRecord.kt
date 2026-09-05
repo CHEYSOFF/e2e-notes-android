@@ -267,7 +267,7 @@ object SyncValues {
 }
 
 /**
- * The two kinds of record the protocol carries, each with the field set it merges over.
+ * The kinds of record the protocol carries, each with the field set it merges over.
  *
  * [wireKey] is the `recType` string that goes into the blinded-ID HMAC message
  * (`HMAC(K_id, recType ‖ ":" ‖ uuid)`) and into the sealed payload. **Changing one of these
@@ -289,18 +289,34 @@ enum class RecordType(val wireKey: String, val fields: Set<String>) {
      * contested text a user typed live on two devices — so it does not get a conflict copy. Storage
      * is `RoomSyncStore`/`RecordRows`'s `SKETCH` branches, mirroring `FOLDER`'s for the same reason.
      */
-    SKETCH("sketch", FieldClocks.SKETCH_FIELDS);
+    SKETCH("sketch", FieldClocks.SKETCH_FIELDS),
+
+    /**
+     * An image attached to a note.
+     *
+     * Structurally a [SKETCH]: a child of a note, anchored and ordered, tombstoned when its note
+     * is. No body in the [Merge] sense -- `image` is a plain LWW field, not a text two people typed
+     * into concurrently -- so no conflict copy.
+     */
+    ATTACHMENT("attachment", FieldClocks.ATTACHMENT_FIELDS);
 
     /**
      * How many columns [field] carries — see [FieldValue].
      *
-     * Two for the two pairs that move together, one for everything else. Checked by
+     * Two for the two pairs that move together, four and three for an attachment's two binary
+     * payloads and the dimensions that describe them, one for everything else. Checked by
      * `SyncRecord.validate`, so a caller that packs a `content` without its `contentFormat` is
      * told at the boundary rather than writing a half-value into the database.
+     *
+     * `image` and `thumb` are grouped for exactly the reason `content` is grouped with
+     * `contentFormat`: the merge takes a whole [FieldValue] from one side or the other, so pixels
+     * can never end up described by the other device's dimensions.
      */
     fun partCount(field: String): Int = when (field) {
         FieldClocks.CONTENT -> 2   // content, contentFormat
         FieldClocks.DELETED -> 2   // isDeleted, deletedAt
+        FieldClocks.IMAGE -> 4     // bytes, mimeType, width, height
+        FieldClocks.THUMB -> 3     // thumbBytes, thumbWidth, thumbHeight
         else -> 1
     }
 

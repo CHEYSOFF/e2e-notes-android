@@ -53,12 +53,19 @@ import my.cheysoff.core_sync_net.SyncException
  * @param createdAtOf the record's `createdAt`, which `SyncRecord` does not carry and the payload
  *   does. Supplied by the store rather than invented here; see `SyncRecords` for why the column is
  *   in one and not the other.
+ * @param metaOf an attachment's opaque `meta` column, which `SyncRecord` does not carry either and
+ *   for a different reason (`PayloadFields.META`). Deliberately **not defaulted**: a no-op default
+ *   returning `""` is exactly how a caller forgets to wire the real one, and the cost of forgetting
+ *   is that this device replaces whatever a newer build put in `meta` with an empty string on every
+ *   record it pushes -- silently, and on every device the account reaches. `""` is the right answer
+ *   for every record type except `ATTACHMENT`, which is what makes the mistake invisible.
  */
 class EnvelopeSyncTransport(
     private val api: SyncApi,
     private val credentials: DeviceCredentials,
     private val codec: RecordCodec,
     private val createdAtOf: suspend (RecordType, String) -> Long?,
+    private val metaOf: suspend (RecordType, String) -> String,
 ) : SyncTransport {
 
     override suspend fun changesSince(since: Long, limit: Int): ChangePage = translating {
@@ -66,9 +73,10 @@ class EnvelopeSyncTransport(
         ChangePage(
             records = page.records.map { remote ->
                 when (val opened = codec.open(remote.blindedId, remote.envelope)) {
-                    // `createdAt` is read straight off the payload rather than out of the record:
-                    // it is not a clocked field, so `fromPayload` does not carry it. It is the one
-                    // value here that belongs to the record rather than to the merge.
+                    // `createdAt` and `meta` are read straight off the payload rather than out of
+                    // the record: neither is a clocked field, so `fromPayload` carries neither.
+                    // They are the two values here that belong to the record rather than to the
+                    // merge.
                     is OpenResult.Ok -> SyncRecords.fromPayload(opened.payload)
                         ?.let {
                             IncomingRecord.Opened(
@@ -77,6 +85,11 @@ class EnvelopeSyncTransport(
                                 createdAt = opened.payload
                                     .field(PayloadFields.CREATED_AT)
                                     ?.toLongOrNull(),
+                                // Indexed rather than `field(...)`, which requires the
+                                // column to belong to the record's type and throws when it
+                                // does not. Every type but ATTACHMENT has no `meta`, and
+                                // "this record has none" is the answer, not an error.
+                                meta = opened.payload.fields[PayloadFields.META],
                             )
                         }
                     // Authentic bytes this build cannot turn into a record. Reported as UNREADABLE
@@ -110,7 +123,12 @@ class EnvelopeSyncTransport(
                 // one pass cannot do. `updatedAt` is the same fallback the receiving side uses, so
                 // the two agree rather than each inventing something.
                 ?: item.record.valueOf(FieldClocks.UPDATED_AT).parts[0]?.toLongOrNull() ?: 0L
-            val sealed = codec.seal(SyncRecords.toPayload(item.record, createdAt))
+            // `metaOf` rather than `""`: this build never writes a non-empty `meta`, but a newer
+            // one will, and a record round-tripping through an older device must come back with
+            // what it arrived with. See `PayloadFields.META`.
+            val sealed = codec.seal(
+                SyncRecords.toPayload(item.record, createdAt, metaOf(item.type, item.uuid)),
+            )
             identities[sealed.blindedId] = item
             PushItem(blindedId = sealed.blindedId, baseSeq = item.baseSeq, envelope = sealed.envelope)
         }

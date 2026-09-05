@@ -145,6 +145,7 @@ class AndroidPushesToServerTest {
                 credentials = DeviceCredentials(accountId, myDeviceId),
                 codec = codec,
                 createdAtOf = factory::createdAtOf,
+                metaOf = factory::metaOf,
             ),
             clock = ClockObserver { seen -> clock.observe(seen) },
         )

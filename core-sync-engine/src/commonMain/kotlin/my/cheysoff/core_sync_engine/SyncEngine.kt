@@ -242,8 +242,9 @@ class SyncEngine(
                     }
 
                     is IncomingRecord.Opened -> {
-                        val applied =
-                            applyIncoming(incoming.record, incoming.seq, incoming.createdAt)
+                        val applied = applyIncoming(
+                            incoming.record, incoming.seq, incoming.createdAt, incoming.meta,
+                        )
                         stats += applied.stats
                         applied.stop?.let {
                             return finishPull(committable, startCursor, stats, it, storedVersion)
@@ -406,7 +407,16 @@ class SyncEngine(
                         // push conflict is the server refusing a row THIS device sent, so the row
                         // is in this store already and its `createdAt` is set. The value is only
                         // ever consulted for a record being seen for the first time.
-                        val applied = applyIncoming(current, ack.currentSeq, remoteCreatedAt = null)
+                        //
+                        // No `remoteMeta` either, and for a weaker but sufficient reason: the
+                        // blocking version is handed back as a decoded `SyncRecord` by the
+                        // transport's conflict path, which never carried the column, so there is
+                        // nothing here to pass. Null makes the store keep the row's stored `meta`,
+                        // which is the value this device just pushed -- so nothing is lost, and the
+                        // next pull of that record delivers the blocking version's `meta` properly.
+                        val applied = applyIncoming(
+                            current, ack.currentSeq, remoteCreatedAt = null, remoteMeta = null,
+                        )
                         stats += applied.stats
                         applied.stop?.let { return Phase(stats, it) }
                     }
@@ -500,6 +510,7 @@ class SyncEngine(
         remote: SyncRecord,
         seq: Long,
         remoteCreatedAt: Long?,
+        remoteMeta: String?,
     ): Phase {
         val stored = store.load(remote.type, remote.uuid)
         val result = Merge.merge(stored?.asLocalRecord(), remote)
@@ -535,7 +546,7 @@ class SyncEngine(
             is MergeResult.Applied -> {
                 write(
                     result.record, result.dirty, seq, stored?.contentBaseline, remote,
-                    copy = null, remoteCreatedAt = remoteCreatedAt,
+                    copy = null, remoteCreatedAt = remoteCreatedAt, remoteMeta = remoteMeta,
                 )
                 Phase(PassStats(applied = 1), null)
             }
@@ -550,6 +561,7 @@ class SyncEngine(
                     result.record, result.dirty, seq, stored?.contentBaseline, remote,
                     copy = if (existing == null) result.copy else null,
                     remoteCreatedAt = remoteCreatedAt,
+                    remoteMeta = remoteMeta,
                 )
                 Phase(PassStats(applied = 1, conflictCopies = if (existing == null) 1 else 0), null)
             }
@@ -564,6 +576,7 @@ class SyncEngine(
         agreed: SyncRecord,
         copy: SyncRecord?,
         remoteCreatedAt: Long?,
+        remoteMeta: String?,
     ) {
         store.applyMerged(
             MergedWrite(
@@ -580,6 +593,10 @@ class SyncEngine(
                 // NEW record minted here, so it is not covered by this and keeps taking its own
                 // creation time from the body it preserves.
                 remoteCreatedAt = remoteCreatedAt,
+                // Unlike `remoteCreatedAt` this is not first-receipt-only: `meta` is mutable, so
+                // an existing row takes the incoming value. Null means the payload carried none
+                // and the store keeps what it has. See `MergedWrite.remoteMeta`.
+                remoteMeta = remoteMeta,
             )
         )
     }
@@ -625,8 +642,16 @@ class SyncEngine(
          * a record type or changes a payload's shape, and never otherwise: every device that has
          * pulled under a lower number re-pulls its whole account once, which is cheap for a small
          * library and is not free for a large one.
+         *
+         * `3` is `RecordType.ATTACHMENT`. A device on the `2` build sees `recType = "attachment"`,
+         * cannot map it, and skips it as `RecordFault.UNKNOWN_TYPE` -- counted as `ignored`, cursor
+         * still advancing, account not halted. That graceful skip is also what makes the bump
+         * mandatory: the cursor sails past every attachment record while the device is on `2`, so
+         * without a generation change to re-pull from 0 after the upgrade, those attachments would
+         * be invisible on that device permanently. `2` was `RecordType.SKETCH`, for the same
+         * reason.
          */
-        const val DATA_VERSION = 2
+        const val DATA_VERSION = 3
 
         /** The server refuses a batch of more than 64 items. */
         const val MAX_BATCH_LIMIT = 64

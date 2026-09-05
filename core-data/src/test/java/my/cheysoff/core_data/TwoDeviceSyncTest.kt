@@ -90,7 +90,8 @@ class TwoDeviceSyncTest {
         val sketches = RoomSketchesRepository(database.sketchDao, database, clock)
 
         val store = RoomSyncStore(
-            database, database.noteDao, database.folderDao, database.sketchDao, database.syncStateDao,
+            database, database.noteDao, database.folderDao, database.sketchDao,
+            database.attachmentDao, database.syncStateDao,
             accountId = "acct",
             // The same generator the engine below observes remote clocks into -- exactly the
             // sharing `SyncStoreFactory` gives `RoomSyncStore` and `DefaultSyncController` in
@@ -105,6 +106,7 @@ class TwoDeviceSyncTest {
                     RecordType.NOTE -> database.noteDao.noteRow(uuid)?.createdAt
                     RecordType.FOLDER -> database.folderDao.folderRow(uuid)?.createdAt
                     RecordType.SKETCH -> database.sketchDao.sketchRow(uuid)?.createdAt
+                    RecordType.ATTACHMENT -> database.attachmentDao.attachmentRow(uuid)?.createdAt
                 }
             },
             clock = ClockObserver { clock.observe(it) },

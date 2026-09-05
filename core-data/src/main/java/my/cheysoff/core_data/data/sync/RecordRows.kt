@@ -1,5 +1,7 @@
 package my.cheysoff.core_data.data.sync
 
+import my.cheysoff.core_crypto.sync.Base64Url
+import my.cheysoff.core_data.data.local.AttachmentEntity
 import my.cheysoff.core_data.data.local.FolderEntity
 import my.cheysoff.core_data.data.local.NoteEntity
 import my.cheysoff.core_data.data.local.SketchEntity
@@ -76,6 +78,47 @@ internal object RecordRows {
             FieldClocks.STROKES to FieldValue.of(sketch.strokes),
             FieldClocks.UPDATED_AT to FieldValue.of(sketch.updatedAt.toString()),
             FieldClocks.DELETED to FieldValue.of(SyncValues.of(sketch.isDeleted), sketch.deletedAt?.toString()),
+        ),
+    ).normalized()
+
+    /**
+     * Mirrors [toRecord] for a sketch, with `strokes` split into the two clocked binary values an
+     * attachment carries.
+     *
+     * `bytes` and `thumbBytes` cross as [Base64Url] text because a `SyncRecord`'s values are text
+     * by construction -- the merge compares them and never parses one -- and because that is the
+     * spelling the payload uses, so a value round-tripping through a merge and out to the wire
+     * keeps the same bytes. `mimeType`/`width`/`height` travel inside `image`'s single
+     * [FieldValue], and `thumbWidth`/`thumbHeight` inside `thumb`'s, so a merge can never describe
+     * one device's pixels with another device's dimensions.
+     *
+     * `meta` is deliberately absent: it has no clock, is not in `FieldClocks.ATTACHMENT_FIELDS`,
+     * and travels beside the record rather than inside it. See `PayloadFields.META`.
+     */
+    fun toRecord(attachment: AttachmentEntity): SyncRecord = SyncRecord(
+        type = RecordType.ATTACHMENT,
+        uuid = attachment.uuid,
+        rowClock = attachment.rowHlc(),
+        fieldClocks = FieldClocks.parse(attachment.fieldHlc),
+        fields = mapOf(
+            FieldClocks.NOTE_ID to FieldValue.of(attachment.noteId),
+            FieldClocks.ANCHOR to FieldValue.of(attachment.anchor.toString()),
+            FieldClocks.ORDER to FieldValue.of(attachment.sortOrder.toString()),
+            FieldClocks.IMAGE to FieldValue.of(
+                Base64Url.encode(attachment.bytes),
+                attachment.mimeType,
+                attachment.width.toString(),
+                attachment.height.toString(),
+            ),
+            FieldClocks.THUMB to FieldValue.of(
+                Base64Url.encode(attachment.thumbBytes),
+                attachment.thumbWidth.toString(),
+                attachment.thumbHeight.toString(),
+            ),
+            FieldClocks.UPDATED_AT to FieldValue.of(attachment.updatedAt.toString()),
+            FieldClocks.DELETED to FieldValue.of(
+                SyncValues.of(attachment.isDeleted), attachment.deletedAt?.toString(),
+            ),
         ),
     ).normalized()
 
@@ -180,6 +223,58 @@ internal object RecordRows {
             ),
             dirty = dirty,
             lastSyncedSeq = lastSyncedSeq,
+        )
+    }
+
+    /**
+     * Mirrors [toSketchEntity], with two extra caller-supplied columns.
+     *
+     * @param meta the opaque escape hatch, which the merge does not model. The caller decides it:
+     *   the incoming payload's value when there is one, otherwise the row's existing one. Never
+     *   normalised, never defaulted to `""` by anything but the absence of a row -- see
+     *   `AttachmentData.meta`.
+     *
+     * The `?: ByteArray(0)` and `?: 0` fallbacks below are unreachable rather than merely
+     * unlikely: `SyncRecords.fromPayload` refuses a record whose numeric columns will not parse or
+     * whose image columns will not base64-decode, at the boundary, precisely so that a blank grey
+     * box cannot appear in a note here.
+     */
+    fun toAttachmentEntity(
+        record: SyncRecord,
+        createdAt: Long,
+        meta: String,
+        dirty: Boolean,
+        lastSyncedSeq: Long,
+    ): AttachmentEntity {
+        val normalized = record.normalized()
+        val image = normalized.valueOf(FieldClocks.IMAGE)
+        val thumb = normalized.valueOf(FieldClocks.THUMB)
+        val deleted = normalized.valueOf(FieldClocks.DELETED)
+        return AttachmentEntity(
+            uuid = normalized.uuid,
+            noteId = normalized.valueOf(FieldClocks.NOTE_ID).parts[0].orEmpty(),
+            anchor = normalized.valueOf(FieldClocks.ANCHOR).parts[0]?.toIntOrNull() ?: 0,
+            sortOrder = normalized.valueOf(FieldClocks.ORDER).parts[0]?.toIntOrNull() ?: 0,
+            mimeType = image.parts[1].orEmpty(),
+            width = image.parts[2]?.toIntOrNull() ?: 0,
+            height = image.parts[3]?.toIntOrNull() ?: 0,
+            bytes = image.parts[0]?.let(Base64Url::decode) ?: ByteArray(0),
+            thumbWidth = thumb.parts[1]?.toIntOrNull() ?: 0,
+            thumbHeight = thumb.parts[2]?.toIntOrNull() ?: 0,
+            thumbBytes = thumb.parts[0]?.let(Base64Url::decode) ?: ByteArray(0),
+            createdAt = createdAt,
+            updatedAt = normalized.valueOf(FieldClocks.UPDATED_AT).parts[0]?.toLongOrNull() ?: 0L,
+            isDeleted = SyncValues.toBoolean(deleted.parts[0]),
+            deletedAt = deleted.parts[1]?.toLongOrNull(),
+            hlcMs = normalized.rowClock.ms,
+            hlcCounter = normalized.rowClock.counter,
+            hlcNode = normalized.rowClock.node,
+            fieldHlc = FieldClocks.serialize(
+                RecordType.ATTACHMENT.fields.mapNotNull { f -> normalized.fieldClocks[f]?.let { f to it } }.toMap(),
+            ),
+            dirty = dirty,
+            lastSyncedSeq = lastSyncedSeq,
+            meta = meta,
         )
     }
 
