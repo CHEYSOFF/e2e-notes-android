@@ -25,6 +25,7 @@ import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.core_domain.model.SketchData
 import my.cheysoff.core_domain.repository.AttachmentsRepository
 import my.cheysoff.core_domain.repository.NotesRepository
+import my.cheysoff.core_domain.repository.SettingsRepository
 import my.cheysoff.core_domain.repository.SketchesRepository
 import my.cheysoff.core_domain.sketch.NoteBlocks
 import my.cheysoff.core_domain.sketch.Sketch
@@ -330,6 +331,7 @@ class SingleNoteViewModel @Inject constructor(
     private val sketchesRepository: SketchesRepository,
     private val attachmentsRepository: AttachmentsRepository,
     private val imageImporter: ImageImporter,
+    private val settingsRepository: SettingsRepository,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
     private val noteId: String? = savedStateHandle["noteId"]
@@ -450,6 +452,23 @@ class SingleNoteViewModel @Inject constructor(
         notesRepository.getFolders()
             .onEach { folders -> _state.update { it.copy(folders = folders) } }
             .launchIn(viewModelScope)
+
+        // Outside the `noteId` block above: the recent-colour strip belongs to the drawing tool, not
+        // to a note, so it is collected even on a note that has never had a sketch.
+        settingsRepository.recentSketchColors
+            .onEach { colors -> _state.update { it.copy(recentSketchColors = colors) } }
+            .launchIn(viewModelScope)
+    }
+
+    /**
+     * Records a colour mixed in the canvas' picker.
+     *
+     * Deliberately fire-and-forget rather than part of a sketch save: the colour is worth keeping
+     * whether or not the drawing it was mixed for is ever committed, and a failure to persist it
+     * must not be able to fail the drawing.
+     */
+    fun onSketchColorMixed(argb: Long) {
+        viewModelScope.launch { settingsRepository.addRecentSketchColor(argb) }
     }
 
     /**

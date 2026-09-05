@@ -191,6 +191,7 @@ fun AppNavHost(
                 state = state,
                 onIntent = { intent -> viewModel.onIntent(intent) },
                 loadAttachment = { id -> viewModel.attachment(id) },
+                onColorMixed = { argb -> viewModel.onSketchColorMixed(argb) },
             )
         }
 
