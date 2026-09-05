@@ -612,11 +612,16 @@ class SyncEngine(
          * could plausibly be refused for its size travels alone, which makes
          * [TransportFault.REJECTED] attributable and makes skipping it safe.
          *
-         * 256 KiB is the envelope cap of a server that has not been upgraded for attachments yet
-         * (spec §4), so on such a server every attachment travels alone and is skipped alone,
-         * while notes and folders continue to sync normally.
+         * 128 KiB is half the 256 KiB envelope cap of a server that has not been upgraded for
+         * attachments yet (spec §4), not the cap itself. A record estimating just under the cap
+         * would otherwise still ride in a shared batch, and its real envelope -- estimate plus
+         * JSON scaffolding plus rounding up to the padding bucket -- can cross the cap while it is
+         * still sharing one, which is a `400` that is not attributable and defers the whole batch
+         * instead of skipping the one record. Halving leaves enough headroom that padding,
+         * scaffolding and any residual estimate error cannot carry a record over the line while it
+         * still has company.
          */
-        const val LARGE_RECORD_BYTES = 256 * 1024
+        const val LARGE_RECORD_BYTES = 128 * 1024
 
         private fun keyOf(type: RecordType, uuid: String): String = "${type.wireKey}:$uuid"
     }

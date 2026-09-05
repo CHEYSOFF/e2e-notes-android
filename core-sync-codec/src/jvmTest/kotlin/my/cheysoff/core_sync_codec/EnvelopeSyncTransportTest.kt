@@ -303,6 +303,22 @@ class EnvelopeSyncTransportTest {
         assertEquals(TransportFault.REJECTED, (failure as SyncTransportException).fault)
     }
 
+    /**
+     * A `413` is the most literally permanent "these exact bytes will be refused again" fault
+     * there is. On a batch of one the engine skips the record instead of halting; on a multi-item
+     * batch it still halts, because a `413` there is about the batch and not attributable to any
+     * one item.
+     */
+    @Test
+    fun `a 413 surfaces as REJECTED`() = runTest {
+        val failure = runCatching {
+            transport(FakeApi(fail = SyncException.RequestTooLarge)).changesSince(0L, 32)
+        }.exceptionOrNull()
+
+        assertTrue("was $failure", failure is SyncTransportException)
+        assertEquals(TransportFault.REJECTED, (failure as SyncTransportException).fault)
+    }
+
     /** A `429` carries the server's own delay through, without the engine's jitter added twice. */
     @Test
     fun `a rate limit carries its delay`() = runTest {
