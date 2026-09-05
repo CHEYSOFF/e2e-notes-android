@@ -496,15 +496,26 @@ class RecordNotesRepository private constructor(
             .filter { it.note.isDeleted && TrashPolicy.isExpired(it.note.deletedAt, now) }
         val expiredFolders = snapshot.folders.values
             .filter { it.folder.isDeleted && TrashPolicy.isExpired(it.folder.deletedAt, now) }
+        // A sketch is tombstoned independently of its note (its own `deletedAt`, its own clock --
+        // see SketchRow's KDoc), so it ages out of Trash independently too, exactly as
+        // RoomNotesRepository.purgeExpiredTrash does on the phone. Without this, a desktop-only
+        // vault would leak every tombstoned sketch forever: nothing else here ever removes a
+        // `sketches` record.
+        val expiredSketches = snapshot.sketches.values
+            .filter { it.sketch.isDeleted && TrashPolicy.isExpired(it.sketch.deletedAt, now) }
 
         expiredNotes.forEach { store.remove(codec.blindedIdOf(NoteRecords.toPayload(it))) }
         expiredFolders.forEach { store.remove(codec.blindedIdOf(FolderRecords.toPayload(it))) }
+        expiredSketches.forEach {
+            store.remove(codec.blindedIdOf(SketchRecords.toPayload(it, createdAt = it.sketch.createdAt)))
+        }
 
         state.value = snapshot.copy(
             notes = snapshot.notes - expiredNotes.map { it.note.id }.toSet(),
             folders = snapshot.folders - expiredFolders.map { it.folder.id }.toSet(),
+            sketches = snapshot.sketches - expiredSketches.map { it.sketch.id }.toSet(),
         )
-        expiredNotes.size + expiredFolders.size
+        expiredNotes.size + expiredFolders.size + expiredSketches.size
     }
 
     // -------------------------------------------------------------------------------------------

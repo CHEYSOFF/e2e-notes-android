@@ -420,6 +420,51 @@ class RecordNotesRepositoryTest {
         assertEquals(1, repository.getNotes(NotesSortOrder.RECENTLY_EDITED).first().size)
     }
 
+    /**
+     * L5: `RoomNotesRepository.purgeExpiredTrash` on the phone purges notes, folders AND sketches
+     * in the same pass -- see that class's own KDoc on why a tombstoned sketch has to age out on
+     * its own, independently of the note it was tombstoned with. The desktop's version purged only
+     * notes and folders, so a desktop-only vault would leak a tombstoned sketch forever: nothing
+     * else here ever removes a `sketches` record.
+     *
+     * [seedSketch] stamps a tombstoned sketch's `deletedAt` at a fixed 1_000L, so expiry here is
+     * driven entirely by the `now` handed to `purgeExpiredTrash`, not by the mutable `now` field
+     * the note/folder purge tests above use to control `deleteNote`'s own stamp.
+     */
+    @Test
+    fun `purgeExpiredTrash purges an expired sketch tombstone too`() = runTest {
+        seedSketch("expired", noteId = "a", isDeleted = true) // deletedAt = 1_000L
+        val reloaded = reload()
+
+        val purged = reloaded.purgeExpiredTrash(1_000L + TrashPolicy.RETENTION_MILLIS)
+
+        assertEquals(1, purged)
+        assertTrue("the tombstoned sketch row must be gone", reloaded.sketchRows().isEmpty())
+        assertTrue("and gone from disk too", store.readAll().isEmpty())
+    }
+
+    @Test
+    fun `purgeExpiredTrash keeps a sketch tombstone still inside its retention window`() = runTest {
+        seedSketch("fresh", noteId = "a", isDeleted = true) // deletedAt = 1_000L
+        val reloaded = reload()
+
+        val purged = reloaded.purgeExpiredTrash(1_000L + TrashPolicy.RETENTION_MILLIS - 1)
+
+        assertEquals(0, purged)
+        assertTrue("a fresh tombstone must survive the purge", reloaded.sketchRows().containsKey("fresh"))
+    }
+
+    @Test
+    fun `purgeExpiredTrash leaves a live sketch alone`() = runTest {
+        seedSketch("live", noteId = "a", isDeleted = false)
+        val reloaded = reload()
+
+        val purged = reloaded.purgeExpiredTrash(1_000L + TrashPolicy.RETENTION_MILLIS * 10)
+
+        assertEquals(0, purged)
+        assertTrue(reloaded.sketchRows().containsKey("live"))
+    }
+
     // -------------------------------------------------------------------------------------------
     // Sorting — transcribed from NoteDao's ORDER BY clauses
     // -------------------------------------------------------------------------------------------
