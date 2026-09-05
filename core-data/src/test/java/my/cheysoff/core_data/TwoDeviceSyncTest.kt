@@ -80,7 +80,7 @@ class TwoDeviceSyncTest {
          */
         val clock = SyncClock(node = { name })
 
-        val repository = RoomNotesRepository(database.noteDao, database.folderDao, database.sketchDao, database, clock)
+        val repository = RoomNotesRepository(database.noteDao, database.folderDao, database.sketchDao, database.attachmentDao, database, clock)
 
         /**
          * Task 5's seam for a sketch, sharing [clock] with [repository] for the same reason

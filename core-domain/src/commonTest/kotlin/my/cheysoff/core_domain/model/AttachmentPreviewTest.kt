@@ -61,4 +61,9 @@ class AttachmentPreviewTest {
     fun `two previews differing only in identity hash to different values`() {
         assertNotEquals(preview(id = "a1").hashCode(), preview(id = "a2").hashCode())
     }
+
+    @Test
+    fun `previews differing only in meta are not equal`() {
+        assertNotEquals(preview().copy(meta = ""), preview().copy(meta = "caption"))
+    }
 }

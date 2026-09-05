@@ -28,6 +28,8 @@ data class AttachmentPreview(
     val updatedAt: Long,
     val isDeleted: Boolean = false,
     val deletedAt: Long? = null,
+    /** See [AttachmentData.meta] -- the same opaque, carried-verbatim escape hatch. */
+    val meta: String = "",
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -38,7 +40,7 @@ data class AttachmentPreview(
             thumbWidth == other.thumbWidth && thumbHeight == other.thumbHeight &&
             thumbBytes.contentEquals(other.thumbBytes) &&
             createdAt == other.createdAt && updatedAt == other.updatedAt &&
-            isDeleted == other.isDeleted && deletedAt == other.deletedAt
+            isDeleted == other.isDeleted && deletedAt == other.deletedAt && meta == other.meta
     }
 
     override fun hashCode(): Int {
@@ -56,6 +58,7 @@ data class AttachmentPreview(
         result = 31 * result + updatedAt.hashCode()
         result = 31 * result + isDeleted.hashCode()
         result = 31 * result + (deletedAt?.hashCode() ?: 0)
+        result = 31 * result + meta.hashCode()
         return result
     }
 }
