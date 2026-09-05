@@ -3,6 +3,7 @@ package my.cheysoff.feature_notes.model.single
 import androidx.compose.runtime.Immutable
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.NoteContentFormat
+import my.cheysoff.core_domain.model.SketchData
 
 @Immutable
 data class SingleNoteScreenState(
@@ -12,6 +13,11 @@ data class SingleNoteScreenState(
     // rich-text editor writes the body, so a title-only edit can't relabel untouched plain text.
     val contentFormat: NoteContentFormat = NoteContentFormat.PLAIN,
     val checklist: List<ChecklistItem> = emptyList(),
+    // Below the note's text, never interleaved with it -- see docs/design/sketch-blocks.md's
+    // 2026-09-05 amendment. Always in display order already: sorted by anchor then id (see
+    // `SingleNoteViewModel.sortSketches`), the same rule the desktop applies, so both devices show
+    // one note's drawings in the same order without exchanging anything about it.
+    val sketches: List<SketchData> = emptyList(),
     val isPinned: Boolean = false,
     val isFavorite: Boolean = false,
     val folderId: String? = null,

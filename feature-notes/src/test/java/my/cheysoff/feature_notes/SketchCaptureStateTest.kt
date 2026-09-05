@@ -2,6 +2,7 @@ package my.cheysoff.feature_notes
 
 import my.cheysoff.core_domain.sketch.Point
 import my.cheysoff.core_domain.sketch.SketchLimits
+import my.cheysoff.core_domain.sketch.Stroke
 import my.cheysoff.core_domain.sketch.StrokeCodec
 import my.cheysoff.feature_notes.ui.sketch.SketchCaptureState
 import org.junit.Assert.assertEquals
@@ -169,6 +170,52 @@ class SketchCaptureStateTest {
 
         assertEquals(1, s.strokes.size)
         assertFalse(s.canRedo)
+    }
+
+    // --- reopening an existing drawing ----------------------------------------------------------
+
+    @Test
+    fun `initialStrokes seed strokes with nothing to undo yet`() {
+        val loaded = listOf(Stroke(0xFF000000L, 8, listOf(Point(0, 0), Point(5, 5))))
+        val s = SketchCaptureState(4096, 4096, initialStrokes = loaded)
+
+        assertEquals(loaded, s.strokes)
+        assertFalse("the load itself must not be an undoable step", s.canUndo)
+    }
+
+    @Test
+    fun `undo stops at the as-loaded strokes instead of walking back to blank`() {
+        val loaded = listOf(Stroke(0xFF000000L, 8, listOf(Point(0, 0), Point(5, 5))))
+        val s = SketchCaptureState(4096, 4096, initialStrokes = loaded)
+
+        s.beginStroke(50, 50); s.endStroke()
+        assertEquals(2, s.strokes.size)
+
+        s.undo()
+        assertEquals(
+            "undo must land exactly on the as-loaded drawing, not remove any of it",
+            loaded,
+            s.strokes,
+        )
+        assertFalse("nothing left this session to undo", s.canUndo)
+
+        // A further undo -- e.g. a stray extra tap -- must be a no-op, not an out-of-bounds
+        // removal of an as-loaded stroke. This is the decision this test exists to pin: without it,
+        // a whole previously-saved drawing would be one tap away from silent discard.
+        s.undo()
+        assertEquals(loaded, s.strokes)
+    }
+
+    @Test
+    fun `erasing an as-loaded stroke is itself undoable`() {
+        val loaded = listOf(Stroke(0xFF000000L, 8, listOf(Point(0, 0), Point(5, 5))))
+        val s = SketchCaptureState(4096, 4096, initialStrokes = loaded)
+
+        s.eraseAt(0, 0)
+        assertTrue("erasing an as-loaded stroke works like erasing any other", s.strokes.isEmpty())
+
+        s.undo()
+        assertEquals("undoing the erase restores the as-loaded stroke", loaded, s.strokes)
     }
 
     // --- erase ---------------------------------------------------------------------------------

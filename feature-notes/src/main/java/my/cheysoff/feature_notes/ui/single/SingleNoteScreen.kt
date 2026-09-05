@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.widget.Toast
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -39,6 +41,7 @@ import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.automirrored.outlined.ArrowBackIos
 import androidx.compose.material.icons.automirrored.outlined.FormatListBulleted
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.Brush
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.DeleteOutline
@@ -80,6 +83,10 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke as DrawStyle
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -118,6 +125,11 @@ import my.cheysoff.core_domain.model.TrashPolicy
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_ui.theme.folderAccentColor
 import my.cheysoff.core_domain.model.NoteContentFormat
+import my.cheysoff.core_domain.model.SketchData
+import my.cheysoff.core_domain.sketch.Sketch
+import my.cheysoff.core_domain.sketch.StrokeCodec
+import my.cheysoff.core_ui.sketch.RenderedStroke
+import my.cheysoff.core_ui.sketch.SketchRenderer
 import my.cheysoff.feature_notes.model.single.ChecklistItem
 import my.cheysoff.feature_notes.model.single.SingleNoteIntent
 import my.cheysoff.feature_notes.model.single.SingleNoteScreenState
@@ -126,6 +138,7 @@ import my.cheysoff.feature_notes.model.single.noteShareTitle
 import androidx.activity.compose.BackHandler
 import my.cheysoff.feature_notes.ui.folder.FolderChooser
 import my.cheysoff.feature_notes.ui.folder.FolderRef
+import my.cheysoff.feature_notes.ui.sketch.SketchCanvasScreen
 
 /**
  * Quiet period after the last keystroke before the editor is serialized to HTML and forwarded to
@@ -200,9 +213,18 @@ fun SingleNoteScreen(
         }
     }
 
+    // Which sketch, if any, the full-screen canvas below is currently showing in place of this
+    // editor. Null means the editor is showing; New/Existing are hoisted here (rather than into the
+    // canvas itself) because opening it has to read live editor state (flushContent, the current
+    // body for anchoring) that only this composable holds.
+    var sketchTarget by remember { mutableStateOf<SketchEditTarget?>(null) }
+
     // System back must run the same flush/discard logic as the top-bar arrow — a plain nav pop
-    // would skip the final save and leave an abandoned empty note behind.
-    BackHandler { onBack() }
+    // would skip the final save and leave an abandoned empty note behind. Disabled while the sketch
+    // canvas covers the screen, so back closes the CANVAS (see the handler below it, which — being
+    // composed later — takes priority whenever both are enabled) rather than popping the whole note
+    // out from under it.
+    BackHandler(enabled = sketchTarget == null) { onBack() }
 
     // Nav-away is already covered by onBack; this catches the editor vanishing because the activity
     // is *recreated* (rotation, night-mode/locale change, "don't keep activities" off) with a
@@ -271,6 +293,26 @@ fun SingleNoteScreen(
         }
     }
 
+    // Closes the canvas outright rather than replaying its own "discard?" confirmation -- hardware
+    // back is rare here (the canvas' own Cancel button is the expected route), and this only ever
+    // discards a session that has not been handed to onDone yet, exactly like tapping Cancel and
+    // confirming would. Composed unconditionally (only ENABLED toggles) so this registers after,
+    // and therefore takes priority over, the editor's own BackHandler above whenever both exist.
+    BackHandler(enabled = sketchTarget != null) { sketchTarget = null }
+
+    if (sketchTarget != null) {
+        val target = sketchTarget
+        SketchCanvasScreen(
+            initialSketch = (target as? SketchEditTarget.Existing)?.sketch,
+            onDone = { sketch ->
+                onIntent(SingleNoteIntent.SketchSaved((target as? SketchEditTarget.Existing)?.id, sketch))
+                sketchTarget = null
+            },
+            onCancel = { sketchTarget = null },
+        )
+        return
+    }
+
     Scaffold(
         modifier = Modifier
             .fillMaxSize()
@@ -312,6 +354,13 @@ fun SingleNoteScreen(
                     focusItemId = id
                     onIntent(SingleNoteIntent.ChecklistItemAdded(id, null))
                 },
+                // Flushed first, exactly like onDuplicate: a brand-new sketch is anchored at the
+                // note's CURRENT block count (SingleNoteViewModel.saveSketch), which must count the
+                // text as it stands right now rather than as of up to a debounce ago.
+                onAddSketch = {
+                    flushContent()
+                    sketchTarget = SketchEditTarget.New
+                },
             )
         },
         floatingActionButtonPosition = androidx.compose.material3.FabPosition.Center,
@@ -324,6 +373,15 @@ fun SingleNoteScreen(
             focusItemId = focusItemId,
             onSetFocusItem = { focusItemId = it },
             onIntent = onIntent,
+            // Decoded here rather than in SketchSection: this is where sketchTarget (hoisted to
+            // this composable) actually lives, and StrokeCodec.decode is the same one the canvas
+            // itself uses to read it back, so a sketch that fails to decode simply cannot be
+            // reopened rather than crashing the tap.
+            onSketchTapped = { sketchData ->
+                StrokeCodec.decode(sketchData.strokes)?.let { sketch ->
+                    sketchTarget = SketchEditTarget.Existing(sketchData.id, sketch)
+                }
+            },
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues),
@@ -339,6 +397,7 @@ private fun NoteEditor(
     focusItemId: String?,
     onSetFocusItem: (String?) -> Unit,
     onIntent: (SingleNoteIntent) -> Unit,
+    onSketchTapped: (SketchData) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val spacing = LocalSpacing.current
@@ -430,6 +489,12 @@ private fun NoteEditor(
             textStyle = bodyStyle,
             focusItemId = focusItemId,
             onSetFocusItem = onSetFocusItem,
+            onIntent = onIntent,
+        )
+
+        SketchSection(
+            sketches = state.sketches,
+            onTapped = onSketchTapped,
             onIntent = onIntent,
         )
 
@@ -532,6 +597,101 @@ private fun ChecklistSection(
                 )
             }
         }
+    }
+}
+
+/**
+ * Which sketch the full-screen canvas ([SketchCanvasScreen]) is currently editing, if any. Held by
+ * [SingleNoteScreen] rather than by this section, because opening it has to flush the pending body
+ * edit first (see the toolbar's `onAddSketch`) -- something only the top-level composable can do.
+ */
+private sealed interface SketchEditTarget {
+    data object New : SketchEditTarget
+    data class Existing(val id: String, val sketch: Sketch) : SketchEditTarget
+}
+
+/**
+ * One card per sketch, below the note's text -- never interleaved with it. See
+ * docs/design/sketch-blocks.md's 2026-09-05 amendment for why: the body is one
+ * `BasicRichTextEditor`, and there is no way to host a composable *between* two of its paragraphs
+ * without either a marker inside the serialized HTML (silently orphaned by a sketch-unaware build)
+ * or splitting the body into several editors (breaks cursor movement, undo history and saving).
+ *
+ * [sketches] arrives already ordered by anchor then id ([sortSketches]) -- this just renders them
+ * in that order, mirroring [ChecklistSection]'s shape: a private section below the body, an early
+ * return when there is nothing to show, one row per item.
+ *
+ * Each card is exactly the drawing's own aspect ratio (`Modifier.aspectRatio`, fit to the note's
+ * width), so [SketchRenderer] never has to letterbox it -- it only would if this box's shape
+ * disagreed with the sketch's own, which it cannot. Tapping a card reopens [SketchCanvasScreen] on
+ * that drawing (via [onTapped]); the small corner button deletes it.
+ *
+ * A [SketchData] whose `strokes` fails to decode is skipped rather than shown broken or crashing
+ * the row -- the same "never throws, just loses position/rendering, never existence" posture
+ * `NoteBlocks` documents for a corrupt anchor.
+ */
+@Composable
+private fun SketchSection(
+    sketches: List<SketchData>,
+    onTapped: (SketchData) -> Unit,
+    onIntent: (SingleNoteIntent) -> Unit,
+) {
+    if (sketches.isEmpty()) return
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 22.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        sketches.forEach { sketchData ->
+            val sketch = remember(sketchData.strokes) { StrokeCodec.decode(sketchData.strokes) }
+            if (sketch != null && sketch.width > 0 && sketch.height > 0) {
+                SketchCard(
+                    sketch = sketch,
+                    onTapped = { onTapped(sketchData) },
+                    onDeleted = { onIntent(SingleNoteIntent.SketchDeleted(sketchData.id)) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SketchCard(sketch: Sketch, onTapped: () -> Unit, onDeleted: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(sketch.width.toFloat() / sketch.height.toFloat())
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color(0xFF1C1C22))
+            .clickable(onClick = onTapped),
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            SketchRenderer.render(sketch, size).forEach { rendered -> drawSketchStroke(rendered) }
+        }
+        IconButton(onClick = onDeleted, modifier = Modifier.align(Alignment.TopEnd)) {
+            Icon(
+                imageVector = Icons.Outlined.DeleteOutline,
+                contentDescription = "Delete drawing",
+                tint = BodyGrey,
+            )
+        }
+    }
+}
+
+/** The same DrawScope calls [SketchCanvasScreen]'s own drawing surface uses for a [RenderedStroke]
+ * -- [SketchRenderer] already did the one piece of geometry both places have to agree on (the
+ * mapping and smoothing); this is just handing its output to `drawPath`/`drawCircle`. */
+private fun DrawScope.drawSketchStroke(rendered: RenderedStroke) {
+    if (rendered.isDot) {
+        drawCircle(color = rendered.color, radius = rendered.strokeWidthPx / 2f, center = rendered.dotCenter)
+    } else {
+        drawPath(
+            path = rendered.path,
+            color = rendered.color,
+            style = DrawStyle(width = rendered.strokeWidthPx, cap = StrokeCap.Round, join = StrokeJoin.Round),
+        )
     }
 }
 
@@ -748,6 +908,7 @@ private fun FormattingToolbar(
     richTextState: RichTextState,
     accent: Color,
     onAddChecklistItem: () -> Unit,
+    onAddSketch: () -> Unit,
 ) {
     var showStyles by remember { mutableStateOf(false) }
     val inactive = Color(0xFF9A9A9E)
@@ -790,6 +951,7 @@ private fun FormattingToolbar(
                 richTextState.toggleUnorderedList()
             }
             ToolIcon(Icons.Outlined.Checklist, "Checklist", inactive) { onAddChecklistItem() }
+            ToolIcon(Icons.Outlined.Brush, "Add drawing", inactive) { onAddSketch() }
         }
     }
 }

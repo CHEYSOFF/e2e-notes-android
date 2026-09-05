@@ -24,8 +24,24 @@ import kotlin.math.sqrt
  * sees the real stored size rather than the raw, unthinned capture; and the canvas renders the same
  * points during the session as it will after a reload, so a drawing never visibly shifts the moment
  * it is saved.
+ *
+ * [initialStrokes] seeds [committedStrokes] for the "reopen an existing drawing" flow -- without it,
+ * this class could only ever start from a blank canvas. **Undo does not walk back past them**: they
+ * are added straight to [committedStrokes] with no [HistoryEntry] pushed, so [undoStack] starts
+ * empty even though [strokes] does not. Concretely, [undo] can take back only what THIS session
+ * drew or erased; once those are exhausted it stops sitting exactly on the as-loaded drawing rather
+ * than continuing on to an empty canvas. The alternative -- letting undo walk all the way back to
+ * blank -- would put a whole previously-saved drawing one stray extra tap of Undo (followed by
+ * Done) away from being silently discarded, which loses far more work than the alternative's own
+ * cost: someone who genuinely wants to clear a loaded drawing can still erase every stroke by hand.
+ * (Erasing an as-loaded stroke IS undoable, same as any other erase -- this boundary only concerns
+ * the *load itself*, never a session's own edits to it.)
  */
-class SketchCaptureState(private val width: Int, private val height: Int) {
+class SketchCaptureState(
+    private val width: Int,
+    private val height: Int,
+    initialStrokes: List<Stroke> = emptyList(),
+) {
 
     /**
      * The outcome of [endStroke]: whether a gesture was even in progress ([NONE]), whether it was
@@ -41,7 +57,7 @@ class SketchCaptureState(private val width: Int, private val height: Int) {
     /** The nib width, in canvas units, a new stroke begins with. */
     var strokeWidth: Int = DEFAULT_STROKE_WIDTH
 
-    private val committedStrokes = mutableListOf<Stroke>()
+    private val committedStrokes = mutableListOf<Stroke>().apply { addAll(initialStrokes) }
     private val undoStack = mutableListOf<HistoryEntry>()
     private val redoStack = mutableListOf<HistoryEntry>()
 

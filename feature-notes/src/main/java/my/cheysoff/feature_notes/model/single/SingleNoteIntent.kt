@@ -1,5 +1,7 @@
 package my.cheysoff.feature_notes.model.single
 
+import my.cheysoff.core_domain.sketch.Sketch
+
 sealed interface SingleNoteIntent {
     data class TitleChanged(val title: String) : SingleNoteIntent
     data class ContentChanged(val content: String) : SingleNoteIntent
@@ -36,4 +38,15 @@ sealed interface SingleNoteIntent {
 
     /** Assign this note to [folderId], or unfile it when null. */
     data class SetFolder(val folderId: String?) : SingleNoteIntent
+
+    /**
+     * A drawing was finished on the canvas and should be persisted. [editingId] is the id of the
+     * sketch being replaced when this is a re-edit of an existing drawing (opened by tapping it);
+     * null means this is a brand-new one. See `SingleNoteViewModel.saveSketch` for exactly how each
+     * case is anchored, ordered and stamped.
+     */
+    data class SketchSaved(val editingId: String?, val sketch: Sketch) : SingleNoteIntent
+
+    /** Soft-deletes one sketch, through `SketchesRepository.deleteSketch`. */
+    data class SketchDeleted(val id: String) : SingleNoteIntent
 }

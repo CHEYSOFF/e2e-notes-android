@@ -19,7 +19,12 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.model.NoteContentFormat
+import my.cheysoff.core_domain.model.SketchData
 import my.cheysoff.core_domain.repository.NotesRepository
+import my.cheysoff.core_domain.repository.SketchesRepository
+import my.cheysoff.core_domain.sketch.NoteBlocks
+import my.cheysoff.core_domain.sketch.Sketch
+import my.cheysoff.core_domain.sketch.StrokeCodec
 import my.cheysoff.feature_notes.model.single.ChecklistItem
 import my.cheysoff.feature_notes.model.single.SingleNoteIntent
 import my.cheysoff.feature_notes.model.single.SingleNoteScreenState
@@ -254,9 +259,31 @@ internal fun buildDuplicate(state: SingleNoteScreenState, newId: String): Note =
     folderId = state.folderId,
 )
 
+/**
+ * Sketches in the order [SketchSection][my.cheysoff.feature_notes.ui.single.SketchSection] renders
+ * them: by [SketchData.anchor], ties broken by [SketchData.id].
+ *
+ * Deliberately NOT [SketchData.order] first: `order` is scoped per-anchor for a future inline
+ * layout (see that field's own KDoc), which this screen does not do yet -- see
+ * docs/design/sketch-blocks.md's 2026-09-05 amendment. The flat, below-the-text list rendered today
+ * only needs a total order, and anchor+id already gives it one both platforms agree on without
+ * exchanging anything about it -- the same reason `SketchDao.getSketchesByNoteId` ties its own
+ * `sortOrder ASC` on `uuid ASC`.
+ */
+internal fun sortSketches(sketches: List<SketchData>): List<SketchData> =
+    sketches.sortedWith(compareBy({ it.anchor }, { it.id }))
+
+/**
+ * The `order` a brand-new sketch anchored at [anchor] should be given: one past the highest
+ * `order` any existing sketch at that same anchor already holds, or `0` if none does.
+ */
+internal fun nextSketchOrder(sketches: List<SketchData>, anchor: Int): Int =
+    (sketches.filter { it.anchor == anchor }.maxOfOrNull { it.order } ?: -1) + 1
+
 @HiltViewModel
 class SingleNoteViewModel @Inject constructor(
     private val notesRepository: NotesRepository,
+    private val sketchesRepository: SketchesRepository,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
     private val noteId: String? = savedStateHandle["noteId"]
@@ -330,6 +357,13 @@ class SingleNoteViewModel @Inject constructor(
                     baseline = merged.baseline
                     _state.value = merged.state
                 }
+                .launchIn(viewModelScope)
+
+            // Independent of the note-load flow above, exactly like the folders collection below:
+            // sketches live in their own table with their own Flow, and their write path (the
+            // canvas' Done button) never goes through the editor's title/body/checklist baseline.
+            sketchesRepository.getSketchesForNote(id)
+                .onEach { list -> _state.update { it.copy(sketches = sortSketches(list)) } }
                 .launchIn(viewModelScope)
         }
 
@@ -492,6 +526,12 @@ class SingleNoteViewModel @Inject constructor(
                 }
             }
 
+            is SingleNoteIntent.SketchSaved -> saveSketch(intent.editingId, intent.sketch)
+
+            is SingleNoteIntent.SketchDeleted -> {
+                viewModelScope.launch { sketchesRepository.deleteSketch(intent.id) }
+            }
+
             is SingleNoteIntent.DuplicateNote -> duplicateNote()
 
             is SingleNoteIntent.DeleteNote -> {
@@ -576,6 +616,49 @@ class SingleNoteViewModel @Inject constructor(
             val copy = buildDuplicate(_state.value, newId = UUID.randomUUID().toString())
             saveMutex.withLock { notesRepository.saveNote(copy) }
             _events.send(SingleNoteEvent.NoteDuplicated(copy.title))
+        }
+    }
+
+    /**
+     * Persists a drawing just finished on the canvas.
+     *
+     * A brand-new sketch ([editingId] null) is anchored at the note's CURRENT block count -- the
+     * end of the text, which is where [SketchSection][my.cheysoff.feature_notes.ui.single.SketchSection]
+     * renders every drawing -- and given the next [SketchData.order] at that anchor via
+     * [nextSketchOrder]; the screen flushes any pending body edit before opening the canvas for a
+     * new sketch, so `current.content` here is never a debounce behind what is on screen.
+     *
+     * Re-editing an existing one ([editingId] non-null) only ever replaces its `strokes`: its
+     * `anchor`/`order`/`createdAt` are left exactly as they were, because reopening a drawing to add
+     * a line is not a re-anchor. If the id is not found in `current.sketches` (a delete raced the
+     * canvas being open, say) this falls back to creating a fresh row rather than silently dropping
+     * the drawing.
+     *
+     * `updatedAt` is stamped HERE, on every branch: `SketchData`'s timestamps are caller-owned,
+     * unlike `Note`'s (whose repository stamps `updatedAt` itself) -- a save that forgot this would
+     * leave a stale value that sorts and merges wrongly, looking like a sync bug that is really
+     * this code's own.
+     */
+    private fun saveSketch(editingId: String?, sketch: Sketch) {
+        val id = noteId ?: return
+        viewModelScope.launch {
+            val current = _state.value
+            val now = System.currentTimeMillis()
+            val encoded = StrokeCodec.encode(sketch)
+            val existing = editingId?.let { eid -> current.sketches.find { it.id == eid } }
+            val data = existing?.copy(strokes = encoded, updatedAt = now) ?: run {
+                val anchor = NoteBlocks.count(current.content, current.contentFormat)
+                SketchData(
+                    id = UUID.randomUUID().toString(),
+                    noteId = id,
+                    anchor = anchor,
+                    order = nextSketchOrder(current.sketches, anchor),
+                    strokes = encoded,
+                    createdAt = now,
+                    updatedAt = now,
+                )
+            }
+            sketchesRepository.saveSketch(data)
         }
     }
 
