@@ -302,7 +302,8 @@ class RecordNotesRepository private constructor(
      * Returned unsorted, exactly the way `SketchDao.getSketchesByNoteId` and
      * `RoomSketchesRepository.getSketchesForNote` are on the phone: putting a note's sketches into
      * the order they render in (by anchor, then id) is a UI concern there (`SingleNoteViewModel`'s
-     * `sortSketches`) and stays one here (see this module's `sketchesForDisplay`).
+     * `sortSketches`) and stays one here (see `:core-domain`'s `sketchesForDisplay`, which both
+     * platforms now call).
      */
     override fun getSketchesForNote(noteId: String): Flow<List<SketchData>> = state.map { snapshot ->
         snapshot.sketches.values.map { it.sketch }.filter { it.noteId == noteId && !it.isDeleted }

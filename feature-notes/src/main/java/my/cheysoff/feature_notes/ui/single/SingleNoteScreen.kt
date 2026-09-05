@@ -128,8 +128,9 @@ import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_ui.theme.folderAccentColor
 import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.core_domain.model.SketchData
+import my.cheysoff.core_domain.sketch.DisplaySketch
 import my.cheysoff.core_domain.sketch.Sketch
-import my.cheysoff.core_domain.sketch.StrokeCodec
+import my.cheysoff.core_domain.sketch.sketchesForDisplay
 import my.cheysoff.core_ui.sketch.RenderedStroke
 import my.cheysoff.core_ui.sketch.SketchRenderer
 import my.cheysoff.feature_notes.model.single.ChecklistItem
@@ -640,20 +641,23 @@ private sealed interface SketchEditTarget {
  * without either a marker inside the serialized HTML (silently orphaned by a sketch-unaware build)
  * or splitting the body into several editors (breaks cursor movement, undo history and saving).
  *
- * [sketches] arrives already ordered by anchor then id ([sortSketches]) -- this just renders them
- * in that order, mirroring [ChecklistSection]'s shape: a private section below the body, an early
- * return when there is nothing to show, one row per item.
+ * [sketches] arrives already ordered by anchor then id and decode-checked ([sketchesForDisplay],
+ * shared with the desktop) -- this just renders the result, mirroring [ChecklistSection]'s shape:
+ * a private section below the body, an early return when there is nothing to show, one row per
+ * item.
  *
- * Each card is exactly the drawing's own aspect ratio (`Modifier.aspectRatio`, fit to the note's
+ * Each drawing's card is exactly its own aspect ratio (`Modifier.aspectRatio`, fit to the note's
  * width), so [SketchRenderer] never has to letterbox it -- it only would if this box's shape
  * disagreed with the sketch's own, which it cannot. Tapping a card reopens [SketchCanvasScreen] on
  * that drawing (via [onTapped], which is handed the already-decoded [Sketch] this section built to
  * render the card -- a tap can only reach a card that decoded cleanly, so decoding it again there
  * would be wasted work for no benefit).
  *
- * A [SketchData] whose `strokes` fails to decode is skipped rather than shown broken or crashing
- * the row -- the same "never throws, just loses position/rendering, never existence" posture
- * `NoteBlocks` documents for a corrupt anchor.
+ * A [SketchData] whose `strokes` fails to decode still gets a row -- [DisplaySketch.Undecodable],
+ * rendered as [UndecodableSketchCard] -- rather than being silently skipped. The record is still
+ * the user's data, and there is no way back for a sketch (`TrashEntryKind` is `{NOTE, FOLDER}`, no
+ * sketch Trash), so a phone-only vault must not make one both invisible and undeletable; the
+ * desktop has shown this same placeholder from the start (see [sketchesForDisplay]'s own KDoc).
  *
  * The corner button deletes a sketch, but only after confirming: unlike a checklist row (undoable
  * from the top-bar Undo button) or a note (soft-deleted into Trash, restorable), a sketch delete
@@ -673,6 +677,8 @@ private fun SketchSection(
 ) {
     if (sketches.isEmpty()) return
 
+    val displaySketches = remember(sketches) { sketchesForDisplay(sketches) }
+
     var pendingDeleteId by remember { mutableStateOf<String?>(null) }
 
     Column(
@@ -681,14 +687,16 @@ private fun SketchSection(
             .padding(top = 22.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        sketches.forEach { sketchData ->
-            val sketch = remember(sketchData.strokes) { StrokeCodec.decode(sketchData.strokes) }
-            if (sketch != null && sketch.width > 0 && sketch.height > 0) {
-                SketchCard(
-                    sketch = sketch,
-                    onTapped = { onTapped(sketchData.id, sketch) },
-                    onDeleted = { pendingDeleteId = sketchData.id },
-                )
+        displaySketches.forEach { row ->
+            when (row) {
+                is DisplaySketch.Drawing ->
+                    SketchCard(
+                        sketch = row.sketch,
+                        onTapped = { onTapped(row.id, row.sketch) },
+                        onDeleted = { pendingDeleteId = row.id },
+                    )
+                is DisplaySketch.Undecodable ->
+                    UndecodableSketchCard(onDeleted = { pendingDeleteId = row.id })
             }
         }
     }
@@ -709,6 +717,36 @@ private fun SketchSection(
                 TextButton(onClick = { pendingDeleteId = null }) { Text("Cancel", color = BodyGrey) }
             },
         )
+    }
+}
+
+/**
+ * The placeholder for a [DisplaySketch.Undecodable] row: fixed-shape (there is no width/height to
+ * letterbox to -- decoding never got that far), visible, and still deletable. Matches the
+ * desktop's own `UndecodableSketchCard` in shape and wording.
+ */
+@Composable
+private fun UndecodableSketchCard(onDeleted: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(120.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color(0xFF1C1C22)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = "Can't display this drawing",
+            color = BodyGrey,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        IconButton(onClick = onDeleted, modifier = Modifier.align(Alignment.TopEnd)) {
+            Icon(
+                imageVector = Icons.Outlined.DeleteOutline,
+                contentDescription = "Delete drawing",
+                tint = BodyGrey,
+            )
+        }
     }
 }
 

@@ -1,22 +1,19 @@
-package my.cheysoff.desktop.ui.state
+package my.cheysoff.core_domain.sketch
 
 import my.cheysoff.core_domain.model.SketchData
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
-import org.junit.Test
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * [sketchesForDisplay]'s own obligation: the decode-failure handling that has to produce a visible
- * placeholder rather than silently dropping a row.
+ * placeholder rather than silently dropping a row, on both platforms that render one. Runs on both
+ * `jvmTest` and `mingwX64Test`, like [SketchOrderingTest].
  *
- * The ordering rule itself is no longer tested here. It used to be -- this module carried its own
- * copy of `SingleNoteViewModel.sortSketches`'s rule, pinned only by a pair of tests mirroring the
- * phone's `SingleNoteMergeTest` cases -- but `sketchesForDisplay` now calls `:core-domain`'s
- * `sortSketches` directly (see [SketchOrderingTest][my.cheysoff.core_domain.sketch
- * .SketchOrderingTest], which runs on both `jvmTest` and `mingwX64Test`), so re-asserting the same
- * two cases here would only be testing that function a second time under a different name. The
- * `ordering and decode failure compose` case below stays: it is the one thing genuinely local to
- * this module, proving `sketchesForDisplay` actually calls through to the shared order rather than
+ * The ordering rule itself is not re-tested here -- [SketchOrderingTest] already covers
+ * [sortSketches] directly, and `sketchesForDisplay` is a thin decode step on top of it. The
+ * `ordering and decode failure compose` case below stays, though: it is the one thing genuinely
+ * local to this function, proving it actually calls through to the shared order rather than
  * silently reordering around a placeholder.
  */
 class SketchDisplayTest {
@@ -43,7 +40,7 @@ class SketchDisplayTest {
         val result = sketchesForDisplay(listOf(sketch("a")))
 
         val row = result.single()
-        assertTrue("expected a Drawing, got $row", row is DisplaySketch.Drawing)
+        assertTrue(row is DisplaySketch.Drawing, "expected a Drawing, got $row")
         assertEquals("a", row.id)
     }
 

@@ -66,7 +66,7 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.NoteContentFormat
-import my.cheysoff.desktop.ui.state.DisplaySketch
+import my.cheysoff.core_domain.sketch.DisplaySketch
 import my.cheysoff.desktop.ui.state.EditorDraft
 import my.cheysoff.desktop.ui.state.SaveStatus
 import my.cheysoff.desktop.ui.theme.AccentIndigo
