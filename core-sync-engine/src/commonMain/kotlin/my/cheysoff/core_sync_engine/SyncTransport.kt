@@ -238,6 +238,18 @@ enum class TransportFault {
      * account is empty", and the next pass is a mass delete.
      */
     CURSOR_AHEAD_OF_SERVER,
+
+    /**
+     * A `400` the server will give again for the same bytes: an envelope over its cap, a payload it
+     * refuses to parse. Retrying is pointless and retrying forever is worse -- before this existed,
+     * one record the server would not take stopped every other record on the device from ever being
+     * pushed again, with nothing in the UI saying so.
+     *
+     * The engine only ever attributes this to a record when the batch held exactly one; see
+     * [SyncEngine.LARGE_RECORD_BYTES] for why the batches that can provoke it are built to hold
+     * one.
+     */
+    REJECTED,
 }
 
 /**

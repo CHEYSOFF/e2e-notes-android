@@ -286,6 +286,23 @@ class EnvelopeSyncTransportTest {
         }
     }
 
+    /**
+     * A `400` the server gives for an envelope it will refuse again for the same bytes must not be
+     * lumped in with `PROTOCOL`, which the engine treats as "retrying may work" -- see
+     * `SyncEngine.LARGE_RECORD_BYTES` for why the batch that can provoke this is built to hold one
+     * record, which is what makes the refusal attributable.
+     */
+    @Test
+    fun `a 400 invalid_envelope surfaces as REJECTED`() = runTest {
+        val failure = runCatching {
+            transport(FakeApi(fail = SyncException.Server(400, "invalid_envelope", "envelope too large")))
+                .changesSince(0L, 32)
+        }.exceptionOrNull()
+
+        assertTrue("was $failure", failure is SyncTransportException)
+        assertEquals(TransportFault.REJECTED, (failure as SyncTransportException).fault)
+    }
+
     /** A `429` carries the server's own delay through, without the engine's jitter added twice. */
     @Test
     fun `a rate limit carries its delay`() = runTest {
