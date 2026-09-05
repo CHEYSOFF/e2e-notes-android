@@ -1,8 +1,6 @@
 package my.cheysoff.core_domain.repository
 
 import kotlinx.coroutines.flow.Flow
-import my.cheysoff.core_domain.model.AttachmentData
-import my.cheysoff.core_domain.model.AttachmentPreview
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.model.NotesSortOrder
@@ -67,29 +65,4 @@ interface NotesRepository {
      * [my.cheysoff.core_domain.model.TrashPolicy].
      */
     suspend fun purgeExpiredTrash(now: Long): Int
-
-    // ── Attachments. Unlike sketches (see SketchesRepository), attachments have no separate ──────
-    // ── repository interface: there is exactly one implementation and no seam anything else ──────
-    // ── needs to stand in for yet. See docs/design/image-attachments.md §2. ──────────────────────
-
-    /** Attachments anchored under [noteId], visible ones only, in the rail's display order. */
-    fun attachmentsOf(noteId: String): Flow<List<AttachmentPreview>>
-
-    /**
-     * One attachment in full, bytes included — the read the full-screen viewer needs. Null for an
-     * unknown id and for a soft-deleted one, matching [getNoteById].
-     */
-    suspend fun attachment(id: String): AttachmentData?
-
-    /**
-     * Creates or updates an attachment. One method for both, matching [saveNote]: the caller does
-     * not have to know whether [attachment]'s id already exists.
-     */
-    suspend fun saveAttachment(attachment: AttachmentData)
-
-    /**
-     * Soft-deletes one attachment by id: its own tombstone, its own fresh clock, `dirty` set so it
-     * is pushed. Mirrors [deleteNote] and `SketchesRepository.deleteSketch`.
-     */
-    suspend fun deleteAttachment(id: String)
 }
