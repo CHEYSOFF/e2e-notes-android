@@ -1,5 +1,6 @@
 package my.cheysoff.feature_notes.model.single
 
+import android.net.Uri
 import my.cheysoff.core_domain.sketch.Sketch
 
 sealed interface SingleNoteIntent {
@@ -49,4 +50,12 @@ sealed interface SingleNoteIntent {
 
     /** Soft-deletes one sketch, through `SketchesRepository.deleteSketch`. */
     data class SketchDeleted(val id: String) : SingleNoteIntent
+
+    /**
+     * A photo was picked (via `ActivityResultContracts.PickVisualMedia`) and should be imported:
+     * decoded, downscaled, capped and saved as an attachment anchored at the note's current block
+     * count. See `SingleNoteViewModel.importAttachment` for exactly how it is anchored, ordered and
+     * stamped -- the same shape `saveSketch` uses for a brand-new drawing.
+     */
+    data class ImportAttachment(val uri: Uri) : SingleNoteIntent
 }

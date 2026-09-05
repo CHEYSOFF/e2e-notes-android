@@ -166,6 +166,23 @@ fun AppNavHost(
                                 )
                                 .show()
                         }
+
+                        // Which of the two ways an import can fail matters: "too large" and "not an
+                        // image" call for different words, and a single generic message would be
+                        // worse than none (docs/design/image-attachments.md §7).
+                        is SingleNoteEvent.AttachmentImportFailed -> {
+                            Toast
+                                .makeText(
+                                    context,
+                                    if (event.tooLarge) {
+                                        "That photo is too large to attach"
+                                    } else {
+                                        "That file isn't a photo"
+                                    },
+                                    Toast.LENGTH_SHORT,
+                                )
+                                .show()
+                        }
                     }
                 }
             }

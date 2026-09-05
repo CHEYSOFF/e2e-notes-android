@@ -8,6 +8,9 @@ import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.os.Build
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -43,6 +46,7 @@ import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.automirrored.outlined.ArrowBackIos
 import androidx.compose.material.icons.automirrored.outlined.FormatListBulleted
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.AddPhotoAlternate
 import androidx.compose.material.icons.outlined.Brush
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -58,6 +62,7 @@ import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.TextFields
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -224,6 +229,14 @@ fun SingleNoteScreen(
     // body for anchoring) that only this composable holds.
     var sketchTarget by remember { mutableStateOf<SketchEditTarget?>(null) }
 
+    // No runtime permission and no manifest permission -- that is the whole reason this contract is
+    // used rather than ACTION_GET_CONTENT or a MediaStore query wired to READ_MEDIA_IMAGES. A null
+    // uri means the user backed out of the picker without choosing anything, which is silently a
+    // no-op, not a failure.
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+    ) { uri -> if (uri != null) currentOnIntent(SingleNoteIntent.ImportAttachment(uri)) }
+
     // The canvas' capture state (SketchCaptureState) and sketchTarget above are both plain
     // `remember`, and the manifest locks neither `configChanges` nor `screenOrientation` (see
     // AndroidManifest.xml), so an activity recreation -- a rotation, most obviously -- destroys
@@ -377,6 +390,7 @@ fun SingleNoteScreen(
             FormattingToolbar(
                 richTextState = richTextState,
                 accent = accent,
+                isImportingAttachment = state.isImportingAttachment,
                 onAddChecklistItem = {
                     val id = UUID.randomUUID().toString()
                     focusItemId = id
@@ -388,6 +402,14 @@ fun SingleNoteScreen(
                 onAddSketch = {
                     flushContent()
                     sketchTarget = SketchEditTarget.New
+                },
+                // Same reason: a brand-new attachment is anchored at the note's CURRENT block count
+                // (SingleNoteViewModel.importAttachment), read only once the picker returns.
+                onAddPhoto = {
+                    flushContent()
+                    photoPickerLauncher.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
                 },
             )
         },
@@ -1000,8 +1022,10 @@ private fun TopIcon(icon: ImageVector, desc: String, tint: Color, enabled: Boole
 private fun FormattingToolbar(
     richTextState: RichTextState,
     accent: Color,
+    isImportingAttachment: Boolean,
     onAddChecklistItem: () -> Unit,
     onAddSketch: () -> Unit,
+    onAddPhoto: () -> Unit,
 ) {
     var showStyles by remember { mutableStateOf(false) }
     val inactive = Color(0xFF9A9A9E)
@@ -1045,6 +1069,17 @@ private fun FormattingToolbar(
             }
             ToolIcon(Icons.Outlined.Checklist, "Checklist", inactive) { onAddChecklistItem() }
             ToolIcon(Icons.Outlined.Brush, "Add drawing", inactive) { onAddSketch() }
+            if (isImportingAttachment) {
+                Box(modifier = Modifier.size(34.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                        color = accent,
+                    )
+                }
+            } else {
+                ToolIcon(Icons.Outlined.AddPhotoAlternate, "Add photo", inactive) { onAddPhoto() }
+            }
         }
     }
 }

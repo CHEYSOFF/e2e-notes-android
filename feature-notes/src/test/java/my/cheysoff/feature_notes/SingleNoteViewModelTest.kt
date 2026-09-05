@@ -1,5 +1,6 @@
 package my.cheysoff.feature_notes
 
+import android.net.Uri
 import androidx.lifecycle.SavedStateHandle
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -10,6 +11,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import my.cheysoff.core_domain.model.AttachmentData
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.model.NoteContentFormat
@@ -19,14 +21,17 @@ import my.cheysoff.core_domain.sketch.Sketch
 import my.cheysoff.core_domain.sketch.Stroke
 import my.cheysoff.core_domain.sketch.StrokeCodec
 import my.cheysoff.feature_notes.model.single.SingleNoteIntent
+import my.cheysoff.feature_notes.ui.attachment.ImportResult
 import my.cheysoff.feature_notes.ui.single.SingleNoteEvent
 import my.cheysoff.feature_notes.ui.single.SingleNoteViewModel
+import my.cheysoff.feature_notes.ui.single.toPreview
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import org.mockito.Mockito
 
 /**
  * The stateful half of [SingleNoteViewModel]: what it writes, when it writes it, and what it does
@@ -56,6 +61,8 @@ class SingleNoteViewModelTest {
 
     private val repo = FakeNotesRepository()
     private val sketchRepo = FakeSketchesRepository()
+    private val attachmentRepo = FakeAttachmentsRepository()
+    private val imageImporter = FakeImageImporter()
 
     private companion object {
         const val NOTE_ID = "n1"
@@ -108,6 +115,38 @@ class SingleNoteViewModelTest {
     )
 
     /**
+     * A stand-in for a picked photo's content Uri. [Uri] has no public constructor and every static
+     * factory (`Uri.parse`, `Uri.fromParts`, ...) is one of the android.jar stub methods that throws
+     * "not mocked" under a plain JVM unit test -- Mockito's mock, built by subclassing without ever
+     * calling those bodies, is what makes a Uri value obtainable here at all. Its content is never
+     * read: [FakeImageImporter] only records which instance it was asked to import.
+     */
+    private fun fakeUri(): Uri = Mockito.mock(Uri::class.java)
+
+    private fun attachmentData(
+        id: String = "a1",
+        noteId: String = NOTE_ID,
+        anchor: Int = 0,
+        order: Int = 0,
+        createdAt: Long = 1_000L,
+        updatedAt: Long = 1_000L,
+    ) = AttachmentData(
+        id = id,
+        noteId = noteId,
+        anchor = anchor,
+        order = order,
+        mimeType = "image/jpeg",
+        width = 100,
+        height = 100,
+        bytes = ByteArray(1),
+        thumbWidth = 10,
+        thumbHeight = 10,
+        thumbBytes = ByteArray(1),
+        createdAt = createdAt,
+        updatedAt = updatedAt,
+    )
+
+    /**
      * Builds the ViewModel the way the nav graph does. [isNew] is written into the handle only when
      * true, because every route other than the "+" button omits the argument entirely — and the
      * difference between "absent" and "false" is worth exercising as it actually occurs.
@@ -117,7 +156,7 @@ class SingleNoteViewModelTest {
             if (noteId != null) put("noteId", noteId)
             if (isNew) put("isNew", true)
         }
-        return SingleNoteViewModel(repo, sketchRepo, SavedStateHandle(map))
+        return SingleNoteViewModel(repo, sketchRepo, attachmentRepo, imageImporter, SavedStateHandle(map))
     }
 
     /**
@@ -1288,5 +1327,172 @@ class SingleNoteViewModelTest {
             advanceUntilIdle()
 
             assertEquals(listOf("a", "b", "z"), vm.state.value.sketches.map { it.id })
+        }
+
+    // ============================================================================================
+    // Attachments
+    //
+    // The encode path itself (ImageImporter.import) needs a real device (ImageDecoder) and is
+    // NOT covered by any test here -- FakeImageImporter stands in for it, deciding the ImportResult
+    // directly. What these tests cover is everything downstream of that result: anchoring,
+    // ordering, timestamping, the two failure events, and (the H1 case below) the blank-note guard.
+    // ============================================================================================
+
+    @Test
+    fun `a brand-new attachment is anchored at the note's current block count`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            repo.noteById.value = note(content = "<p>one</p><p>two</p>", contentFormat = NoteContentFormat.HTML)
+            val vm = viewModel()
+            advanceUntilIdle()
+
+            imageImporter.result = ImportResult.Imported(attachmentData())
+            vm.onIntent(SingleNoteIntent.ImportAttachment(fakeUri()))
+            advanceUntilIdle()
+
+            val saved = attachmentRepo.saved.single()
+            assertEquals(2, saved.anchor)
+            assertEquals(NOTE_ID, saved.noteId)
+        }
+
+    @Test
+    fun `a new attachment's order continues after the last attachment already at that anchor`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            repo.noteById.value = note(content = "")
+            attachmentRepo.attachmentsByNote.value = listOf(
+                attachmentData(id = "a1", anchor = 0, order = 0).toPreview(),
+                attachmentData(id = "a2", anchor = 0, order = 3).toPreview(),
+                // A different anchor's order must not leak into this one's calculation.
+                attachmentData(id = "a3", anchor = 1, order = 99).toPreview(),
+            )
+            val vm = viewModel()
+            advanceUntilIdle()
+
+            imageImporter.result = ImportResult.Imported(attachmentData())
+            vm.onIntent(SingleNoteIntent.ImportAttachment(fakeUri()))
+            advanceUntilIdle()
+
+            assertEquals(4, attachmentRepo.saved.single().order)
+        }
+
+    @Test
+    fun `saving a brand-new attachment stamps createdAt and updatedAt together`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            repo.noteById.value = note()
+            val vm = viewModel()
+            advanceUntilIdle()
+
+            imageImporter.result = ImportResult.Imported(attachmentData())
+            val before = System.currentTimeMillis()
+            vm.onIntent(SingleNoteIntent.ImportAttachment(fakeUri()))
+            advanceUntilIdle()
+            val after = System.currentTimeMillis()
+
+            val saved = attachmentRepo.saved.single()
+            assertTrue(
+                "updatedAt must be stamped by this save",
+                saved.updatedAt in before..after,
+            )
+            assertEquals(
+                "a brand-new attachment's createdAt and updatedAt start together",
+                saved.createdAt,
+                saved.updatedAt,
+            )
+        }
+
+    @Test
+    fun `a photo too large for the ladder reports TooLarge and saves nothing`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            repo.noteById.value = note()
+            val vm = viewModel()
+            val events = collectEvents(vm)
+            advanceUntilIdle()
+
+            imageImporter.result = ImportResult.TooLarge
+            vm.onIntent(SingleNoteIntent.ImportAttachment(fakeUri()))
+            advanceUntilIdle()
+
+            assertTrue(attachmentRepo.saved.isEmpty())
+            assertEquals(
+                listOf(SingleNoteEvent.AttachmentImportFailed(tooLarge = true)),
+                events,
+            )
+            assertFalse(vm.state.value.isImportingAttachment)
+        }
+
+    @Test
+    fun `a source that is not an image reports NotAnImage and saves nothing`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            repo.noteById.value = note()
+            val vm = viewModel()
+            val events = collectEvents(vm)
+            advanceUntilIdle()
+
+            imageImporter.result = ImportResult.NotAnImage
+            vm.onIntent(SingleNoteIntent.ImportAttachment(fakeUri()))
+            advanceUntilIdle()
+
+            assertTrue(attachmentRepo.saved.isEmpty())
+            assertEquals(
+                listOf(SingleNoteEvent.AttachmentImportFailed(tooLarge = false)),
+                events,
+            )
+            assertFalse(vm.state.value.isImportingAttachment)
+        }
+
+    // -- H1 (mirrors the sketch section above): an attachment must never be left orphaned by the
+    // blank-note discard on back --------------------------------------------------------------
+
+    @Test
+    fun `a note opened as new whose only content is a photo is not purged on back`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            repo.noteById.value = note()
+            val vm = viewModel(isNew = true)
+            advanceUntilIdle()
+
+            imageImporter.result = ImportResult.Imported(attachmentData())
+            vm.onIntent(SingleNoteIntent.ImportAttachment(fakeUri()))
+            advanceUntilIdle()
+            vm.onIntent(SingleNoteIntent.BackClicked)
+            advanceUntilIdle()
+
+            assertEquals(
+                "a note whose only content is a photo must not be hard-deleted out from under it",
+                emptyList<String>(),
+                repo.callsNamed("purgeNote"),
+            )
+        }
+
+    @Test
+    fun `BackClicked waits for a pending attachment save before deciding the note is blank`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            // Falsifiability: with the isEmpty() guard restored but the attachmentSaveJob join
+            // removed, this test's first assertion fails -- BackClicked reads current.attachments
+            // while the save is still parked on the gate below (unset by the write, which has not
+            // resumed yet) and purges the note right then, before the photo has landed.
+            repo.noteById.value = note()
+            val vm = viewModel(isNew = true)
+            advanceUntilIdle()
+
+            val gate = CompletableDeferred<Unit>()
+            attachmentRepo.saveGate = gate
+            imageImporter.result = ImportResult.Imported(attachmentData())
+            vm.onIntent(SingleNoteIntent.ImportAttachment(fakeUri()))
+            vm.onIntent(SingleNoteIntent.BackClicked)
+            runCurrent()
+
+            assertEquals(
+                "the save has not landed yet, so BackClicked must still be waiting on it",
+                emptyList<String>(),
+                repo.callsNamed("purgeNote"),
+            )
+
+            gate.complete(Unit)
+            advanceUntilIdle()
+
+            assertEquals(
+                "the photo landed before back navigated away, so the note must survive",
+                emptyList<String>(),
+                repo.callsNamed("purgeNote"),
+            )
         }
 }
