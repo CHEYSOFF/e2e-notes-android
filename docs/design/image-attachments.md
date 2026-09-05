@@ -283,8 +283,11 @@ attachment-unaware build re-serialises it away and orphans the image) or several
 (which breaks cursor movement, undo history and saving). The `anchor` is still recorded, so
 inline placement stays a later view-only change with no migration.
 
-- **Rail:** thumbnails, ordered by `sortOrder` then `createdAt`, sharing the ordering
-  helper's shape with `SketchOrdering`.
+- **Rail:** thumbnails, ordered by `anchor` then `id` — deliberately not `order`, which is scoped
+  per-anchor for the inline layout neither platform implements yet (see `AttachmentOrdering`'s own
+  KDoc). Applied in Kotlin on both platforms via the shared `sortAttachments`, sharing the ordering
+  helper's shape with `SketchOrdering`; the DAO's SQL `ORDER BY` is a determinism guarantee for the
+  query, not the display order.
 - **Tap:** full-screen viewer, `ContentScale.Fit`, pinch-zoom and pan via
   `detectTransformGestures`. An image viewer without zoom is the wrong feature.
 - **Delete:** from the viewer, confirmed. Attachments are **not** in Trash —

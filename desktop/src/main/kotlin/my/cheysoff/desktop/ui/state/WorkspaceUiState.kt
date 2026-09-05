@@ -34,6 +34,15 @@ data class WorkspaceUiState(
      */
     val attachments: List<AttachmentData> = emptyList(),
     /**
+     * The id of the attachment currently shown full-screen, or null when the viewer is closed.
+     * Lives here rather than as local UI state so `NotesWorkspaceScreen` (which renders
+     * `AttachmentViewer` as a sibling of `SearchPalette` in the window's root) and
+     * `DesktopApp.handleShortcut` (which closes it on Escape) can both see it -- the same shape
+     * [SearchState.isOpen] uses for the palette. `NotesWorkspaceModel.openAttachmentViewer`/
+     * `closeAttachmentViewer` are the only writers.
+     */
+    val viewingAttachmentId: String? = null,
+    /**
      * False until the repository has emitted once. Distinguishes "no notes yet" from "not asked
      * yet" — without it the empty state flashes on every launch before the first emission lands.
      */

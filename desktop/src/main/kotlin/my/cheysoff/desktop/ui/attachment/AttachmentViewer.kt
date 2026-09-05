@@ -28,7 +28,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventType
@@ -36,15 +35,13 @@ import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Window
-import androidx.compose.ui.window.rememberWindowState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import my.cheysoff.core_domain.model.AttachmentData
 import my.cheysoff.desktop.ui.theme.AccentIndigo
+import my.cheysoff.desktop.ui.theme.AppBlack
 import my.cheysoff.desktop.ui.theme.BodyGrey
 import my.cheysoff.desktop.ui.theme.SurfaceDark
 import my.cheysoff.desktop.ui.theme.TitleGrey
@@ -56,11 +53,24 @@ private const val MaxScale = 6f
 private const val ScrollZoomStep = 1.08f
 
 /**
- * The full-screen viewer for one attachment, opened by tapping a tile in [AttachmentRail] -- here,
- * its own resizable OS window rather than an overlay inside the main workspace window, which is
- * what makes it independently resizable (the brief's own "the window can be resized while the
- * viewer is open"). Mirrors the phone's `AttachmentViewerScreen`: `ContentScale.Fit`, a clamped
- * zoom/pan, and a delete that confirms and says plainly that it is final.
+ * The full-screen viewer for one attachment, opened by tapping a tile in [AttachmentRail] -- a
+ * full-bleed overlay `Box` inside the app's one and only window, not a second OS window. This app
+ * has exactly one native `Window` (see `DesktopApp.kt`'s `MananaWindow`); every other full-screen
+ * or modal surface, including `SearchPalette`, is an overlay composed straight into that window's
+ * root. `SearchPalette`'s own KDoc records why: a desktop `Popup` is non-focusable by default, and
+ * inside one the search field never received a keystroke. This viewer wants scroll and drag
+ * events, not text input, but the same principle applies -- there is nothing a second surface
+ * would buy here that the window's own root does not already provide, and a second `Window` costs
+ * real, visible things instead: a separate "Photo" entry in the taskbar and Alt-Tab, no Escape
+ * binding, and a size that is not remembered across opens the way `WindowGeometry` remembers the
+ * main window's. The caller (`NotesWorkspaceScreen`) renders this as a sibling of `SearchPalette`
+ * in the workspace's own root `Box`, gated on `WorkspaceUiState.viewingAttachmentId`, and the
+ * window's `onPreviewKeyEvent` (`DesktopApp.handleShortcut`) closes it on Escape the same way it
+ * closes the search palette. Resizability comes for free this way: the overlay simply fills
+ * whatever size the one real window currently is.
+ *
+ * Mirrors the phone's `AttachmentViewerScreen`: `ContentScale.Fit`, a clamped zoom/pan, and a
+ * delete that confirms and says plainly that it is final.
  *
  * [attachment] is the full row the caller already holds -- unlike the phone, there is no async
  * lookup here; see [AttachmentRail]'s KDoc for why the desktop never needs one.
@@ -80,7 +90,7 @@ private const val ScrollZoomStep = 1.08f
  * clamps the *current* offset into it immediately, rather than waiting for the next drag or scroll.
  * Without that, shrinking the window after zooming in and panning toward a corner would leave the
  * image's rendered rect centred outside the new, smaller box -- stranded off to one side instead of
- * visible, which is exactly the failure mode the brief calls out.
+ * visible.
  *
  * ## Delete
  * Confirmed, and worded exactly like the phone's dialog and this module's own
@@ -112,12 +122,10 @@ fun AttachmentViewer(
         if (decoded == null) loadFailed = true else bitmap = decoded
     }
 
-    Window(
-        onCloseRequest = onClose,
-        title = "Photo",
-        state = rememberWindowState(size = DpSize(760.dp, 640.dp)),
-    ) {
-        Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+    // The overlay's own root, composed straight into the workspace window -- no second Window,
+    // no Popup. See this function's own KDoc for why.
+    run {
+        Box(modifier = Modifier.fillMaxSize().background(AppBlack)) {
             val currentBitmap = bitmap
             when {
                 loadFailed -> Text(
