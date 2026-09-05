@@ -82,7 +82,7 @@ class SyncStoreSqlCipherTest {
 
     private fun storeOver(database: NoteDatabase) = RoomSyncStore(
         database, database.noteDao, database.folderDao, database.sketchDao,
-            database.attachmentDao, database.syncStateDao,
+        database.attachmentDao, database.syncStateDao,
         accountId = "acct",
         // No test here ever merges a note into deleted with a live sketch under it -- the only
         // path that mints a clock through this seam -- so there is nothing for a real observer to

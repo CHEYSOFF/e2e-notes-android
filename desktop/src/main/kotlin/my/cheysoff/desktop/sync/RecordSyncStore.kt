@@ -206,9 +206,13 @@ class RecordSyncStore(
      * this device does not hold. Mirrors [createdAtOf]; see `SyncStoreFactory.metaOf` for why the
      * value is asked of the row rather than assumed empty.
      */
-    suspend fun metaOf(type: RecordType, uuid: String): String {
-        if (type != RecordType.ATTACHMENT) return ""
-        return existingMeta(codec.blindedIdOf(type.wireKey, uuid)).orEmpty()
+    suspend fun metaOf(type: RecordType, uuid: String): String = when (type) {
+        // An exhaustive `when` rather than `if (type != ATTACHMENT) return ""`, matching
+        // `SyncStoreFactory.metaOf` on Android. The behaviour is identical today; the difference is
+        // that a future record type with an unclocked column of its own fails to compile on both
+        // platforms instead of being silently defaulted to `""` on this one.
+        RecordType.NOTE, RecordType.FOLDER, RecordType.SKETCH -> ""
+        RecordType.ATTACHMENT -> existingMeta(codec.blindedIdOf(type.wireKey, uuid)).orEmpty()
     }
 
     private fun put(
