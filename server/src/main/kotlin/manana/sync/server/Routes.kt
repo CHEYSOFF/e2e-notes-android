@@ -602,12 +602,29 @@ private fun changes(deps: ServerDeps, session: SessionRow, sinceParam: String?, 
     }
 
     val records = deps.store.changesSince(session.accountId, since, limit)
-    val nextCursor = records.lastOrNull()?.seq ?: since
+
+    // Bound the page in bytes as well as in records. The first record always goes in, however
+    // large -- an empty page here would read as "you are caught up" to a client that stops paging
+    // on one, and the cursor would stall on that record forever. Every record after the first is
+    // added only while it keeps the running total at or under the budget.
+    val page = mutableListOf<RecordVersion>()
+    var pageBytes = 0
+    for (record in records) {
+        if (page.isNotEmpty() && pageBytes + record.envelope.size > deps.config.maxChangesBytes) break
+        page += record
+        pageBytes += record.envelope.size
+    }
+
+    // Never the last record the DB considered -- only the last one actually sent, or the byte
+    // budget could advance the cursor past records this response never carried.
+    val nextCursor = page.lastOrNull()?.seq ?: since
+    // Full in bytes and cut short of what the DB had, or full in records: either way there is more
+    // to fetch. A trim that happened to land exactly on `records.size` still leaves this correct,
+    // because `records.size == limit` is then the only surviving condition.
+    val hasMore = page.size < records.size || records.size == limit
     return Reply(
         HttpStatusCode.OK,
-        JSON.encodeToString(
-            ChangesResponse(records.map { it.toDto() }, nextCursor, records.size == limit)
-        ),
+        JSON.encodeToString(ChangesResponse(page.map { it.toDto() }, nextCursor, hasMore)),
     )
 }
 
