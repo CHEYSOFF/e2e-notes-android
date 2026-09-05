@@ -180,6 +180,10 @@ class EnvelopeSyncTransport(
         is SyncException.Unauthorized -> TransportFault.UNAUTHORIZED
         SyncException.DeviceRevoked -> TransportFault.DEVICE_REVOKED
         is SyncException.CursorAheadOfServer -> TransportFault.CURSOR_AHEAD_OF_SERVER
+        // A 400: the server will refuse these exact bytes again, so retrying is pointless. Every
+        // other `Server` status (a 500, say) is transient in a way a 400 is not, so only this one
+        // status leaves PROTOCOL for REJECTED.
+        is SyncException.Server -> if (e.status == 400) TransportFault.REJECTED else TransportFault.PROTOCOL
         else -> TransportFault.PROTOCOL
     }
 }

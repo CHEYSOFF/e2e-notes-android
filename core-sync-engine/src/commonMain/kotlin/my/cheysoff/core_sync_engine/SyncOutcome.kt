@@ -144,6 +144,15 @@ data class PassStats(
      * non-zero is how a rollout mistake stays invisible.
      */
     val ignored: Int = 0,
+    /**
+     * Pushes the server refused outright with [TransportFault.REJECTED] -- a single oversized
+     * record the server will not take, ever, for these bytes.
+     *
+     * The row this counts stays dirty and is retried on the next pass, which is only safe because
+     * the engine only ever attributes a `REJECTED` to a record when it travelled alone; see
+     * [SyncEngine.LARGE_RECORD_BYTES].
+     */
+    val rejected: Int = 0,
 ) {
 
     /**
@@ -165,6 +174,7 @@ data class PassStats(
         conflictCopies = conflictCopies + other.conflictCopies,
         unreadable = unreadable + other.unreadable,
         ignored = ignored + other.ignored,
+        rejected = rejected + other.rejected,
     )
 
     companion object {

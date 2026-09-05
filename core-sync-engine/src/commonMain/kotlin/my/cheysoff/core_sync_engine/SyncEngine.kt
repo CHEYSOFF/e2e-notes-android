@@ -4,6 +4,7 @@ import kotlinx.coroutines.sync.Mutex
 import my.cheysoff.core_domain.sync.Hlc
 import my.cheysoff.core_domain.sync.Merge
 import my.cheysoff.core_domain.sync.MergeResult
+import my.cheysoff.core_domain.sync.RecordSize
 import my.cheysoff.core_domain.sync.RecordType
 import my.cheysoff.core_domain.sync.RejectReason
 import my.cheysoff.core_domain.sync.SyncRecord
@@ -316,7 +317,7 @@ class SyncEngine(
         val pending = store.dirtyRecords()
         if (pending.isEmpty()) return Phase(stats, null)
 
-        for (batch in pending.chunked(batchLimit)) {
+        for (batch in batches(pending)) {
             // Keyed by identity rather than read back by position: the transport contract allows a
             // response in any order, and an engine that trusted the order would acknowledge one row
             // with another row's seq -- a lost update that looks like nothing at all.
@@ -333,6 +334,15 @@ class SyncEngine(
             val response = try {
                 transport.push(requests)
             } catch (failure: SyncTransportException) {
+                // A batch of one that the server will refuse again for the same bytes is the one
+                // failure that must not end the pass. The row stays dirty -- nothing is lost, and
+                // it will be sent again the moment the server accepts records that size -- but
+                // every other batch still goes. Attribution is only sound for a batch of one,
+                // which is why anything large enough to provoke this was put in one.
+                if (failure.fault == TransportFault.REJECTED && batch.size == 1) {
+                    stats = stats.copy(rejected = stats.rejected + 1)
+                    continue
+                }
                 return Phase(stats, stop(failure))
             }
 
@@ -374,6 +384,48 @@ class SyncEngine(
             }
         }
         return Phase(stats, null)
+    }
+
+    /**
+     * Splits [pending] into batches that respect three limits at once: [batchLimit] items,
+     * [PUSH_BYTE_BUDGET] estimated bytes, and "a record above [LARGE_RECORD_BYTES] is alone".
+     *
+     * A batch is never empty. A record whose estimate exceeds the whole budget still gets its own
+     * batch rather than being dropped: the server may well accept it, and if it does not, the
+     * single-item batch is what makes the refusal attributable.
+     */
+    private fun batches(pending: List<StoredRecord>): List<List<StoredRecord>> {
+        val result = mutableListOf<List<StoredRecord>>()
+        var current = mutableListOf<StoredRecord>()
+        var currentBytes = 0
+
+        fun flush() {
+            if (current.isNotEmpty()) {
+                result += current
+                current = mutableListOf()
+                currentBytes = 0
+            }
+        }
+
+        for (row in pending) {
+            val size = RecordSize.estimateBytes(row.record)
+            if (size > LARGE_RECORD_BYTES) {
+                // Alone, whatever else is pending -- attribution requires it, and a batch of one
+                // can never itself violate the byte budget's spirit even when it exceeds the number.
+                flush()
+                result += listOf(row)
+                continue
+            }
+            if (current.isNotEmpty() &&
+                (current.size >= batchLimit || currentBytes + size > PUSH_BYTE_BUDGET)
+            ) {
+                flush()
+            }
+            current += row
+            currentBytes += size
+        }
+        flush()
+        return result
     }
 
     // ── The one merge call ─────────────────────────────────────────────────────────────────────
@@ -542,6 +594,29 @@ class SyncEngine(
          * `generateArk()` creates — and continuing means the user finds out weeks later.
          */
         const val UNREADABLE_RECORD_LIMIT = 5
+
+        /**
+         * How many estimated payload bytes one push batch may carry.
+         *
+         * 3 MiB against the server's 8 MiB `maxRequestBytes`: base64 takes 3 MiB to 4 MiB and the
+         * JSON around it is small, so the margin is a factor of two. That margin is what lets
+         * [RecordSize] be an estimate rather than an exact count.
+         */
+        const val PUSH_BYTE_BUDGET = 3 * 1024 * 1024
+
+        /**
+         * A record estimating above this is pushed in a batch of its own.
+         *
+         * Not a performance tuning knob -- an attribution mechanism. A `400` names no item, so the
+         * only way to learn *which* record a server refused is to have sent one. Every record that
+         * could plausibly be refused for its size travels alone, which makes
+         * [TransportFault.REJECTED] attributable and makes skipping it safe.
+         *
+         * 256 KiB is the envelope cap of a server that has not been upgraded for attachments yet
+         * (spec §4), so on such a server every attachment travels alone and is skipped alone,
+         * while notes and folders continue to sync normally.
+         */
+        const val LARGE_RECORD_BYTES = 256 * 1024
 
         private fun keyOf(type: RecordType, uuid: String): String = "${type.wireKey}:$uuid"
     }
