@@ -10,6 +10,7 @@ import my.cheysoff.core_data.data.local.NoteEntity
 import my.cheysoff.core_data.data.sync.RoomSyncStore
 import my.cheysoff.core_domain.sync.Hlc
 import my.cheysoff.core_domain.sync.RecordType
+import my.cheysoff.core_sync_engine.ClockObserver
 import my.cheysoff.core_sync_engine.HaltReason
 import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 import org.junit.After
@@ -82,6 +83,10 @@ class SyncStoreSqlCipherTest {
     private fun storeOver(database: NoteDatabase) = RoomSyncStore(
         database, database.noteDao, database.folderDao, database.sketchDao, database.syncStateDao,
         accountId = "acct",
+        // No test here ever merges a note into deleted with a live sketch under it -- the only
+        // path that mints a clock through this seam -- so there is nothing for a real observer to
+        // usefully see; a no-op is honest rather than a stand-in for one that matters.
+        clockObserver = ClockObserver {},
     )
 
     private fun note(rowClock: Hlc, content: String = "milk", dirty: Boolean = true) = NoteEntity(
