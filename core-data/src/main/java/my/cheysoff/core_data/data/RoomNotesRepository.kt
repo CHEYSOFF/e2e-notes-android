@@ -23,6 +23,7 @@ import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.model.NotesSortOrder
 import my.cheysoff.core_domain.model.TrashPolicy
+import my.cheysoff.core_domain.repository.AttachmentsRepository
 import my.cheysoff.core_domain.repository.NotesRepository
 import my.cheysoff.core_domain.sync.FieldClocks
 import javax.inject.Inject
@@ -54,7 +55,7 @@ class RoomNotesRepository @Inject constructor(
     private val attachmentDao: AttachmentDao,
     private val database: NoteDatabase,
     private val clock: SyncClock,
-) : NotesRepository {
+) : NotesRepository, AttachmentsRepository {
 
     /**
      * Guards the one-off session seed below. A plain flag would let two concurrent first writes
@@ -578,8 +579,8 @@ class RoomNotesRepository @Inject constructor(
         }
     }
 
-    // ── Attachments. See NotesRepository's own KDoc for why there is no separate ────────────────
-    // ── AttachmentsRepository the way sketches have SketchesRepository. ─────────────────────────
+    // ── Attachments. AttachmentsRepository's own KDoc explains why this lives on a separate ──────
+    // ── interface, the same shape sketches already have with SketchesRepository. ─────────────────
 
     override fun attachmentsOf(noteId: String): Flow<List<AttachmentPreview>> =
         attachmentDao.attachmentPreviewsByNoteId(noteId).map { list -> list.map { it.toDomain() } }

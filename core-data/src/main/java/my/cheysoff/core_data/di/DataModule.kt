@@ -19,6 +19,7 @@ import my.cheysoff.core_data.data.local.NoteDatabase
 import my.cheysoff.core_data.data.local.SketchDao
 import my.cheysoff.core_data.data.local.SyncStateDao
 import my.cheysoff.core_data.data.sync.SyncClock
+import my.cheysoff.core_domain.repository.AttachmentsRepository
 import my.cheysoff.core_domain.repository.NotesRepository
 import my.cheysoff.core_domain.repository.SettingsRepository
 import my.cheysoff.core_domain.repository.SketchesRepository
@@ -47,6 +48,12 @@ abstract class DataModule {
     abstract fun bindSketchesRepository(
         roomSketchesRepository: RoomSketchesRepository
     ): SketchesRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindAttachmentsRepository(
+        roomNotesRepository: RoomNotesRepository
+    ): AttachmentsRepository
 
     companion object {
         @Provides
