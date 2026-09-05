@@ -6,12 +6,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * [sketchesForDisplay]'s two obligations: the ordering rule that has to match
- * `SingleNoteViewModel.sortSketches` on the phone exactly (see that function's own test cases,
- * `sortSketches orders by anchor first` and `sortSketches ties break by id, not by order or
- * insertion position`, in `feature-notes`' `SingleNoteMergeTest` -- these are the same two cases,
- * transcribed for this module's copy of the rule), and the decode-failure handling that has to
- * produce a visible placeholder rather than silently dropping a row.
+ * [sketchesForDisplay]'s own obligation: the decode-failure handling that has to produce a visible
+ * placeholder rather than silently dropping a row.
+ *
+ * The ordering rule itself is no longer tested here. It used to be -- this module carried its own
+ * copy of `SingleNoteViewModel.sortSketches`'s rule, pinned only by a pair of tests mirroring the
+ * phone's `SingleNoteMergeTest` cases -- but `sketchesForDisplay` now calls `:core-domain`'s
+ * `sortSketches` directly (see [SketchOrderingTest][my.cheysoff.core_domain.sketch
+ * .SketchOrderingTest], which runs on both `jvmTest` and `mingwX64Test`), so re-asserting the same
+ * two cases here would only be testing that function a second time under a different name. The
+ * `ordering and decode failure compose` case below stays: it is the one thing genuinely local to
+ * this module, proving `sketchesForDisplay` actually calls through to the shared order rather than
+ * silently reordering around a placeholder.
  */
 class SketchDisplayTest {
 
@@ -29,28 +35,6 @@ class SketchDisplayTest {
         createdAt = 1_000L,
         updatedAt = 1_000L,
     )
-
-    // ---------------------------------------------------------------- ordering
-
-    @Test
-    fun `orders by anchor first`() {
-        val sketches = listOf(sketch("a", anchor = 2), sketch("b", anchor = 0), sketch("c", anchor = 1))
-
-        assertEquals(listOf("b", "c", "a"), sketchesForDisplay(sketches).map { it.id })
-    }
-
-    @Test
-    fun `ties break by id, not by order or insertion position`() {
-        // Same anchor, `order` deliberately disagreeing with the desired id order, insertion order
-        // deliberately reversed too -- only an explicit id tie-break can produce "a, b, c" here.
-        val sketches = listOf(
-            sketch("c", anchor = 0, order = 0),
-            sketch("b", anchor = 0, order = 5),
-            sketch("a", anchor = 0, order = 9),
-        )
-
-        assertEquals(listOf("a", "b", "c"), sketchesForDisplay(sketches).map { it.id })
-    }
 
     // ---------------------------------------------------------------- decode failure
 

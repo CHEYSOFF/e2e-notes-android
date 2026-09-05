@@ -25,6 +25,7 @@ import my.cheysoff.core_domain.repository.SketchesRepository
 import my.cheysoff.core_domain.sketch.NoteBlocks
 import my.cheysoff.core_domain.sketch.Sketch
 import my.cheysoff.core_domain.sketch.StrokeCodec
+import my.cheysoff.core_domain.sketch.sortSketches as sortSketchesForDisplay
 import my.cheysoff.feature_notes.model.single.ChecklistItem
 import my.cheysoff.feature_notes.model.single.SingleNoteIntent
 import my.cheysoff.feature_notes.model.single.SingleNoteScreenState
@@ -263,15 +264,12 @@ internal fun buildDuplicate(state: SingleNoteScreenState, newId: String): Note =
  * Sketches in the order [SketchSection][my.cheysoff.feature_notes.ui.single.SketchSection] renders
  * them: by [SketchData.anchor], ties broken by [SketchData.id].
  *
- * Deliberately NOT [SketchData.order] first: `order` is scoped per-anchor for a future inline
- * layout (see that field's own KDoc), which this screen does not do yet -- see
- * docs/design/sketch-blocks.md's 2026-09-05 amendment. The flat, below-the-text list rendered today
- * only needs a total order, and anchor+id already gives it one both platforms agree on without
- * exchanging anything about it -- the same reason `SketchDao.getSketchesByNoteId` ties its own
- * `sortOrder ASC` on `uuid ASC`.
+ * A one-line delegation to `:core-domain`'s `sortSketches` -- see that function's own KDoc for the
+ * rule itself and for why it is one shared function rather than a copy kept in step with the
+ * desktop's by hand. This wrapper exists only so every call site and test in this module keeps
+ * referring to `sortSketches` unqualified; the rule it applies lives in `:core-domain`, not here.
  */
-internal fun sortSketches(sketches: List<SketchData>): List<SketchData> =
-    sketches.sortedWith(compareBy({ it.anchor }, { it.id }))
+internal fun sortSketches(sketches: List<SketchData>): List<SketchData> = sortSketchesForDisplay(sketches)
 
 /**
  * The `order` a brand-new sketch anchored at [anchor] should be given: one past the highest

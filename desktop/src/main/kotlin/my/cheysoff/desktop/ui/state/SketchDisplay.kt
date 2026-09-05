@@ -3,6 +3,7 @@ package my.cheysoff.desktop.ui.state
 import my.cheysoff.core_domain.model.SketchData
 import my.cheysoff.core_domain.sketch.Sketch
 import my.cheysoff.core_domain.sketch.StrokeCodec
+import my.cheysoff.core_domain.sketch.sortSketches
 
 /**
  * One row [SketchSection][my.cheysoff.desktop.ui.notes.SketchSection] renders: either a drawing
@@ -23,16 +24,10 @@ sealed interface DisplaySketch {
 /**
  * Sketches for one note, ordered and decoded for display.
  *
- * **Ordering:** by [SketchData.anchor], ties broken by [SketchData.id] -- the exact rule
- * `SingleNoteViewModel.sortSketches` implements on the phone (see that function's own KDoc for why
- * `order`, not `anchor`, is NOT the primary key). It is duplicated here rather than shared: that
- * function lives in `:feature-notes`, an Android-only module the desktop cannot depend on, and
- * hoisting it into `:core-domain` was outside this task's scope (see task 6's brief, which scopes
- * the work to the desktop's note pane and `RecordNotesRepository`). The drift this leaves possible
- * -- the two platforms disagreeing about where a drawing sits, with no test on either side alone
- * able to catch it -- is what [SketchDisplayTest] exists to pin down on this side; a change to
- * either function without the matching change to the other is a change one of the two tests (this
- * one, or `SingleNoteMergeTest`'s `sortSketches` cases) should start failing to notice.
+ * **Ordering:** [sortSketches] (`:core-domain`) -- the same function `SingleNoteViewModel
+ * .sortSketches` on the phone delegates to. This used to be a copy of that rule, kept in step only
+ * by two mirrored test suites; it is now the identical compiled function on both platforms, so
+ * there is nothing left for the two devices to disagree about.
  *
  * **Decoding:** unlike the phone's `SketchSection` (which silently skips a sketch whose `strokes`
  * failed to decode, or whose decoded width/height is not positive), the desktop keeps it in the
@@ -42,7 +37,7 @@ sealed interface DisplaySketch {
  * this build cannot draw it.
  */
 fun sketchesForDisplay(sketches: List<SketchData>): List<DisplaySketch> =
-    sketches.sortedWith(compareBy({ it.anchor }, { it.id })).map { data ->
+    sortSketches(sketches).map { data ->
         val decoded = StrokeCodec.decode(data.strokes)
         if (decoded != null && decoded.width > 0 && decoded.height > 0) {
             DisplaySketch.Drawing(data.id, decoded)
