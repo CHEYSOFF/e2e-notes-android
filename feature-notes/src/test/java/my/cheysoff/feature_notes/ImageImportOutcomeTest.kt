@@ -1,59 +1,29 @@
 package my.cheysoff.feature_notes
 
-import my.cheysoff.core_domain.attachment.EncodeStep
-import my.cheysoff.core_domain.attachment.ImportLadder
 import my.cheysoff.core_domain.model.AttachmentData
 import my.cheysoff.feature_notes.ui.attachment.ImportResult
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertSame
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * What can be proven about the import path without a device.
+ * What this file does NOT test, stated up front rather than implied by its presence: the ladder
+ * loop and the refusal cases are exercised through `AndroidImageImporter.import`, which needs a
+ * real device ([android.graphics.ImageDecoder]) and has no JVM coverage anywhere in this module --
+ * see Task 8's instrumented pass and `ImageImporter.kt`'s own KDoc. `ImportLadder` itself (the pure
+ * decision logic the importer loops over) is already covered by `core-domain`'s `ImportLadderTest`,
+ * so re-testing it here by re-implementing the loop over `ImportLadder` directly, without going
+ * through the importer, would prove nothing about the importer and duplicate `core-domain`'s own
+ * tests besides.
  *
- * [android.graphics.ImageDecoder] -- what [my.cheysoff.feature_notes.ui.attachment.AndroidImageImporter]
- * is built on -- needs a real device and cannot run under a plain JVM unit test, so the encode path
- * itself is NOT covered here. It is covered by Task 8's instrumented pass and by using the feature.
- * What follows is everything that can be proven without a bitmap: the ladder the importer loops
- * over terminates, a refusal carries no partial attachment data, and [ImportResult] stays exhaustive.
+ * What's left, and the only thing this file asserts, is the one property with genuine compile-time
+ * value: [ImportResult] stays exhaustive with no `else` branch. If a fourth case is ever added,
+ * this file simply stops compiling until it is taught about it -- that's the actual guarantee; the
+ * runtime assertion below only demonstrates each branch is reachable.
  */
 class ImageImportOutcomeTest {
 
     @Test
-    fun `the ladder the importer loops over terminates`() {
-        // Mirrors AndroidImageImporter's own loop shape (docs/design/image-attachments.md §7):
-        // start at the first rung, call next() until it returns null. Bounded by the ladder's own
-        // size, so a bug that made next() cycle forever fails this test instead of hanging it.
-        var current: EncodeStep? = ImportLadder.STEPS.first()
-        var iterations = 0
-        while (current != null) {
-            iterations++
-            assertTrue("ladder loop ran more rungs than exist", iterations <= ImportLadder.STEPS.size)
-            current = ImportLadder.next(current)
-        }
-        assertEquals(ImportLadder.STEPS.size, iterations)
-    }
-
-    @Test
-    fun `TooLarge and NotAnImage are singletons carrying no partial attachment`() {
-        // Both refusal cases are objects: there is no field on either that a caller could
-        // accidentally save half of. is/!is checked explicitly, not just reference equality, so
-        // this fails if either case is ever turned into a class carrying a stray field.
-        val tooLarge: ImportResult = ImportResult.TooLarge
-        val notAnImage: ImportResult = ImportResult.NotAnImage
-        assertTrue(tooLarge !is ImportResult.Imported)
-        assertTrue(notAnImage !is ImportResult.Imported)
-        assertSame(ImportResult.TooLarge, tooLarge)
-        assertSame(ImportResult.NotAnImage, notAnImage)
-    }
-
-    @Test
     fun `ImportResult stays exhaustive over its three cases`() {
-        // This `when` compiles only because every branch is handled with no else. If a fourth case
-        // is ever added to ImportResult, this file stops compiling until it is taught about it --
-        // that compile-time guarantee is the actual assertion; the runtime checks below just prove
-        // each branch is reachable and behaves as labelled.
         val attachment = AttachmentData(
             id = "id",
             noteId = "note",
