@@ -92,6 +92,7 @@ fun main(args: Array<String>) {
                 // authorise anything, and a button that always led to "name a server first" would
                 // be an invitation to a dead end rather than a feature.
                 onAddDevice = if (screen.session.sync == null) null else controller::addDevice,
+                sketches = screen.repository,
                 onExit = ::exitApplication,
             )
         } else {

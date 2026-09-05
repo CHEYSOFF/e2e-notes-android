@@ -182,6 +182,96 @@ class RecordNotesRepositoryTest {
         assertEquals("1|10x10|ff000000,4:0,0", reloaded.sketchRows().getValue("sk1").sketch.strokes)
     }
 
+    /** Seals a sketch record straight into [store], the same way [reload] finds one on disk. */
+    private fun seedSketch(id: String, noteId: String, isDeleted: Boolean = false) {
+        val row = SketchRow(
+            sketch = SketchData(
+                id = id,
+                noteId = noteId,
+                anchor = 0,
+                order = 0,
+                strokes = "1|10x10|ff000000,4:0,0",
+                createdAt = 1_000L,
+                updatedAt = 1_000L,
+                isDeleted = isDeleted,
+                deletedAt = if (isDeleted) 1_000L else null,
+            ),
+            rowClock = Hlc(1_000L, 0, "abcd1234"),
+            clocks = emptyMap(),
+            dirty = true,
+            lastSyncedSeq = 0L,
+        )
+        val sealed = codec.seal(SketchRecords.toPayload(row, createdAt = row.sketch.createdAt))
+        store.put(sealed.blindedId, sealed.envelope)
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // Sketches -- task 6's own reader and writer
+    // -------------------------------------------------------------------------------------------
+
+    @Test
+    fun `getSketchesForNote returns only that note's live sketches`() = runTest {
+        seedSketch("sk1", noteId = "a")
+        seedSketch("sk2", noteId = "b")
+        seedSketch("sk3", noteId = "a", isDeleted = true)
+        val reloaded = reload()
+
+        assertEquals(listOf("sk1"), reloaded.getSketchesForNote("a").first().map { it.id })
+        assertEquals(listOf("sk2"), reloaded.getSketchesForNote("b").first().map { it.id })
+        assertTrue(reloaded.getSketchesForNote("nonexistent").first().isEmpty())
+    }
+
+    @Test
+    fun `getSketchesForNote is live -- a delete is reflected without reselecting`() = runTest {
+        seedSketch("sk1", noteId = "a")
+        val reloaded = reload()
+
+        reloaded.deleteSketch("sk1")
+
+        assertTrue(reloaded.getSketchesForNote("a").first().isEmpty())
+    }
+
+    @Test
+    fun `deleteSketch soft-deletes -- the row survives a reload, tombstoned`() = runTest {
+        now = 5_000L
+        seedSketch("sk1", noteId = "a")
+        val reloaded = reload()
+
+        reloaded.deleteSketch("sk1")
+
+        val roundTripped = reload()
+        assertTrue(roundTripped.getSketchesForNote("a").first().isEmpty())
+        val stored = roundTripped.sketchRows().getValue("sk1").sketch
+        assertTrue(stored.isDeleted)
+        assertEquals(5_000L, stored.deletedAt)
+    }
+
+    /**
+     * The same idempotence guard [deleteNote] carries, transcribed for sketches: a second delete
+     * must not re-stamp `deletedAt`.
+     */
+    @Test
+    fun `deleting an already-deleted sketch does not restamp it`() = runTest {
+        now = 1_000L
+        seedSketch("sk1", noteId = "a")
+        val reloaded = reload()
+        reloaded.deleteSketch("sk1")
+        now = 9_000_000L
+
+        reloaded.deleteSketch("sk1")
+
+        assertEquals(1_000L, reloaded.sketchRows().getValue("sk1").sketch.deletedAt)
+    }
+
+    @Test
+    fun `deleting an unknown sketch id is a no-op`() = runTest {
+        val reloaded = reload()
+
+        reloaded.deleteSketch("nonexistent")
+
+        assertTrue(reloaded.sketchRows().isEmpty())
+    }
+
     // -------------------------------------------------------------------------------------------
     // Column ownership — the same rules as NoteDao.upsertNote
     // -------------------------------------------------------------------------------------------

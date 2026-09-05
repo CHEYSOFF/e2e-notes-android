@@ -17,6 +17,7 @@ import kotlinx.coroutines.sync.withLock
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.model.NotesSortOrder
+import my.cheysoff.core_domain.model.SketchData
 import my.cheysoff.core_domain.model.TrashPolicy
 import my.cheysoff.core_domain.repository.NotesRepository
 import my.cheysoff.core_domain.sync.FieldClocks
@@ -92,7 +93,7 @@ class RecordNotesRepository private constructor(
     initial: Snapshot,
     /** What could not be loaded. Zero on a healthy vault; surfaced by the UI when it is not. */
     val diagnostics: LoadDiagnostics,
-) : NotesRepository {
+) : NotesRepository, DesktopSketches {
 
     /**
      * Folds a clock this device did not mint into the generator local writes draw from.
@@ -288,6 +289,23 @@ class RecordNotesRepository private constructor(
     override fun getDeletedFolders(): Flow<List<Folder>> = state.map { snapshot ->
         snapshot.folders.values.map { it.folder }.filter { it.isDeleted }
             .sortedWith(compareByDescending<Folder> { it.deletedAt ?: 0L }.thenBy { it.id })
+    }
+
+    /**
+     * Sketches anchored under [noteId] that are not soft-deleted, as a live `Flow` exactly like
+     * [getNotes]/[getFolders] -- unlike [sketchRows], which is the plain one-shot snapshot [load]
+     * needed before anything on the desktop read a sketch at all (see that function's own KDoc).
+     * Plan 3's note pane is the first such reader, and it wants live updates: a sync pass that
+     * pulls in a new drawing for the note that is open should not require reselecting the note to
+     * see it.
+     *
+     * Returned unsorted, exactly the way `SketchDao.getSketchesByNoteId` and
+     * `RoomSketchesRepository.getSketchesForNote` are on the phone: putting a note's sketches into
+     * the order they render in (by anchor, then id) is a UI concern there (`SingleNoteViewModel`'s
+     * `sortSketches`) and stays one here (see this module's `sketchesForDisplay`).
+     */
+    override fun getSketchesForNote(noteId: String): Flow<List<SketchData>> = state.map { snapshot ->
+        snapshot.sketches.values.map { it.sketch }.filter { it.noteId == noteId && !it.isDeleted }
     }
 
     // -------------------------------------------------------------------------------------------
@@ -490,6 +508,31 @@ class RecordNotesRepository private constructor(
     }
 
     // -------------------------------------------------------------------------------------------
+    // Sketch writes
+    // -------------------------------------------------------------------------------------------
+
+    /**
+     * Soft-deletes one sketch: its own tombstone, its own fresh clock, and nothing else -- mirrors
+     * [deleteNote] and the phone's `RoomSketchesRepository.deleteSketch`. This is the desktop's
+     * only sketch write; see [DesktopSketches] for why there is no `saveSketch` to mirror it.
+     *
+     * A no-op, minting no clock, when [id] is unknown or already trashed -- the same idempotence
+     * guard [deleteNote] documents, for the same reason: a second delete must not re-stamp
+     * `deletedAt`.
+     */
+    override suspend fun deleteSketch(id: String): Unit = write { snapshot ->
+        val existing = snapshot.sketches[id] ?: return@write snapshot
+        if (existing.sketch.isDeleted) return@write snapshot
+        val now = clock()
+        snapshot.putSketch(
+            existing,
+            existing.sketch.copy(isDeleted = true, deletedAt = now),
+            hlc.next(now),
+            TOMBSTONE_FIELDS,
+        )
+    }
+
+    // -------------------------------------------------------------------------------------------
     // Plumbing
     // -------------------------------------------------------------------------------------------
 
@@ -553,6 +596,43 @@ class RecordNotesRepository private constructor(
         val sealed = codec.seal(FolderRecords.toPayload(row))
         store.put(sealed.blindedId, sealed.envelope)
         return copy(folders = folders + (folder.id to row))
+    }
+
+    /**
+     * Re-clocks, re-seals and stores a sketch, and returns the snapshot with it in. See [putNote]
+     * -- same shape, same reasoning. [existing] is never null here: unlike a note or a folder, this
+     * module never creates or edits a sketch (see [DesktopSketches]'s KDoc for why), so the only
+     * caller is [deleteSketch], which has already confirmed the row exists.
+     *
+     * [dirty] and [lastSyncedSeq] carry over from [existing] unchanged -- [SketchRecords.toPayload]
+     * does not read them, and [SketchRecords.fromPayload] always rebuilds a freshly loaded row with
+     * `dirty = false, lastSyncedSeq = 0L` regardless of what was written here (see that function),
+     * so nothing on the desktop's own read path depends on what this write puts in either field.
+     */
+    private fun Snapshot.putSketch(
+        existing: SketchRow,
+        sketch: SketchData,
+        stamp: Hlc,
+        touched: Set<String>,
+    ): Snapshot {
+        val row = SketchRow(
+            sketch = sketch,
+            rowClock = stamp,
+            clocks = FieldClocks.parse(
+                FieldClocks.stamp(
+                    previousSerialized = FieldClocks.serialize(existing.clocks),
+                    previousRowClock = existing.rowClock,
+                    allFields = FieldClocks.SKETCH_FIELDS,
+                    touched = touched,
+                    newClock = stamp,
+                ),
+            ),
+            dirty = existing.dirty,
+            lastSyncedSeq = existing.lastSyncedSeq,
+        )
+        val sealed = codec.seal(SketchRecords.toPayload(row, createdAt = sketch.createdAt))
+        store.put(sealed.blindedId, sealed.envelope)
+        return copy(sketches = sketches + (sketch.id to row))
     }
 
 }

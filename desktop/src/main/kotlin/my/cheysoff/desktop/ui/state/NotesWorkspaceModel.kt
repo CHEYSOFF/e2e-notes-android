@@ -1,18 +1,25 @@
 package my.cheysoff.desktop.ui.state
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.core_domain.model.NotesSortOrder
+import my.cheysoff.core_domain.model.SketchData
 import my.cheysoff.core_domain.repository.NotesRepository
+import my.cheysoff.desktop.store.DesktopSketches
 import java.util.UUID
 
 /**
@@ -28,6 +35,12 @@ import java.util.UUID
 class NotesWorkspaceModel(
     private val repository: NotesRepository,
     private val scope: CoroutineScope,
+    /**
+     * Null on the preview/screenshot build ([my.cheysoff.desktop.ui.preview.InMemoryNotesRepository]
+     * carries no sketch storage of its own) -- see [DesktopSketches]'s own KDoc for why this is a
+     * separate, optional dependency rather than a widening of [NotesRepository].
+     */
+    private val sketches: DesktopSketches? = null,
     private val now: () -> Long = { System.currentTimeMillis() },
     private val newId: () -> String = { UUID.randomUUID().toString() },
     /**
@@ -55,6 +68,19 @@ class NotesWorkspaceModel(
                 latestNotes = notes
                 latestFolders = folders
                 _state.value = recompute(_state.value, loaded = true)
+            }
+        }
+
+        // Independent of the notes/folders collection above, exactly like the phone's
+        // SingleNoteViewModel: sketches live in their own store with their own live query, and
+        // switching notes has to drop the previous note's subscription rather than layer a second
+        // one on top -- hence flatMapLatest keyed on the selected id, not a plain collect per
+        // selection change.
+        val sketchesPort = sketches
+        if (sketchesPort != null) {
+            scope.launch {
+                selectedNoteSketches(sketchesPort)
+                    .collect { list -> _state.value = _state.value.copy(sketches = sketchesForDisplay(list)) }
             }
         }
     }
@@ -118,6 +144,23 @@ class NotesWorkspaceModel(
     fun toggleFavorite() = mutateSelected { it.copy(isFavorite = !it.isFavorite) }
 
     fun setNoteFolder(folderId: String?) = mutateSelected { it.copy(folderId = folderId) }
+
+    // ---------------------------------------------------------------- sketches
+
+    /**
+     * Deletes one sketch. There is no undo and no Trash for a sketch (`TrashEntryKind` is
+     * `{NOTE, FOLDER}`), so the confirmation the caller shows before invoking this is the only
+     * safety net -- see [my.cheysoff.desktop.ui.notes.SketchSection].
+     *
+     * Removed from [WorkspaceUiState.sketches] immediately rather than waiting for the repository's
+     * own echo, the same optimism [deleteSelectedNote] applies to the note list -- the row the user
+     * just deleted must not still be on screen while the write is in flight.
+     */
+    fun deleteSketch(id: String) {
+        val port = sketches ?: return
+        _state.value = _state.value.copy(sketches = _state.value.sketches.filterNot { it.id == id })
+        scope.launch { port.deleteSketch(id) }
+    }
 
     // ---------------------------------------------------------------- editing
 
@@ -254,6 +297,18 @@ class NotesWorkspaceModel(
     }
 
     // ---------------------------------------------------------------- internals
+
+    /**
+     * The live list of sketches for whichever note is selected, re-subscribing whenever the
+     * selection changes and emitting empty when nothing is. `distinctUntilChanged` keeps an
+     * unrelated state change (a keystroke in the body, autosave ticking over) from restarting the
+     * subscription for the note that is already open.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun selectedNoteSketches(port: DesktopSketches) =
+        state.map { it.selectedNoteId }
+            .distinctUntilChanged()
+            .flatMapLatest { id -> if (id == null) flowOf(emptyList<SketchData>()) else port.getSketchesForNote(id) }
 
     private fun currentRows(): List<NoteRowUi> = latestNotes.toRows(latestFolders)
 
