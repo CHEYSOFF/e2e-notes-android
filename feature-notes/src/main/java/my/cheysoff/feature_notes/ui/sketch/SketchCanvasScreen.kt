@@ -1,5 +1,6 @@
 package my.cheysoff.feature_notes.ui.sketch
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -94,8 +95,11 @@ import my.cheysoff.core_ui.theme.ToolbarDark
  *   never distorts, while remeasuring could silently disagree with the points being loaded.
  * @param onDone called with the finished [Sketch] when the person taps Done. If nothing was drawn,
  *   this behaves like [onCancel] instead -- there is nothing to save.
- * @param onCancel called when the person backs out. A confirmation is asked first only if at least
- *   one stroke exists; confirming an empty canvas would be noise.
+ * @param onCancel called when the person backs out -- Cancel tapped, or confirmed through the
+ *   dialog below. A confirmation is asked first only if at least one stroke exists; confirming an
+ *   empty canvas would be noise. Hardware back runs the exact same [requestCancel] the Cancel
+ *   button does -- one source of truth for the rule, so a future change to it cannot fix one exit
+ *   and miss the other.
  */
 @Composable
 fun SketchCanvasScreen(initialSketch: Sketch? = null, onDone: (Sketch) -> Unit, onCancel: () -> Unit) {
@@ -133,6 +137,18 @@ fun SketchCanvasScreen(initialSketch: Sketch? = null, onDone: (Sketch) -> Unit, 
 
     fun hasStrokes() = (capture?.strokes?.isNotEmpty()) == true
 
+    // The one rule for leaving this screen without saving: ask first if there is anything to lose.
+    // Both exits -- the Cancel button and hardware back -- call this SAME function rather than each
+    // re-deciding the condition, so the two can never drift out of sync with each other.
+    fun requestCancel() {
+        if (hasStrokes()) showCancelConfirm = true else onCancel()
+    }
+
+    // System back must not silently discard a drawing -- this screen has no other BackHandler
+    // above it while it is showing (SingleNoteScreen disables its own), so without this, hardware
+    // back would fall through to whatever the caller does, bypassing the confirmation entirely.
+    BackHandler { requestCancel() }
+
     fun finishStroke() {
         val state = capture ?: return
         // The size guard lives in SketchCaptureState.endStroke itself -- this just reads its
@@ -151,7 +167,7 @@ fun SketchCanvasScreen(initialSketch: Sketch? = null, onDone: (Sketch) -> Unit, 
             canRedo = capture?.canRedo == true,
             onUndo = { capture?.undo(); revision++ },
             onRedo = { capture?.redo(); revision++ },
-            onCancel = { if (hasStrokes()) showCancelConfirm = true else onCancel() },
+            onCancel = { requestCancel() },
             onDone = {
                 val state = capture
                 if (state != null && state.strokes.isNotEmpty()) onDone(state.toSketch()) else onCancel()

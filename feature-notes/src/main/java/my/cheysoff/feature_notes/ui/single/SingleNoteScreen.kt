@@ -221,9 +221,8 @@ fun SingleNoteScreen(
 
     // System back must run the same flush/discard logic as the top-bar arrow — a plain nav pop
     // would skip the final save and leave an abandoned empty note behind. Disabled while the sketch
-    // canvas covers the screen, so back closes the CANVAS (see the handler below it, which — being
-    // composed later — takes priority whenever both are enabled) rather than popping the whole note
-    // out from under it.
+    // canvas covers the screen: back must close THAT (with its own discard confirmation — see
+    // SketchCanvasScreen's own BackHandler) rather than popping the whole note out from under it.
     BackHandler(enabled = sketchTarget == null) { onBack() }
 
     // Nav-away is already covered by onBack; this catches the editor vanishing because the activity
@@ -293,13 +292,11 @@ fun SingleNoteScreen(
         }
     }
 
-    // Closes the canvas outright rather than replaying its own "discard?" confirmation -- hardware
-    // back is rare here (the canvas' own Cancel button is the expected route), and this only ever
-    // discards a session that has not been handed to onDone yet, exactly like tapping Cancel and
-    // confirming would. Composed unconditionally (only ENABLED toggles) so this registers after,
-    // and therefore takes priority over, the editor's own BackHandler above whenever both exist.
-    BackHandler(enabled = sketchTarget != null) { sketchTarget = null }
-
+    // No BackHandler is registered here for the canvas being open: SketchCanvasScreen owns hardware
+    // back itself (its BackHandler runs the exact same requestCancel() its Cancel button does, so
+    // the "ask first if there are strokes" rule has one source of truth). Registering a second,
+    // unconditional one here would either fight it for priority or -- worse -- reintroduce the bug
+    // this is fixing by closing the canvas without the confirmation SketchCanvasScreen asks for.
     if (sketchTarget != null) {
         val target = sketchTarget
         SketchCanvasScreen(
@@ -373,15 +370,11 @@ fun SingleNoteScreen(
             focusItemId = focusItemId,
             onSetFocusItem = { focusItemId = it },
             onIntent = onIntent,
-            // Decoded here rather than in SketchSection: this is where sketchTarget (hoisted to
-            // this composable) actually lives, and StrokeCodec.decode is the same one the canvas
-            // itself uses to read it back, so a sketch that fails to decode simply cannot be
-            // reopened rather than crashing the tap.
-            onSketchTapped = { sketchData ->
-                StrokeCodec.decode(sketchData.strokes)?.let { sketch ->
-                    sketchTarget = SketchEditTarget.Existing(sketchData.id, sketch)
-                }
-            },
+            // SketchSection hands back the Sketch it already decoded to render the card -- decoding
+            // sketchData.strokes a second time here would be wasted work for no benefit, since a
+            // tap can only ever reach this callback for a card that rendered, and therefore decoded
+            // cleanly, in the first place.
+            onSketchTapped = { id, sketch -> sketchTarget = SketchEditTarget.Existing(id, sketch) },
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues),
@@ -397,7 +390,7 @@ private fun NoteEditor(
     focusItemId: String?,
     onSetFocusItem: (String?) -> Unit,
     onIntent: (SingleNoteIntent) -> Unit,
-    onSketchTapped: (SketchData) -> Unit,
+    onSketchTapped: (String, Sketch) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val spacing = LocalSpacing.current
@@ -624,19 +617,33 @@ private sealed interface SketchEditTarget {
  * Each card is exactly the drawing's own aspect ratio (`Modifier.aspectRatio`, fit to the note's
  * width), so [SketchRenderer] never has to letterbox it -- it only would if this box's shape
  * disagreed with the sketch's own, which it cannot. Tapping a card reopens [SketchCanvasScreen] on
- * that drawing (via [onTapped]); the small corner button deletes it.
+ * that drawing (via [onTapped], which is handed the already-decoded [Sketch] this section built to
+ * render the card -- a tap can only reach a card that decoded cleanly, so decoding it again there
+ * would be wasted work for no benefit).
  *
  * A [SketchData] whose `strokes` fails to decode is skipped rather than shown broken or crashing
  * the row -- the same "never throws, just loses position/rendering, never existence" posture
  * `NoteBlocks` documents for a corrupt anchor.
+ *
+ * The corner button deletes a sketch, but only after confirming: unlike a checklist row (undoable
+ * from the top-bar Undo button) or a note (soft-deleted into Trash, restorable), a sketch delete
+ * goes straight through `SketchesRepository.deleteSketch` with no history entry and no restore
+ * path -- there is no route back from a mistap. `pendingDeleteId` is local, plain composable state
+ * rather than anything view-model-owned: confirming just fires the one `SketchDeleted` intent,
+ * there is no asynchronous decision for the ViewModel to make first, so there is nothing here worth
+ * testing beyond the existing composable-free suite. The dialog deliberately matches
+ * [SketchCanvasScreen]'s own discard dialog in shape (title/body/two buttons, same colours) so the
+ * two read as one idea rather than two different ways this app asks "are you sure".
  */
 @Composable
 private fun SketchSection(
     sketches: List<SketchData>,
-    onTapped: (SketchData) -> Unit,
+    onTapped: (String, Sketch) -> Unit,
     onIntent: (SingleNoteIntent) -> Unit,
 ) {
     if (sketches.isEmpty()) return
+
+    var pendingDeleteId by remember { mutableStateOf<String?>(null) }
 
     Column(
         modifier = Modifier
@@ -649,11 +656,29 @@ private fun SketchSection(
             if (sketch != null && sketch.width > 0 && sketch.height > 0) {
                 SketchCard(
                     sketch = sketch,
-                    onTapped = { onTapped(sketchData) },
-                    onDeleted = { onIntent(SingleNoteIntent.SketchDeleted(sketchData.id)) },
+                    onTapped = { onTapped(sketchData.id, sketch) },
+                    onDeleted = { pendingDeleteId = sketchData.id },
                 )
             }
         }
+    }
+
+    pendingDeleteId?.let { id ->
+        AlertDialog(
+            containerColor = SurfaceDark,
+            onDismissRequest = { pendingDeleteId = null },
+            title = { Text("Delete this drawing?", color = TitleGrey) },
+            text = { Text("This cannot be undone.", color = BodyGrey) },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingDeleteId = null
+                    onIntent(SingleNoteIntent.SketchDeleted(id))
+                }) { Text("Delete", color = AccentIndigo) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteId = null }) { Text("Cancel", color = BodyGrey) }
+            },
+        )
     }
 }
 
