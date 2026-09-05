@@ -214,3 +214,34 @@ data class PairingScreenState(
      */
     val canShareAccount: Boolean = false,
 )
+
+/**
+ * True for the stages that put a viewfinder on screen.
+ *
+ * `PairingScreen` gates its camera-permission effect on this, and the gate is why the `when` below
+ * is exhaustive rather than a short `is` check. It was a short check once, listing
+ * [PairingStage.ScanningOffer] and [PairingStage.ScanningSeal] and omitting
+ * [PairingStage.ScanningInvite] -- the stage a phone reaches when it scans a *desktop's* code. On
+ * that stage the effect returned early, so `cameraPermission` stayed [CameraPermission.Unknown]
+ * forever and the screen sat on "Asking for permission to use the camera…" while nothing ever
+ * asked. Granting the permission by hand in Settings did not clear it either, because the same
+ * early return skipped the re-check.
+ *
+ * With no `else` branch, a fourth scanning stage cannot be added without the compiler demanding an
+ * answer here.
+ */
+fun PairingStage.needsCamera(): Boolean = when (this) {
+    is PairingStage.ScanningOffer -> true
+    is PairingStage.ScanningSeal -> true
+    is PairingStage.ScanningInvite -> true
+
+    PairingStage.ChoosingRole -> false
+    is PairingStage.ShowingOffer -> false
+    is PairingStage.ShowingSeal -> false
+    is PairingStage.SendingSeal -> false
+    is PairingStage.AnsweringInvite -> false
+    is PairingStage.CollectingBundle -> false
+    is PairingStage.Confirming -> false
+    is PairingStage.Finished -> false
+    is PairingStage.Failed -> false
+}
