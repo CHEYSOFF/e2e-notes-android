@@ -339,7 +339,15 @@ class RoomNotesRepository @Inject constructor(
      * difference; see `docs/design/e2e-sync-open-questions.md` §4, hazards 3 and 4.
      */
     override suspend fun purgeNote(id: String) {
-        noteDao.purgeNote(id)
+        database.withTransaction {
+            noteDao.purgeNote(id)
+            // A blank note discarded with an unsaved drawing still has a live sketch row pointing
+            // at it (see SingleNoteViewModel.BackClicked) unless this runs: purgeNote has no FK to
+            // cascade through (SketchEntity is deliberately unlinked — see SketchDao's KDoc), so
+            // without this call the sketch would survive, live and dirty, under an id that no note
+            // will ever hold again.
+            sketchDao.purgeSketchesForNote(id)
+        }
     }
 
     override fun getDeletedNotes(): Flow<List<Note>> {

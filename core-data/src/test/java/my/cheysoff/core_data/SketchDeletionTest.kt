@@ -829,4 +829,59 @@ class SketchDeletionTest {
         assertEquals(0, purged)
         assertNotNull("a fresh tombstone must survive the purge", database.sketchDao.sketchRow("s1"))
     }
+
+    // -- H1: purgeNote's hard delete must not orphan a live sketch under a dead noteId ---------
+
+    /**
+     * The bug this closes: a blank note discarded on back with only an unsaved drawing on it goes
+     * through `purgeNote`, not `deleteNote` -- a bare `DELETE FROM notes`, with no FK to cascade
+     * through (`SketchEntity` is deliberately unlinked). Without this, the sketch row survives,
+     * live and dirty, under a `noteId` no note will ever hold again -- invisible on this device
+     * forever, and pushed to sync as a permanent orphan on every device that pulls it.
+     *
+     * Falsifiability: verified by temporarily removing `sketchDao.purgeSketchesForNote(id)` from
+     * `RoomNotesRepository.purgeNote` and re-running -- failed with the sketch row still present
+     * and `dirty`. Restored, and the suite re-run green.
+     */
+    @Test
+    fun `purgeNote removes the note's live sketch rows too`() = runTest {
+        notesRepository.saveNote(Note(id = "n1", title = "", content = ""))
+        sketchesRepository.saveSketch(sketch("s1", "n1"))
+        sketchesRepository.saveSketch(sketch("s2", "n1"))
+
+        notesRepository.purgeNote("n1")
+
+        assertNull("a live sketch anchored to a purged note must not survive it", database.sketchDao.sketchRow("s1"))
+        assertNull("neither must a second one", database.sketchDao.sketchRow("s2"))
+    }
+
+    /**
+     * No `isDeleted` guard, deliberately: a sketch already tombstoned under this note (say, the
+     * user erased it, or a `deleteNote` cascade tombstoned it before an un-synced purge) must not
+     * be left behind to wait out its own retention window once the note itself is gone for good.
+     */
+    @Test
+    fun `purgeNote removes an already-tombstoned sketch under the same note too`() = runTest {
+        notesRepository.saveNote(Note(id = "n1", title = "", content = ""))
+        sketchesRepository.saveSketch(sketch("s1", "n1"))
+        sketchesRepository.deleteSketch("s1")
+        assertTrue("precondition: the sketch is tombstoned, not live", database.sketchDao.sketchRow("s1")!!.isDeleted)
+
+        notesRepository.purgeNote("n1")
+
+        assertNull("a tombstoned sketch must not outlive the note it was purged with", database.sketchDao.sketchRow("s1"))
+    }
+
+    @Test
+    fun `purgeNote does not touch another note's sketches`() = runTest {
+        notesRepository.saveNote(Note(id = "n1", title = "", content = ""))
+        notesRepository.saveNote(Note(id = "n2", title = "", content = ""))
+        sketchesRepository.saveSketch(sketch("s1", "n1"))
+        sketchesRepository.saveSketch(sketch("s2", "n2"))
+
+        notesRepository.purgeNote("n1")
+
+        assertNull(database.sketchDao.sketchRow("s1"))
+        assertNotNull("n2's sketch must be untouched", database.sketchDao.sketchRow("s2"))
+    }
 }
