@@ -19,6 +19,7 @@ import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.core_domain.model.NotesSortOrder
 import my.cheysoff.core_domain.model.SketchData
 import my.cheysoff.core_domain.repository.NotesRepository
+import my.cheysoff.core_domain.sketch.sketchesForDisplay
 import my.cheysoff.desktop.store.DesktopSketches
 import java.util.UUID
 

@@ -3,6 +3,8 @@ package my.cheysoff.desktop.ui.state
 import androidx.compose.runtime.Immutable
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.NoteContentFormat
+import my.cheysoff.core_domain.sketch.DisplaySketch
+import my.cheysoff.core_domain.sketch.sketchesForDisplay
 
 /** Everything the two panes draw, in one snapshot. */
 @Immutable

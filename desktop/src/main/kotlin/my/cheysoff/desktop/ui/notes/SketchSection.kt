@@ -37,10 +37,10 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke as DrawStyle
 import androidx.compose.ui.unit.dp
+import my.cheysoff.core_domain.sketch.DisplaySketch
 import my.cheysoff.core_domain.sketch.Sketch
 import my.cheysoff.core_domain.sketch.SketchGeometry
 import my.cheysoff.core_domain.sketch.StrokeSmoothing
-import my.cheysoff.desktop.ui.state.DisplaySketch
 import my.cheysoff.desktop.ui.theme.AccentIndigo
 import my.cheysoff.desktop.ui.theme.BodyGrey
 import my.cheysoff.desktop.ui.theme.SurfaceDark
@@ -50,7 +50,7 @@ import my.cheysoff.desktop.ui.theme.TitleGrey
  * One card per sketch, below the note's text -- never interleaved with it, matching where the
  * phone's own `SketchSection` puts them (see `docs/design/sketch-blocks.md`'s 2026-09-05
  * amendment). [sketches] arrives already ordered and decode-checked -- see
- * [my.cheysoff.desktop.ui.state.sketchesForDisplay] -- so this just lays them out.
+ * [my.cheysoff.core_domain.sketch.sketchesForDisplay] -- so this just lays them out.
  *
  * Render-only: there is no way to draw here, on purpose (see task 6's brief -- a mouse is a poor
  * pen and the capture surface is phone-only). The only affordance is delete, and it asks first:
@@ -119,7 +119,7 @@ private fun SketchCard(sketch: Sketch, onDeleted: () -> Unit) {
 /**
  * The placeholder for a [DisplaySketch.Undecodable] row: fixed-shape (there is no width/height to
  * letterbox to -- decoding never got that far), visible, and still deletable. See
- * [my.cheysoff.desktop.ui.state.sketchesForDisplay]'s own KDoc for why this shows up at all rather
+ * [my.cheysoff.core_domain.sketch.sketchesForDisplay]'s own KDoc for why this shows up at all rather
  * than being skipped the way the phone's `SketchSection` skips the same case.
  */
 @Composable
