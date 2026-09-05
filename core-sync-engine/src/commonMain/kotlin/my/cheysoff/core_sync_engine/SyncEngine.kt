@@ -4,6 +4,7 @@ import kotlinx.coroutines.sync.Mutex
 import my.cheysoff.core_domain.sync.Hlc
 import my.cheysoff.core_domain.sync.Merge
 import my.cheysoff.core_domain.sync.MergeResult
+import my.cheysoff.core_domain.sync.RecordSize
 import my.cheysoff.core_domain.sync.RecordType
 import my.cheysoff.core_domain.sync.RejectReason
 import my.cheysoff.core_domain.sync.SyncRecord
@@ -84,6 +85,21 @@ class SyncEngine(
      * the race is a timer, and its next tick is a better time to sync than the instant a pass ends.
      */
     private val pass = Mutex()
+
+    /**
+     * Records this session has already seen [TransportFault.REJECTED], keyed by type, uuid **and
+     * row clock**, so a permanently-too-large record is not re-sealed and re-uploaded on every
+     * pass while nothing about it has changed.
+     *
+     * In-memory and bounded, deliberately: this is the interim state before a server understands
+     * attachments, not a permanent record of failure, so it needs no schema and no migration.
+     * Keying on the row clock rather than just the identity is what makes editing the record (a
+     * new clock) or restarting the process (an empty set again) both retry it -- the two ordinary
+     * "something changed, try again" triggers, for free. Insertion-ordered so the oldest entry is
+     * what [rememberRejected] evicts once the bound is hit, which is the entry least likely to
+     * still be relevant.
+     */
+    private val rejectedThisSession = LinkedHashSet<String>()
 
     /**
      * Pull, push, and round again while the push merged something.
@@ -226,8 +242,9 @@ class SyncEngine(
                     }
 
                     is IncomingRecord.Opened -> {
-                        val applied =
-                            applyIncoming(incoming.record, incoming.seq, incoming.createdAt)
+                        val applied = applyIncoming(
+                            incoming.record, incoming.seq, incoming.createdAt, incoming.meta,
+                        )
                         stats += applied.stats
                         applied.stop?.let {
                             return finishPull(committable, startCursor, stats, it, storedVersion)
@@ -316,7 +333,17 @@ class SyncEngine(
         val pending = store.dirtyRecords()
         if (pending.isEmpty()) return Phase(stats, null)
 
-        for (batch in pending.chunked(batchLimit)) {
+        // A record this session already watched the server refuse for its bytes is skipped before
+        // it is even sealed. Nothing about it can have changed -- the row clock is part of the
+        // key, so an edit would already have missed this set -- and re-sending the identical bytes
+        // costs a full re-seal and upload of, potentially, a multi-megabyte attachment every single
+        // pass for no different outcome. Still counted as rejected: the signal must not disappear
+        // just because the network call it used to cost did.
+        val (known, sendable) = pending.partition { rejectionKeyOf(it.record) in rejectedThisSession }
+        stats = stats.copy(rejected = stats.rejected + known.size)
+        if (sendable.isEmpty()) return Phase(stats, null)
+
+        for (batch in batches(sendable)) {
             // Keyed by identity rather than read back by position: the transport contract allows a
             // response in any order, and an engine that trusted the order would acknowledge one row
             // with another row's seq -- a lost update that looks like nothing at all.
@@ -333,6 +360,20 @@ class SyncEngine(
             val response = try {
                 transport.push(requests)
             } catch (failure: SyncTransportException) {
+                // A batch of one that the server will refuse again for the same bytes is the one
+                // failure that must not end the pass. The row stays dirty -- nothing is lost -- and
+                // every other batch still goes. Attribution is only sound for a batch of one, which
+                // is why anything large enough to provoke this was put in one.
+                //
+                // It is NOT retried next pass: `rememberRejected` holds it for the session, so an
+                // edit or a restart is what tries it again. A server upgraded mid-session therefore
+                // goes unnoticed until one of those happens, which is the price of not re-uploading
+                // a megabyte a minute against a server that is certain to refuse it.
+                if (failure.fault == TransportFault.REJECTED && batch.size == 1) {
+                    stats = stats.copy(rejected = stats.rejected + 1)
+                    rememberRejected(batch.single().record)
+                    continue
+                }
                 return Phase(stats, stop(failure))
             }
 
@@ -366,7 +407,20 @@ class SyncEngine(
                         // push conflict is the server refusing a row THIS device sent, so the row
                         // is in this store already and its `createdAt` is set. The value is only
                         // ever consulted for a record being seen for the first time.
-                        val applied = applyIncoming(current, ack.currentSeq, remoteCreatedAt = null)
+                        //
+                        // `remoteMeta` is NOT null on this route, and that is load-bearing. A
+                        // conflict merge in which any local field wins leaves the row dirty
+                        // (`Merge`'s `dirty = merged != remote.normalized()`), and the next push
+                        // re-serialises `meta` out of the local row. Passing null would leave that
+                        // row holding the stale value, and the re-push would overwrite the server's
+                        // newer `meta` for the whole account -- a loss, not a delay. So the
+                        // transport carries the blocking version's `meta` beside its record.
+                        val applied = applyIncoming(
+                            current,
+                            ack.currentSeq,
+                            remoteCreatedAt = null,
+                            remoteMeta = ack.currentMeta,
+                        )
                         stats += applied.stats
                         applied.stop?.let { return Phase(stats, it) }
                     }
@@ -374,6 +428,72 @@ class SyncEngine(
             }
         }
         return Phase(stats, null)
+    }
+
+    /** [rejectedThisSession]'s key: identity plus row clock, so an edit is a different key. */
+    private fun rejectionKeyOf(record: SyncRecord): String =
+        "${keyOf(record.type, record.uuid)}:${record.rowClock}"
+
+    /**
+     * Remembers [record] as rejected for the rest of this session, evicting the oldest entry first
+     * if [MAX_REMEMBERED_REJECTIONS] is already reached.
+     *
+     * The bound exists so a pathological account -- or an attacker who can make this device dirty
+     * records faster than it can learn they are hopeless -- cannot grow this set without limit.
+     * Losing the oldest entry only means that one record is re-sent once more than strictly
+     * necessary; it is never lost track of forever, because the row stays dirty either way.
+     */
+    private fun rememberRejected(record: SyncRecord) {
+        val key = rejectionKeyOf(record)
+        rejectedThisSession.remove(key) // re-insert at the end, so it reads as the most recent
+        rejectedThisSession.add(key)
+        if (rejectedThisSession.size > MAX_REMEMBERED_REJECTIONS) {
+            val oldest = rejectedThisSession.iterator()
+            oldest.next()
+            oldest.remove()
+        }
+    }
+
+    /**
+     * Splits [pending] into batches that respect three limits at once: [batchLimit] items,
+     * [PUSH_BYTE_BUDGET] estimated bytes, and "a record above [LARGE_RECORD_BYTES] is alone".
+     *
+     * A batch is never empty. A record whose estimate exceeds the whole budget still gets its own
+     * batch rather than being dropped: the server may well accept it, and if it does not, the
+     * single-item batch is what makes the refusal attributable.
+     */
+    private fun batches(pending: List<StoredRecord>): List<List<StoredRecord>> {
+        val result = mutableListOf<List<StoredRecord>>()
+        var current = mutableListOf<StoredRecord>()
+        var currentBytes = 0
+
+        fun flush() {
+            if (current.isNotEmpty()) {
+                result += current
+                current = mutableListOf()
+                currentBytes = 0
+            }
+        }
+
+        for (row in pending) {
+            val size = RecordSize.estimateBytes(row.record)
+            if (size > LARGE_RECORD_BYTES) {
+                // Alone, whatever else is pending -- attribution requires it, and a batch of one
+                // can never itself violate the byte budget's spirit even when it exceeds the number.
+                flush()
+                result += listOf(row)
+                continue
+            }
+            if (current.isNotEmpty() &&
+                (current.size >= batchLimit || currentBytes + size > PUSH_BYTE_BUDGET)
+            ) {
+                flush()
+            }
+            current += row
+            currentBytes += size
+        }
+        flush()
+        return result
     }
 
     // ── The one merge call ─────────────────────────────────────────────────────────────────────
@@ -394,6 +514,7 @@ class SyncEngine(
         remote: SyncRecord,
         seq: Long,
         remoteCreatedAt: Long?,
+        remoteMeta: String?,
     ): Phase {
         val stored = store.load(remote.type, remote.uuid)
         val result = Merge.merge(stored?.asLocalRecord(), remote)
@@ -429,7 +550,7 @@ class SyncEngine(
             is MergeResult.Applied -> {
                 write(
                     result.record, result.dirty, seq, stored?.contentBaseline, remote,
-                    copy = null, remoteCreatedAt = remoteCreatedAt,
+                    copy = null, remoteCreatedAt = remoteCreatedAt, remoteMeta = remoteMeta,
                 )
                 Phase(PassStats(applied = 1), null)
             }
@@ -444,6 +565,7 @@ class SyncEngine(
                     result.record, result.dirty, seq, stored?.contentBaseline, remote,
                     copy = if (existing == null) result.copy else null,
                     remoteCreatedAt = remoteCreatedAt,
+                    remoteMeta = remoteMeta,
                 )
                 Phase(PassStats(applied = 1, conflictCopies = if (existing == null) 1 else 0), null)
             }
@@ -458,6 +580,7 @@ class SyncEngine(
         agreed: SyncRecord,
         copy: SyncRecord?,
         remoteCreatedAt: Long?,
+        remoteMeta: String?,
     ) {
         store.applyMerged(
             MergedWrite(
@@ -474,6 +597,10 @@ class SyncEngine(
                 // NEW record minted here, so it is not covered by this and keeps taking its own
                 // creation time from the body it preserves.
                 remoteCreatedAt = remoteCreatedAt,
+                // Unlike `remoteCreatedAt` this is not first-receipt-only: `meta` is mutable, so
+                // an existing row takes the incoming value. Null means the payload carried none
+                // and the store keeps what it has. See `MergedWrite.remoteMeta`.
+                remoteMeta = remoteMeta,
             )
         )
     }
@@ -519,8 +646,16 @@ class SyncEngine(
          * a record type or changes a payload's shape, and never otherwise: every device that has
          * pulled under a lower number re-pulls its whole account once, which is cheap for a small
          * library and is not free for a large one.
+         *
+         * `3` is `RecordType.ATTACHMENT`. A device on the `2` build sees `recType = "attachment"`,
+         * cannot map it, and skips it as `RecordFault.UNKNOWN_TYPE` -- counted as `ignored`, cursor
+         * still advancing, account not halted. That graceful skip is also what makes the bump
+         * mandatory: the cursor sails past every attachment record while the device is on `2`, so
+         * without a generation change to re-pull from 0 after the upgrade, those attachments would
+         * be invisible on that device permanently. `2` was `RecordType.SKETCH`, for the same
+         * reason.
          */
-        const val DATA_VERSION = 2
+        const val DATA_VERSION = 3
 
         /** The server refuses a batch of more than 64 items. */
         const val MAX_BATCH_LIMIT = 64
@@ -542,6 +677,43 @@ class SyncEngine(
          * `generateArk()` creates — and continuing means the user finds out weeks later.
          */
         const val UNREADABLE_RECORD_LIMIT = 5
+
+        /**
+         * How many estimated payload bytes one push batch may carry.
+         *
+         * 3 MiB against the server's 8 MiB `maxRequestBytes`: base64 takes 3 MiB to 4 MiB and the
+         * JSON around it is small, so the margin is a factor of two. That margin is what lets
+         * [RecordSize] be an estimate rather than an exact count.
+         */
+        const val PUSH_BYTE_BUDGET = 3 * 1024 * 1024
+
+        /**
+         * A record estimating above this is pushed in a batch of its own.
+         *
+         * Not a performance tuning knob -- an attribution mechanism. A `400` names no item, so the
+         * only way to learn *which* record a server refused is to have sent one. Every record that
+         * could plausibly be refused for its size travels alone, which makes
+         * [TransportFault.REJECTED] attributable and makes skipping it safe.
+         *
+         * 128 KiB is half the 256 KiB envelope cap of a server that has not been upgraded for
+         * attachments yet (spec §4), not the cap itself. A record estimating just under the cap
+         * would otherwise still ride in a shared batch, and its real envelope -- estimate plus
+         * JSON scaffolding plus rounding up to the padding bucket -- can cross the cap while it is
+         * still sharing one, which is a `400` that is not attributable and defers the whole batch
+         * instead of skipping the one record. Halving leaves enough headroom that padding,
+         * scaffolding and any residual estimate error cannot carry a record over the line while it
+         * still has company.
+         */
+        const val LARGE_RECORD_BYTES = 128 * 1024
+
+        /**
+         * How many rejected-record keys [rejectedThisSession] holds at once.
+         *
+         * A few hundred is enormous for what this guards against -- an interim state before a
+         * server understands attachments, on an account with at most a handful of devices -- and
+         * small enough that the set is never a memory concern.
+         */
+        const val MAX_REMEMBERED_REJECTIONS = 256
 
         private fun keyOf(type: RecordType, uuid: String): String = "${type.wireKey}:$uuid"
     }

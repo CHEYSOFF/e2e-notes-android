@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import my.cheysoff.core_domain.model.AttachmentData
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.model.NoteContentFormat
@@ -20,6 +21,7 @@ import my.cheysoff.core_domain.model.NotesSortOrder
 import my.cheysoff.core_domain.model.SketchData
 import my.cheysoff.core_domain.repository.NotesRepository
 import my.cheysoff.core_domain.sketch.sketchesForDisplay
+import my.cheysoff.desktop.store.DesktopAttachments
 import my.cheysoff.desktop.store.DesktopSketches
 import java.util.UUID
 
@@ -42,6 +44,11 @@ class NotesWorkspaceModel(
      * separate, optional dependency rather than a widening of [NotesRepository].
      */
     private val sketches: DesktopSketches? = null,
+    /**
+     * Null on the preview/screenshot build, for the exact same reason [sketches] is -- see
+     * [DesktopAttachments]'s own KDoc.
+     */
+    private val attachments: DesktopAttachments? = null,
     private val now: () -> Long = { System.currentTimeMillis() },
     private val newId: () -> String = { UUID.randomUUID().toString() },
     /**
@@ -84,6 +91,17 @@ class NotesWorkspaceModel(
                     .collect { list -> _state.value = _state.value.copy(sketches = sketchesForDisplay(list)) }
             }
         }
+
+        // The exact mirror of the sketches subscription above: its own live query, its own
+        // flatMapLatest keyed on the selection so switching notes drops the previous note's
+        // subscription rather than layering a second one on top.
+        val attachmentsPort = attachments
+        if (attachmentsPort != null) {
+            scope.launch {
+                selectedNoteAttachments(attachmentsPort)
+                    .collect { list -> _state.value = _state.value.copy(attachments = list) }
+            }
+        }
     }
 
     // ---------------------------------------------------------------- list & folders
@@ -96,7 +114,9 @@ class NotesWorkspaceModel(
         // Flush before switching: the debounce may still be holding the outgoing note's last few
         // keystrokes, and loadDraft is about to replace the draft that holds them.
         flushPendingSave()
-        _state.value = recompute(_state.value.copy(selectedNoteId = noteId))
+        // A viewer left open on the outgoing note's photo must not silently persist over the
+        // incoming note -- see WorkspaceUiState.viewingAttachmentId's own KDoc.
+        _state.value = recompute(_state.value.copy(selectedNoteId = noteId, viewingAttachmentId = null))
     }
 
     /**
@@ -122,7 +142,7 @@ class NotesWorkspaceModel(
             updatedAt = timestamp,
         )
         latestNotes = listOf(note) + latestNotes
-        _state.value = recompute(_state.value.copy(selectedNoteId = note.id))
+        _state.value = recompute(_state.value.copy(selectedNoteId = note.id, viewingAttachmentId = null))
         scope.launch { repository.saveNote(note) }
         return note.id
     }
@@ -132,7 +152,9 @@ class NotesWorkspaceModel(
         autosaveJob?.cancel()
         val draft = _state.value.editor
         latestNotes = latestNotes.filterNot { it.id == id }
-        _state.value = recompute(_state.value.copy(selectedNoteId = null, saveStatus = SaveStatus.Idle))
+        _state.value = recompute(
+            _state.value.copy(selectedNoteId = null, saveStatus = SaveStatus.Idle, viewingAttachmentId = null),
+        )
         scope.launch {
             // A note that was created and left blank must never reach Trash — it would be a row
             // the user has to clean up for having pressed Ctrl+N by accident.
@@ -161,6 +183,33 @@ class NotesWorkspaceModel(
         val port = sketches ?: return
         _state.value = _state.value.copy(sketches = _state.value.sketches.filterNot { it.id == id })
         scope.launch { port.deleteSketch(id) }
+    }
+
+    // ---------------------------------------------------------------- attachments
+
+    /**
+     * Deletes one attachment. There is no undo and no Trash for an attachment (`TrashEntryKind` is
+     * `{NOTE, FOLDER}`), so the confirmation [my.cheysoff.desktop.ui.attachment.AttachmentViewer]
+     * shows before invoking this is the only safety net -- the exact mirror of [deleteSketch].
+     *
+     * Removed from [WorkspaceUiState.attachments] immediately rather than waiting for the
+     * repository's own echo, for the same reason [deleteSketch] does: the row the user just deleted
+     * must not still be on screen while the write is in flight.
+     */
+    fun deleteAttachment(id: String) {
+        val port = attachments ?: return
+        _state.value = _state.value.copy(attachments = _state.value.attachments.filterNot { it.id == id })
+        scope.launch { port.deleteAttachment(id) }
+    }
+
+    /** Opens the full-screen viewer on [id]. See [WorkspaceUiState.viewingAttachmentId]. */
+    fun openAttachmentViewer(id: String) {
+        _state.value = _state.value.copy(viewingAttachmentId = id)
+    }
+
+    /** Closes the full-screen viewer, whichever attachment it was showing. */
+    fun closeAttachmentViewer() {
+        _state.value = _state.value.copy(viewingAttachmentId = null)
     }
 
     // ---------------------------------------------------------------- editing
@@ -261,6 +310,7 @@ class NotesWorkspaceModel(
                 selectedNoteId = noteId,
                 selectedFolderId = if (folderStillShowsIt) _state.value.selectedFolderId else null,
                 search = SearchState(),
+                viewingAttachmentId = null,
             )
         )
     }
@@ -310,6 +360,15 @@ class NotesWorkspaceModel(
         state.map { it.selectedNoteId }
             .distinctUntilChanged()
             .flatMapLatest { id -> if (id == null) flowOf(emptyList<SketchData>()) else port.getSketchesForNote(id) }
+
+    /** The exact mirror of [selectedNoteSketches], for [DesktopAttachments] instead. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun selectedNoteAttachments(port: DesktopAttachments) =
+        state.map { it.selectedNoteId }
+            .distinctUntilChanged()
+            .flatMapLatest { id ->
+                if (id == null) flowOf(emptyList<AttachmentData>()) else port.getAttachmentsForNote(id)
+            }
 
     private fun currentRows(): List<NoteRowUi> = latestNotes.toRows(latestFolders)
 

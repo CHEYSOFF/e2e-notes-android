@@ -160,7 +160,11 @@ class RecordPayloadCodecTest {
     fun `an unknown record type decodes as UnknownType, not Malformed`() {
         // See RecordPayloadUnknownTypeTest for why: a type this build has never heard of is
         // evidence of nothing, and must not be treated as damage.
-        val text = encoded().replaceFirst("\"recType\":\"note\"", "\"recType\":\"attachment\"")
+        // NOT a plausible feature name -- see UNIMPLEMENTED_TEST_RECORD_TYPE's KDoc. This test read
+        // "attachment" until attachments shipped, at which point it silently stopped testing the
+        // unknown-type path at all, which is the exact failure that constant exists to prevent.
+        val text = encoded()
+            .replaceFirst("\"recType\":\"note\"", "\"recType\":\"$UNIMPLEMENTED_TEST_RECORD_TYPE\"")
         assertTrue(decode(text) is PayloadResult.UnknownType)
     }
 

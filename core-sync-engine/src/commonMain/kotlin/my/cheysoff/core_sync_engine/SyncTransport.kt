@@ -88,6 +88,20 @@ sealed interface IncomingRecord {
          * Null for a record whose payload omitted it, which the store then handles as before.
          */
         val createdAt: Long?,
+        /**
+         * The opaque `meta` an attachment's payload carried, or null for a record type that has no
+         * such column (every type but `ATTACHMENT`) and for a payload that omitted it.
+         *
+         * Beside the record for the same structural reason as [createdAt] and a different
+         * substantive one: `meta` is a reserved escape hatch with no clock of its own
+         * (`PayloadFields.META`), so it is not in `RecordType.fields` and `SyncRecords.fromPayload`
+         * cannot carry it. It reaches the store on `MergedWrite.remoteMeta`.
+         *
+         * Defaulted to null so that a test transport constructing records by hand does not have to
+         * think about a column no test record has. Production has exactly one producer of this
+         * class -- `EnvelopeSyncTransport` -- and it passes the real value.
+         */
+        val meta: String? = null,
     ) : IncomingRecord
 
     /** The envelope did not survive one of §4's three checks. */
@@ -187,12 +201,22 @@ sealed interface PushAck {
      *   a legal response. Without it the engine can only leave the row dirty for the next pass,
      *   which pulls the blocking version the ordinary way.
      * @param currentSeq the blocking version's `seq`, or `0` when [current] is null.
+     * @param currentMeta the opaque `meta` [current]'s payload carried, or null for a record type
+     *   without the column and for a null [current]. Travels beside [current] for the same reason
+     *   `IncomingRecord.Opened.meta` does -- it is not a clocked field, so the `SyncRecord` cannot
+     *   carry it -- and it is not decoration. A conflict merge in which any local field wins leaves
+     *   the row dirty (`Merge`'s `dirty = merged != remote.normalized()`), and the next push
+     *   re-serialises `meta` from the local row. Without this the local row still holds the stale
+     *   value and that push overwrites the server's newer `meta` account-wide -- the one path on
+     *   which "a build that does not understand `meta` preserves it byte-for-byte" would otherwise
+     *   be false.
      */
     class Conflicted(
         override val type: RecordType,
         override val uuid: String,
         val current: SyncRecord?,
         val currentSeq: Long,
+        val currentMeta: String? = null,
     ) : PushAck
 }
 
@@ -238,6 +262,18 @@ enum class TransportFault {
      * account is empty", and the next pass is a mass delete.
      */
     CURSOR_AHEAD_OF_SERVER,
+
+    /**
+     * A `400` the server will give again for the same bytes: an envelope over its cap, a payload it
+     * refuses to parse. Retrying is pointless and retrying forever is worse -- before this existed,
+     * one record the server would not take stopped every other record on the device from ever being
+     * pushed again, with nothing in the UI saying so.
+     *
+     * The engine only ever attributes this to a record when the batch held exactly one; see
+     * [SyncEngine.LARGE_RECORD_BYTES] for why the batches that can provoke it are built to hold
+     * one.
+     */
+    REJECTED,
 }
 
 /**

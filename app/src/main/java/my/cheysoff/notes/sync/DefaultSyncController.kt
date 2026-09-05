@@ -169,6 +169,7 @@ class DefaultSyncController @Inject constructor(
                     credentials = DeviceCredentials(accountId, deviceId),
                     codec = RecordCodec(keys),
                     createdAtOf = factory::createdAtOf,
+                    metaOf = factory::metaOf,
                 ),
                 // Every clock this device is shown is folded into the generator that mints local
                 // writes. Without it a device could mint its next edit BELOW a record it has
@@ -245,6 +246,7 @@ class DefaultSyncController @Inject constructor(
                 conflictCopies = outcome.stats.conflictCopies,
                 unreadable = outcome.stats.unreadable,
                 ignored = outcome.stats.ignored,
+                rejected = outcome.stats.rejected,
             )
         )
 

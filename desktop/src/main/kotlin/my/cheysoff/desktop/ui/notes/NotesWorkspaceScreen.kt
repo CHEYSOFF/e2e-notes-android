@@ -45,6 +45,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import my.cheysoff.desktop.ui.attachment.AttachmentViewer
 import my.cheysoff.desktop.ui.state.NotesWorkspaceModel
 import my.cheysoff.desktop.ui.state.WorkspaceUiState
 import my.cheysoff.desktop.ui.theme.AccentIndigo
@@ -147,6 +148,8 @@ fun NotesWorkspaceScreen(
                         onRemoveChecklistItem = model::removeChecklistItem,
                         sketches = state.sketches,
                         onDeleteSketch = model::deleteSketch,
+                        attachments = state.attachments,
+                        onAttachmentTapped = { model.openAttachmentViewer(it.id) },
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -160,6 +163,22 @@ fun NotesWorkspaceScreen(
                 onQueryChange = model::setSearchQuery,
                 onOpenHit = model::openSearchHit,
                 onDismiss = model::closeSearch,
+            )
+        }
+
+        // A full-bleed overlay in this window's own root, exactly like SearchPalette above --
+        // see AttachmentViewer's own KDoc for why this is not a second Window. Looked up from
+        // state.attachments rather than held as its own AttachmentData so a delete or a sync
+        // update to the row is reflected immediately; a stale id (the row vanished from under the
+        // viewer) simply renders nothing rather than a stale photo.
+        state.attachments.firstOrNull { it.id == state.viewingAttachmentId }?.let { attachment ->
+            AttachmentViewer(
+                attachment = attachment,
+                onClose = model::closeAttachmentViewer,
+                onDelete = { id ->
+                    model.closeAttachmentViewer()
+                    model.deleteAttachment(id)
+                },
             )
         }
     }

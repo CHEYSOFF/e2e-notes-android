@@ -1,5 +1,6 @@
 package my.cheysoff.core_sync_codec
 
+import my.cheysoff.core_crypto.sync.Base64Url
 import my.cheysoff.core_domain.sync.FieldClocks
 import my.cheysoff.core_domain.sync.FieldValue
 import my.cheysoff.core_domain.sync.RecordType
@@ -18,7 +19,7 @@ import my.cheysoff.core_domain.sync.SyncRecord
  * side or the other, so the two halves physically cannot come from different devices — and this
  * file is where the two columns are packed into one and unpacked again.
  *
- * ## `createdAt` crosses the wire and does not reach the merge
+ * ## `createdAt` and `meta` cross the wire and do not reach the merge
  *
  * The payload carries `createdAt`, because §5.1 says so and because the desktop writes it.
  * `SyncRecord` does not: `FieldClocks.NOTE_FIELDS` excludes it deliberately, on the grounds that no
@@ -31,14 +32,28 @@ import my.cheysoff.core_domain.sync.SyncRecord
  * `docs/design/e2e-sync-phase3-plan.md` §5.1, whose field list includes `createdAt` and which is
  * therefore the place to start if this is ever closed properly (by giving `createdAt` a clock and
  * a place in `RecordType.fields`).
+ *
+ * An attachment's `meta` is the second column with that shape, for a different reason: it is a
+ * reserved opaque escape hatch (see `PayloadFields.META`) that this build never writes anything but
+ * `""` into. It is supplied to [toPayload] by the caller and dropped by [fromPayload], exactly as
+ * `createdAt` is, and reaches the store beside the record on `IncomingRecord.Opened.meta` and
+ * `MergedWrite.remoteMeta`.
  */
 object SyncRecords {
 
     /**
-     * The payload for [record], with [createdAt] — the one column the merge does not model —
-     * supplied by the caller.
+     * The payload for [record], with [createdAt] and [meta] — the two columns the merge does not
+     * model — supplied by the caller.
+     *
+     * @param meta an attachment's opaque `meta` column, carried verbatim. Ignored for every other
+     *   record type, which has no such column. It defaults to `""` because that is what this build
+     *   writes, and because the wire-format test pins the note and folder encodings against the
+     *   two-argument call; a caller pushing an attachment must pass the value the row actually
+     *   holds, or a future build's caption is silently replaced with an empty string on every
+     *   device this one pushes to. `EnvelopeSyncTransport` takes a `metaOf` provider for exactly
+     *   that reason, the way it takes `createdAtOf`.
      */
-    fun toPayload(record: SyncRecord, createdAt: Long): RecordPayload {
+    fun toPayload(record: SyncRecord, createdAt: Long, meta: String = ""): RecordPayload {
         // Normalised on the way out, so a clock that merely equals the row clock is written
         // implicitly rather than as an entry. Two devices agreeing on a record's state while
         // disagreeing on which of the two legal encodings to use would compare unequal on every
@@ -48,6 +63,7 @@ object SyncRecords {
         for (column in PayloadFields.columnsOf(normalized.type)) {
             columns[column] = when (column) {
                 PayloadFields.CREATED_AT -> createdAt.toString()
+                PayloadFields.META -> meta
                 else -> {
                     val (field, index) = COLUMN_TO_FIELD.getValue(column)
                     normalized.valueOf(field).parts[index]
@@ -79,6 +95,22 @@ object SyncRecords {
         for (column in NUMERIC_COLUMNS) {
             val text = payload.fields[column] ?: continue
             if (text.toLongOrNull() == null) return null
+        }
+        // Refused for the same reason, one step further: an image column that is not base64url
+        // cannot become bytes, and substituting an empty array would put a blank grey box in
+        // someone's note on every device with nothing reporting a problem. Checked here rather
+        // than left to `RecordRows` so that the refusal happens once, at the boundary, and the
+        // store's own decode is unreachable rather than merely unlikely.
+        for (column in BASE64_COLUMNS) {
+            // Absent means "this record type has no such column" and is skipped; **present and
+            // null is refused**, unlike the nullable numeric columns above. `bytes` and
+            // `thumbBytes` are not nullable in this schema -- neither encoder can produce a null
+            // one -- so a peer that sends `"bytes": null` is sending a record this build cannot
+            // render, and defaulting it to an empty array is the blank-grey-box outcome the
+            // decode check exists to prevent.
+            if (column !in payload.fields) continue
+            val text = payload.fields[column] ?: return null
+            if (Base64Url.decode(text) == null) return null
         }
         val fields = LinkedHashMap<String, FieldValue>(payload.recType.fields.size)
         for (field in payload.recType.fields) {
@@ -119,6 +151,14 @@ object SyncRecords {
         FieldClocks.ANCHOR to listOf(PayloadFields.ANCHOR),
         FieldClocks.ORDER to listOf(PayloadFields.ORDER),
         FieldClocks.STROKES to listOf(PayloadFields.STROKES),
+        // Four columns, one value, one clock -- so a merge can never describe one device's pixels
+        // with the other device's dimensions. See `RecordType.partCount`.
+        FieldClocks.IMAGE to listOf(
+            PayloadFields.BYTES, PayloadFields.MIME_TYPE, PayloadFields.WIDTH, PayloadFields.HEIGHT,
+        ),
+        FieldClocks.THUMB to listOf(
+            PayloadFields.THUMB_BYTES, PayloadFields.THUMB_WIDTH, PayloadFields.THUMB_HEIGHT,
+        ),
     )
 
     /**
@@ -139,7 +179,15 @@ object SyncRecords {
     private val NUMERIC_COLUMNS = listOf(
         PayloadFields.CREATED_AT, PayloadFields.UPDATED_AT, PayloadFields.DELETED_AT,
         PayloadFields.COLOR_ARGB, PayloadFields.ANCHOR, PayloadFields.ORDER,
+        PayloadFields.WIDTH, PayloadFields.HEIGHT,
+        PayloadFields.THUMB_WIDTH, PayloadFields.THUMB_HEIGHT,
     )
+
+    /**
+     * The columns that must be present, non-null and decodable as unpadded base64url on any record
+     * type that declares them. See [fromPayload].
+     */
+    private val BASE64_COLUMNS = listOf(PayloadFields.BYTES, PayloadFields.THUMB_BYTES)
 
     /** [FIELD_TO_COLUMNS] inverted: column to (field, index within the field's value). */
     private val COLUMN_TO_FIELD: Map<String, Pair<String, Int>> =
@@ -148,7 +196,7 @@ object SyncRecords {
         }.toMap()
 
     /**
-     * Every column of every record type is either `createdAt` or covered by exactly one field.
+     * Every column of every record type is `createdAt`, `meta`, or covered by exactly one field.
      *
      * Checked here rather than in a test because the two maps above and `PayloadFields` are three
      * lists of the same strings, and a column added to one and not the others would otherwise
@@ -158,7 +206,8 @@ object SyncRecords {
     init {
         RecordType.entries.forEach { type ->
             val covered = type.fields.flatMap { FIELD_TO_COLUMNS.getValue(it) }.toSet()
-            val expected = PayloadFields.columnsOf(type) - PayloadFields.CREATED_AT
+            val expected = PayloadFields.columnsOf(type) -
+                PayloadFields.CREATED_AT - PayloadFields.META
             check(covered == expected) { "$type: columns $covered do not cover $expected" }
         }
     }

@@ -15,10 +15,13 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * stale the moment the next migration lands — which is how Migration4to5Test came to be broken
  * without anyone noticing.
  */
-internal const val NOTE_DATABASE_VERSION = 10
+internal const val NOTE_DATABASE_VERSION = 11
 
 @Database(
-    entities = [NoteEntity::class, FolderEntity::class, SyncStateEntity::class, SketchEntity::class],
+    entities = [
+        NoteEntity::class, FolderEntity::class, SyncStateEntity::class, SketchEntity::class,
+        AttachmentEntity::class,
+    ],
     version = NOTE_DATABASE_VERSION,
     exportSchema = true,
 )
@@ -27,6 +30,7 @@ abstract class NoteDatabase : RoomDatabase() {
     abstract val folderDao: FolderDao
     abstract val syncStateDao: SyncStateDao
     abstract val sketchDao: SketchDao
+    abstract val attachmentDao: AttachmentDao
 
     companion object {
         /**
@@ -281,6 +285,63 @@ abstract class NoteDatabase : RoomDatabase() {
             }
         }
 
+        // v10 -> v11: the `attachments` table. A plain CREATE TABLE — additive, nothing to
+        // backfill, because the table is brand new and empty on every install that reaches it.
+        //
+        // Mirrors `sketches` field for field except the payload columns: `strokes` (text) becomes
+        // `bytes`/`thumbBytes` (blobs) plus the geometry each needs (`width`/`height`,
+        // `thumbWidth`/`thumbHeight`) and `mimeType`. See `docs/design/image-attachments.md` §5 for
+        // why there is no `byteCount` column (`length(bytes)` answers it) and no original-resolution
+        // copy.
+        //
+        // Same two deliberate choices `MIGRATION_9_10` made, restated because this is a historical
+        // record read on its own:
+        //  - The SQL column is `sortOrder`, not `order` — a SQL keyword, and already the wire
+        //    protocol's name for this field (see `FieldClocks.ORDER`). Only `AttachmentEntity
+        //    .toDomain` needs to know the two names are the same value.
+        //  - `hlcMs`/`hlcCounter`/`hlcNode` carry no DEFAULT: the table has no rows yet at the
+        //    moment this CREATE TABLE runs, so there is nothing to backfill and nothing for a
+        //    default to paper over. `dirty` DEFAULTs to 1 regardless — not backfill logic, but the
+        //    same "assume every row is unpublished" reasoning `MIGRATION_6_7` gives in full. It is
+        //    pinned in three places that all have to agree: this DDL, `AttachmentEntity`'s Kotlin
+        //    default, and its `@ColumnInfo(defaultValue = "1")`.
+        //
+        // Indexed on noteId (the by-note lookup), with no FOREIGN KEY and no ON DELETE CASCADE —
+        // see `AttachmentEntity`'s KDoc for why a cascade would be wrong here.
+        //
+        // `meta` is an opaque escape hatch, `DEFAULT ''`, pinned the same three-place way as
+        // `dirty`: this DDL, `AttachmentEntity`'s Kotlin default and its own
+        // `@ColumnInfo(defaultValue = "''")`. It exists because this sync protocol cannot add a
+        // column to a record type once it has shipped — `RecordPayloadCodec.decodeOrThrow` checks
+        // a payload's key set for exact equality, so an unexpected column halts the whole account
+        // on an older device rather than being ignored. `meta` is carried, empty, from the start so
+        // a later build can put a caption or similar inside it without ever touching this table's
+        // column set again. See `AttachmentEntity.meta`'s own KDoc for the full argument.
+        //
+        // Every literal below is written out by hand rather than built from a Kotlin constant
+        // (e.g. an attachment size cap): this migration's SQL is a historical statement about what
+        // schema 10 -> 11 created, and it must stay true forever regardless of what any constant
+        // becomes later.
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `attachments` (" +
+                        "`uuid` TEXT NOT NULL, `noteId` TEXT NOT NULL, `anchor` INTEGER NOT NULL, " +
+                        "`sortOrder` INTEGER NOT NULL, `mimeType` TEXT NOT NULL, " +
+                        "`width` INTEGER NOT NULL, `height` INTEGER NOT NULL, `bytes` BLOB NOT NULL, " +
+                        "`thumbWidth` INTEGER NOT NULL, `thumbHeight` INTEGER NOT NULL, " +
+                        "`thumbBytes` BLOB NOT NULL, `createdAt` INTEGER NOT NULL, " +
+                        "`updatedAt` INTEGER NOT NULL, `isDeleted` INTEGER NOT NULL DEFAULT 0, " +
+                        "`deletedAt` INTEGER, `hlcMs` INTEGER NOT NULL, `hlcCounter` INTEGER NOT NULL, " +
+                        "`hlcNode` TEXT NOT NULL, `fieldHlc` TEXT NOT NULL DEFAULT '', " +
+                        "`dirty` INTEGER NOT NULL DEFAULT 1, `lastSyncedSeq` INTEGER NOT NULL DEFAULT 0, " +
+                        "`meta` TEXT NOT NULL DEFAULT '', " +
+                        "PRIMARY KEY(`uuid`))"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_attachments_noteId` ON `attachments` (`noteId`)")
+            }
+        }
+
         /**
          * Every migration above, in order. `DataModule` spreads this into Room's builder instead
          * of listing the fields a second time, so the chain the app ships with cannot be missing a
@@ -308,6 +369,7 @@ abstract class NoteDatabase : RoomDatabase() {
             MIGRATION_7_8,
             MIGRATION_8_9,
             MIGRATION_9_10,
+            MIGRATION_10_11,
         )
     }
 }

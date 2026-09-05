@@ -118,7 +118,7 @@ class AndroidPushesToServerTest {
             .addMigrations(*NoteDatabase.ALL_MIGRATIONS)
             .build()
         val clock = SyncClock(node = { "androiddevice" })
-        val repository = RoomNotesRepository(db.noteDao, db.folderDao, db.sketchDao, db, clock)
+        val repository = RoomNotesRepository(db.noteDao, db.folderDao, db.sketchDao, db.attachmentDao, db, clock)
 
         val noteId = UUID.randomUUID().toString()
         repository.saveNote(
@@ -145,6 +145,7 @@ class AndroidPushesToServerTest {
                 credentials = DeviceCredentials(accountId, myDeviceId),
                 codec = codec,
                 createdAtOf = factory::createdAtOf,
+                metaOf = factory::metaOf,
             ),
             clock = ClockObserver { seen -> clock.observe(seen) },
         )

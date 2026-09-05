@@ -8,6 +8,9 @@ import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.os.Build
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -30,6 +33,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -43,6 +47,7 @@ import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.automirrored.outlined.ArrowBackIos
 import androidx.compose.material.icons.automirrored.outlined.FormatListBulleted
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.AddPhotoAlternate
 import androidx.compose.material.icons.outlined.Brush
 import androidx.compose.material.icons.outlined.Checklist
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -58,6 +63,7 @@ import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.TextFields
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -126,6 +132,8 @@ import my.cheysoff.core_ui.theme.ToolbarDark
 import my.cheysoff.core_domain.model.TrashPolicy
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_ui.theme.folderAccentColor
+import my.cheysoff.core_domain.model.AttachmentData
+import my.cheysoff.core_domain.model.AttachmentPreview
 import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.core_domain.model.SketchData
 import my.cheysoff.core_domain.sketch.DisplaySketch
@@ -139,6 +147,8 @@ import my.cheysoff.feature_notes.model.single.SingleNoteScreenState
 import my.cheysoff.feature_notes.model.single.buildNoteShareText
 import my.cheysoff.feature_notes.model.single.noteShareTitle
 import androidx.activity.compose.BackHandler
+import my.cheysoff.feature_notes.ui.attachment.AttachmentSection
+import my.cheysoff.feature_notes.ui.attachment.AttachmentViewerScreen
 import my.cheysoff.feature_notes.ui.folder.FolderChooser
 import my.cheysoff.feature_notes.ui.folder.FolderRef
 import my.cheysoff.feature_notes.ui.sketch.SketchCanvasScreen
@@ -154,7 +164,16 @@ private const val CONTENT_SERIALIZE_DEBOUNCE_MS = 300L
 @Composable
 fun SingleNoteScreen(
     state: SingleNoteScreenState,
-    onIntent: (SingleNoteIntent) -> Unit
+    onIntent: (SingleNoteIntent) -> Unit,
+    // The one seam this screen uses to read an attachment's full bytes -- see
+    // `SingleNoteViewModel.attachment`'s own KDoc for why this is a direct suspend call rather
+    // than another `SingleNoteIntent`: everything this screen otherwise holds is
+    // `AttachmentPreview`, and routing a one-shot read through the same intent/state channel as
+    // every mutation would mean parking up to 1 MiB of bytes in `SingleNoteScreenState` for the
+    // one screen (the viewer) that ever needs them, rather than letting it ask for exactly the id
+    // it is showing.
+    loadAttachment: suspend (String) -> AttachmentData?,
+    onColorMixed: (Long) -> Unit,
 ) {
     val focusManager = LocalFocusManager.current
     val isImeVisible = WindowInsets.isImeVisible
@@ -224,6 +243,28 @@ fun SingleNoteScreen(
     // body for anchoring) that only this composable holds.
     var sketchTarget by remember { mutableStateOf<SketchEditTarget?>(null) }
 
+    // Id of the attachment the full-screen viewer below is currently showing in place of this
+    // editor, or null when the editor is showing. Unlike sketchTarget, opening this needs nothing
+    // this composable holds -- a rail tile already carries its own AttachmentPreview -- but it is
+    // hoisted here anyway, for the same reason sketchTarget is: the viewer and the sketch canvas
+    // are mutually exclusive full-screen overlays of this one editor, so one composable has to own
+    // which (if either) is on top.
+    var viewingAttachmentId by remember { mutableStateOf<String?>(null) }
+
+    // Hoisted above the canvas and viewer branches below, both of which `return` and so unmount the
+    // whole editor. A `rememberScrollState()` owned by `NoteEditor` is forgotten by that unmount, so
+    // closing a drawing or a photo used to drop the reader back to the top of the note -- worst on
+    // exactly the notes worth scrolling. Living out here, it outlives both branches.
+    val editorScrollState = rememberScrollState()
+
+    // No runtime permission and no manifest permission -- that is the whole reason this contract is
+    // used rather than ACTION_GET_CONTENT or a MediaStore query wired to READ_MEDIA_IMAGES. A null
+    // uri means the user backed out of the picker without choosing anything, which is silently a
+    // no-op, not a failure.
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+    ) { uri -> if (uri != null) currentOnIntent(SingleNoteIntent.ImportAttachment(uri.toString())) }
+
     // The canvas' capture state (SketchCaptureState) and sketchTarget above are both plain
     // `remember`, and the manifest locks neither `configChanges` nor `screenOrientation` (see
     // AndroidManifest.xml), so an activity recreation -- a rotation, most obviously -- destroys
@@ -252,9 +293,10 @@ fun SingleNoteScreen(
 
     // System back must run the same flush/discard logic as the top-bar arrow — a plain nav pop
     // would skip the final save and leave an abandoned empty note behind. Disabled while the sketch
-    // canvas covers the screen: back must close THAT (with its own discard confirmation — see
-    // SketchCanvasScreen's own BackHandler) rather than popping the whole note out from under it.
-    BackHandler(enabled = sketchTarget == null) { onBack() }
+    // canvas OR the attachment viewer covers the screen: back must close THAT overlay (each owns
+    // its own BackHandler -- see SketchCanvasScreen's and AttachmentViewerScreen's own KDoc) rather
+    // than popping the whole note out from under it.
+    BackHandler(enabled = sketchTarget == null && viewingAttachmentId == null) { onBack() }
 
     // Nav-away is already covered by onBack; this catches the editor vanishing because the activity
     // is *recreated* (rotation, night-mode/locale change, "don't keep activities" off) with a
@@ -332,11 +374,30 @@ fun SingleNoteScreen(
         val target = sketchTarget
         SketchCanvasScreen(
             initialSketch = (target as? SketchEditTarget.Existing)?.sketch,
+            recentColors = state.recentSketchColors,
+            onColorMixed = onColorMixed,
             onDone = { sketch ->
                 onIntent(SingleNoteIntent.SketchSaved((target as? SketchEditTarget.Existing)?.id, sketch))
                 sketchTarget = null
             },
             onCancel = { sketchTarget = null },
+        )
+        return
+    }
+
+    // Same shape as the sketch canvas branch just above, for the same reason: this covers the
+    // whole editor rather than sitting inside the Scaffold, and it is the branch responsible for
+    // clearing viewingAttachmentId (via onClose/onDeleted), which is exactly what makes the
+    // BackHandler above safe to disable while it's showing.
+    viewingAttachmentId?.let { id ->
+        AttachmentViewerScreen(
+            attachmentId = id,
+            loadAttachment = loadAttachment,
+            onClose = { viewingAttachmentId = null },
+            onDeleted = { deletedId ->
+                onIntent(SingleNoteIntent.AttachmentDeleted(deletedId))
+                viewingAttachmentId = null
+            },
         )
         return
     }
@@ -377,6 +438,7 @@ fun SingleNoteScreen(
             FormattingToolbar(
                 richTextState = richTextState,
                 accent = accent,
+                isImportingAttachment = state.isImportingAttachment,
                 onAddChecklistItem = {
                     val id = UUID.randomUUID().toString()
                     focusItemId = id
@@ -388,6 +450,14 @@ fun SingleNoteScreen(
                 onAddSketch = {
                     flushContent()
                     sketchTarget = SketchEditTarget.New
+                },
+                // Same reason: a brand-new attachment is anchored at the note's CURRENT block count
+                // (SingleNoteViewModel.importAttachment), read only once the picker returns.
+                onAddPhoto = {
+                    flushContent()
+                    photoPickerLauncher.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
                 },
             )
         },
@@ -406,6 +476,8 @@ fun SingleNoteScreen(
             // tap can only ever reach this callback for a card that rendered, and therefore decoded
             // cleanly, in the first place.
             onSketchTapped = { id, sketch -> sketchTarget = SketchEditTarget.Existing(id, sketch) },
+            onAttachmentTapped = { preview -> viewingAttachmentId = preview.id },
+            scrollState = editorScrollState,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues),
@@ -422,12 +494,13 @@ private fun NoteEditor(
     onSetFocusItem: (String?) -> Unit,
     onIntent: (SingleNoteIntent) -> Unit,
     onSketchTapped: (String, Sketch) -> Unit,
+    onAttachmentTapped: (AttachmentPreview) -> Unit,
+    scrollState: ScrollState,
     modifier: Modifier = Modifier,
 ) {
     val spacing = LocalSpacing.current
     val sw = LocalConfiguration.current.screenWidthDp
     val focusManager = LocalFocusManager.current
-    val scrollState = rememberScrollState()
     var showFolderChooser by remember { mutableStateOf(false) }
     val currentFolder = state.folders.firstOrNull { it.id == state.folderId }
 
@@ -520,6 +593,11 @@ private fun NoteEditor(
             sketches = state.sketches,
             onTapped = onSketchTapped,
             onIntent = onIntent,
+        )
+
+        AttachmentSection(
+            attachments = state.attachments,
+            onTapped = onAttachmentTapped,
         )
 
         Spacer(modifier = Modifier.height(140.dp))
@@ -1000,8 +1078,10 @@ private fun TopIcon(icon: ImageVector, desc: String, tint: Color, enabled: Boole
 private fun FormattingToolbar(
     richTextState: RichTextState,
     accent: Color,
+    isImportingAttachment: Boolean,
     onAddChecklistItem: () -> Unit,
     onAddSketch: () -> Unit,
+    onAddPhoto: () -> Unit,
 ) {
     var showStyles by remember { mutableStateOf(false) }
     val inactive = Color(0xFF9A9A9E)
@@ -1045,6 +1125,17 @@ private fun FormattingToolbar(
             }
             ToolIcon(Icons.Outlined.Checklist, "Checklist", inactive) { onAddChecklistItem() }
             ToolIcon(Icons.Outlined.Brush, "Add drawing", inactive) { onAddSketch() }
+            if (isImportingAttachment) {
+                Box(modifier = Modifier.size(34.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp,
+                        color = accent,
+                    )
+                }
+            } else {
+                ToolIcon(Icons.Outlined.AddPhotoAlternate, "Add photo", inactive) { onAddPhoto() }
+            }
         }
     }
 }

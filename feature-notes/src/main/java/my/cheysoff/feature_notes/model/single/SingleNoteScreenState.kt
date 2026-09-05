@@ -1,6 +1,7 @@
 package my.cheysoff.feature_notes.model.single
 
 import androidx.compose.runtime.Immutable
+import my.cheysoff.core_domain.model.AttachmentPreview
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.core_domain.model.SketchData
@@ -18,6 +19,16 @@ data class SingleNoteScreenState(
     // `SingleNoteViewModel.sortSketches`), the same rule the desktop applies, so both devices show
     // one note's drawings in the same order without exchanging anything about it.
     val sketches: List<SketchData> = emptyList(),
+    // The rail this screen doesn't render yet (Task 6 owns it) -- collected here regardless,
+    // because the blank-note discard guard in BackClicked needs to know whether one exists before
+    // it purges a note that would otherwise look empty. Always in display order already: sorted by
+    // anchor then id (see `SingleNoteViewModel.sortAttachments`), matching `sketches` above.
+    val attachments: List<AttachmentPreview> = emptyList(),
+    /** Colours recently mixed in the sketch canvas, most recent first. Device-local, never synced. */
+    val recentSketchColors: List<Long> = emptyList(),
+    // True while a picked photo is being decoded, downscaled and encoded off the main thread.
+    // Drives the toolbar's progress indication for `SingleNoteIntent.ImportAttachment`.
+    val isImportingAttachment: Boolean = false,
     val isPinned: Boolean = false,
     val isFavorite: Boolean = false,
     val folderId: String? = null,

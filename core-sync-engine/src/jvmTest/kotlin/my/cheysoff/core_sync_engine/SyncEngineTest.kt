@@ -436,6 +436,60 @@ class SyncEngineTest {
         assertEquals("mine", store.noteRow("n1")!!.record.text(FieldClocks.CONTENT))
     }
 
+    /**
+     * A push conflict's `meta` reaches the store, and this is data loss rather than latency if it
+     * does not.
+     *
+     * `Merge`'s `dirty = merged != remote.normalized()` means a conflict in which any local field
+     * wins leaves the row dirty -- as here, where the local title survives -- and a dirty row is
+     * pushed again on the next pass, re-serialising `meta` out of the local row. If the engine
+     * passed `remoteMeta = null` the store would keep the row's stale value and that re-push would
+     * overwrite the server's newer `meta` for every device on the account. Nothing else in this
+     * suite would notice, because `meta` is invisible to `SyncRecord` by construction.
+     */
+    @Test
+    fun `a rejected push carries the blocking version's meta to the store`() = runBlocking {
+        val store = RecordingStore()
+        // The local title is newer than the remote row, the local BODY is older than it. So the
+        // merge takes one field from each side: the result differs from the remote (the row stays
+        // dirty and will be pushed again -- the hazard) and differs from the local too (so this is
+        // an `Applied`, which is what reaches `applyMerged` at all). A merge where the local wins
+        // everything is a `NoChange` and never calls the store.
+        store.put(
+            stored(
+                note(
+                    uuid = "n1",
+                    title = "mine",
+                    content = "my body",
+                    rowClock = hlc(9),
+                    fieldClocks = mapOf(FieldClocks.CONTENT to hlc(1)),
+                ),
+                dirty = true,
+            ),
+        )
+        val blocking = note(uuid = "n1", title = "theirs", content = "their body", rowClock = hlc(5))
+        val transport = ScriptedTransport(
+            pushResponses = listOf(
+                PushResponse(
+                    listOf(
+                        PushAck.Conflicted(
+                            RecordType.NOTE, "n1", blocking, 5L,
+                            currentMeta = "written-by-a-newer-build",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        engine(store, transport).runPass()
+
+        assertTrue(
+            "the merge must leave the row dirty, or this is not the hazard under test",
+            store.noteRow("n1")!!.dirty,
+        )
+        assertEquals("written-by-a-newer-build", store.remoteMeta["n1"])
+    }
+
     /** The server refuses a batch of more than 64 items, so the engine never sends one. */
     @Test
     fun `a push is split into batches the server will accept`() = runBlocking {

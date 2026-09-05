@@ -42,6 +42,7 @@ class SyncStoreFactory @Inject constructor(
         noteDao = database.noteDao,
         folderDao = database.folderDao,
         sketchDao = database.sketchDao,
+        attachmentDao = database.attachmentDao,
         syncStateDao = database.syncStateDao,
         accountId = accountId,
         clockObserver = ClockObserver { syncClock.observe(it) },
@@ -58,6 +59,27 @@ class SyncStoreFactory @Inject constructor(
         RecordType.NOTE -> database.noteDao.noteRow(uuid)?.createdAt
         RecordType.FOLDER -> database.folderDao.folderRow(uuid)?.createdAt
         RecordType.SKETCH -> database.sketchDao.sketchRow(uuid)?.createdAt
+        RecordType.ATTACHMENT -> database.attachmentDao.attachmentRow(uuid)?.createdAt
+    }
+
+    /**
+     * A row's `meta`, for the push side of the codec. Empty for every record type that has no such
+     * column, which is every type but `ATTACHMENT`.
+     *
+     * The same shape as [createdAtOf] and for the same structural reason -- `SyncRecord` does not
+     * model the column, the payload has it, so the value has to come off the row -- but a different
+     * substantive one. `meta` is a reserved opaque escape hatch (`PayloadFields.META`) that this
+     * build only ever writes `""` into, and asking the row rather than writing `""` here is what
+     * stops this build from erasing a caption a newer build put there, on every record it pushes.
+     *
+     * Reads the full row for what is a small string, which is the one place in this class that
+     * costs something: `attachmentRow` selects `bytes` too, so pushing one attachment reads its
+     * megabyte twice (once here, once through `dirtyRecords`). Acceptable at eight rows a pass
+     * (`DIRTY_ATTACHMENT_PAGE`); if that page ever grows, this wants its own projection.
+     */
+    suspend fun metaOf(type: RecordType, uuid: String): String = when (type) {
+        RecordType.NOTE, RecordType.FOLDER, RecordType.SKETCH -> ""
+        RecordType.ATTACHMENT -> database.attachmentDao.attachmentRow(uuid)?.meta.orEmpty()
     }
 
     /** The pre-first-pull snapshot. See [SyncSnapshot] for when it does anything and why. */

@@ -96,6 +96,7 @@ class RecordSyncStore(
                 seq = write.seq,
                 baseline = write.contentBaseline,
                 remoteCreatedAt = write.remoteCreatedAt,
+                remoteMeta = write.remoteMeta,
             )
             write.conflictCopy?.let { copy ->
                 // `dirty = true` and no `seq`: the copy has never been on the server, which the
@@ -103,7 +104,10 @@ class RecordSyncStore(
                 // record with that uuid is present, so there is nothing here to preserve.
                 // No `remoteCreatedAt`: the incoming record's creation time belongs to the record
                 // it arrived as, not to a copy this device mints from a losing body.
-                put(copy, dirty = true, seq = null, baseline = null, remoteCreatedAt = null)
+                put(
+                    copy, dirty = true, seq = null, baseline = null,
+                    remoteCreatedAt = null, remoteMeta = null,
+                )
             }
         }
     }
@@ -197,12 +201,27 @@ class RecordSyncStore(
         return payload.field(PayloadFields.CREATED_AT)?.toLongOrNull()
     }
 
+    /**
+     * An attachment's opaque `meta`, or `""` for a record type without the column and for a record
+     * this device does not hold. Mirrors [createdAtOf]; see `SyncStoreFactory.metaOf` for why the
+     * value is asked of the row rather than assumed empty.
+     */
+    suspend fun metaOf(type: RecordType, uuid: String): String = when (type) {
+        // An exhaustive `when` rather than `if (type != ATTACHMENT) return ""`, matching
+        // `SyncStoreFactory.metaOf` on Android. The behaviour is identical today; the difference is
+        // that a future record type with an unclocked column of its own fails to compile on both
+        // platforms instead of being silently defaulted to `""` on this one.
+        RecordType.NOTE, RecordType.FOLDER, RecordType.SKETCH -> ""
+        RecordType.ATTACHMENT -> existingMeta(codec.blindedIdOf(type.wireKey, uuid)).orEmpty()
+    }
+
     private fun put(
         record: SyncRecord,
         dirty: Boolean,
         seq: Long?,
         baseline: Hlc?,
         remoteCreatedAt: Long?,
+        remoteMeta: String?,
     ) {
         val blindedId = codec.blindedIdOf(record.type.wireKey, record.uuid)
         // The row already on disk first, because `createdAt` is what the notes list sorts on and a
@@ -217,7 +236,11 @@ class RecordSyncStore(
             ?: record.valueOf(my.cheysoff.core_domain.sync.FieldClocks.UPDATED_AT)
                 .parts[0]?.toLongOrNull()
             ?: 0L
-        val sealed = codec.seal(SyncRecords.toPayload(record, createdAt))
+        // The incoming value when the payload carried one, otherwise whatever the stored
+        // envelope already holds. Never a bare `""`: a build that does not understand what is in
+        // `meta` must preserve it rather than tidy it away. See `PayloadFields.META`.
+        val meta = remoteMeta ?: existingMeta(blindedId).orEmpty()
+        val sealed = codec.seal(SyncRecords.toPayload(record, createdAt, meta))
         store.writeMerged(
             blindedId = sealed.blindedId,
             envelope = sealed.envelope,
@@ -231,6 +254,21 @@ class RecordSyncStore(
         val row = store.read(blindedId) ?: return null
         val payload = (codec.open(blindedId, row.envelope) as? OpenResult.Ok)?.payload ?: return null
         return payload.field(PayloadFields.CREATED_AT)?.toLongOrNull()
+    }
+
+    /**
+     * The `meta` the stored envelope for [blindedId] carries, or null when there is no such row,
+     * it will not open, or its record type has no such column.
+     *
+     * Indexed rather than `RecordPayload.field(...)`, which requires the column to belong to the
+     * record's type and **throws** when it does not. Every type but `ATTACHMENT` has no `meta`, and
+     * this is called on the merged-write path for all of them, so "this record has none" has to be
+     * an answer rather than an exception.
+     */
+    private fun existingMeta(blindedId: String): String? {
+        val row = store.read(blindedId) ?: return null
+        val payload = (codec.open(blindedId, row.envelope) as? OpenResult.Ok)?.payload ?: return null
+        return payload.fields[PayloadFields.META]
     }
 
     /** One row as the engine sees it, or null when it is absent or will not open. */

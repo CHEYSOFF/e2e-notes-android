@@ -305,6 +305,20 @@ class Replica(
             FieldClocks.UPDATED_AT to FieldValue.of(stampMs.toString()),
             FieldClocks.DELETED to FieldValue.of(SyncValues.FALSE, null),
         )
+
+        // `AttachmentEntity`'s own Kotlin defaults, on the same principle. The two binary values
+        // are empty base64url -- the empty string -- rather than a placeholder image: the harness
+        // never inspects a value, only whether two replicas agree on it, and an empty encoding is
+        // what a row carries before anything has been imported into it.
+        RecordType.ATTACHMENT -> mapOf(
+            FieldClocks.NOTE_ID to FieldValue.of(""),
+            FieldClocks.ANCHOR to FieldValue.of("0"),
+            FieldClocks.ORDER to FieldValue.of("0"),
+            FieldClocks.IMAGE to FieldValue.of("", "", "0", "0"),
+            FieldClocks.THUMB to FieldValue.of("", "0", "0"),
+            FieldClocks.UPDATED_AT to FieldValue.of(stampMs.toString()),
+            FieldClocks.DELETED to FieldValue.of(SyncValues.FALSE, null),
+        )
     }
 
     // ── Driving the engine ─────────────────────────────────────────────────────────────────────

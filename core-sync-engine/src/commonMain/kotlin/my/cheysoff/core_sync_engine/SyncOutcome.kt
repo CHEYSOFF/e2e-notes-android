@@ -144,6 +144,20 @@ data class PassStats(
      * non-zero is how a rollout mistake stays invisible.
      */
     val ignored: Int = 0,
+    /**
+     * Pushes the server refused outright with [TransportFault.REJECTED] -- a single oversized
+     * record the server will not take, ever, for these bytes.
+     *
+     * The row this counts stays dirty -- nothing is lost -- but it is **not** retried on the next
+     * pass. The engine remembers a rejected record for the rest of the session, keyed by its row
+     * clock, so an edit or a restart is what tries it again; without that, a record the server will
+     * not take is re-sealed and re-uploaded in full every minute forever. See
+     * `SyncEngine.rememberRejected`.
+     *
+     * Attributing a `REJECTED` to a record at all is only sound because the engine puts anything
+     * large enough to provoke one in a batch by itself; see [SyncEngine.LARGE_RECORD_BYTES].
+     */
+    val rejected: Int = 0,
 ) {
 
     /**
@@ -165,6 +179,7 @@ data class PassStats(
         conflictCopies = conflictCopies + other.conflictCopies,
         unreadable = unreadable + other.unreadable,
         ignored = ignored + other.ignored,
+        rejected = rejected + other.rejected,
     )
 
     companion object {

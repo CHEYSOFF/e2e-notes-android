@@ -244,6 +244,12 @@ object Merge {
         // edited (plan 3): without this companion, two devices could disagree on a sketch's
         // `updatedAt` -- and therefore its sort order -- after nothing but a text reflow.
         RecordType.SKETCH -> FieldClocks.STROKES
+        // `image` is an attachment's user-facing payload, exactly the role `strokes` plays for a
+        // sketch and `content` for a note, so `updatedAt` follows it. `thumb` is deliberately NOT
+        // the companion: it is a derived rendering of `image` and never moves on its own, so
+        // binding `updatedAt` to it as well would add a second clock to the max() that can only
+        // ever equal the first.
+        RecordType.ATTACHMENT -> FieldClocks.IMAGE
     }
 
     /** `max(the field's own clock, the companion field's clock)`. See [mergeUpdatedAt]. */

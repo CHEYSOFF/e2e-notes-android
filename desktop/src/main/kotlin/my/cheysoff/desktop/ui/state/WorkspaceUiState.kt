@@ -1,6 +1,7 @@
 package my.cheysoff.desktop.ui.state
 
 import androidx.compose.runtime.Immutable
+import my.cheysoff.core_domain.model.AttachmentData
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.core_domain.sketch.DisplaySketch
@@ -22,6 +23,25 @@ data class WorkspaceUiState(
      * Empty whenever nothing is open, or on the preview build (no [DesktopSketches] to read from).
      */
     val sketches: List<DisplaySketch> = emptyList(),
+    /**
+     * The open note's live attachments, unsorted -- ordering an attachment rail is a UI concern
+     * (`AttachmentRail` applies `sortAttachments` at render time), not something computed here, the
+     * same split [getSketchesForNote][my.cheysoff.desktop.store.RecordNotesRepository.getSketchesForNote]
+     * documents for [sketches]. Unlike [sketches] there is no decode-checked "for display" mapping:
+     * an attachment's bytes are decoded per tile in the rail itself, and a failed decode there is a
+     * placeholder tile, not a filtered-out row. Empty whenever nothing is open, or on the
+     * preview build (no [my.cheysoff.desktop.store.DesktopAttachments] to read from).
+     */
+    val attachments: List<AttachmentData> = emptyList(),
+    /**
+     * The id of the attachment currently shown full-screen, or null when the viewer is closed.
+     * Lives here rather than as local UI state so `NotesWorkspaceScreen` (which renders
+     * `AttachmentViewer` as a sibling of `SearchPalette` in the window's root) and
+     * `DesktopApp.handleShortcut` (which closes it on Escape) can both see it -- the same shape
+     * [SearchState.isOpen] uses for the palette. `NotesWorkspaceModel.openAttachmentViewer`/
+     * `closeAttachmentViewer` are the only writers.
+     */
+    val viewingAttachmentId: String? = null,
     /**
      * False until the repository has emitted once. Distinguishes "no notes yet" from "not asked
      * yet" — without it the empty state flashes on every launch before the first emission lands.
