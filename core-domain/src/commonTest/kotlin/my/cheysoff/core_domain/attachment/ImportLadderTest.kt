@@ -55,4 +55,16 @@ class ImportLadderTest {
     fun `fit never rounds an edge down to zero`() {
         assertEquals(PixelSize(1600, 1), ImportLadder.fit(40000, 3, 1600))
     }
+
+    @Test
+    fun `the ladder starts at MAX_LONG_EDGE rather than at a literal that could drift from it`() {
+        assertEquals(ImportLadder.MAX_LONG_EDGE, ImportLadder.STEPS.first().longEdge)
+    }
+
+    @Test
+    fun `each dimension rung is seventy percent of the one above it`() {
+        val edges = ImportLadder.STEPS.map { it.longEdge }.distinct()
+
+        assertEquals(listOf(1600, 1120, 784), edges)
+    }
 }

@@ -21,7 +21,15 @@ data class EncodeStep(val longEdge: Int, val quality: Int)
 object ImportLadder {
     const val MAX_LONG_EDGE = 1600
     private val QUALITIES = listOf(85, 75, 65, 55)
-    private val LONG_EDGES = listOf(1600, 1120, 784)
+    /**
+     * The three long-edge rungs, **derived** from [MAX_LONG_EDGE] rather than written out.
+     *
+     * Spelling the first one as a literal would let it drift from the constant that names it, and
+     * nothing would fail -- the ladder would simply start at a size no caller asked for. Each rung
+     * is 70% of the one above: 1600, 1120, 784.
+     */
+    private val LONG_EDGES =
+        listOf(MAX_LONG_EDGE, MAX_LONG_EDGE * 7 / 10, MAX_LONG_EDGE * 49 / 100)
 
     /** Every rung, in order. Dimensions outermost, quality innermost. */
     val STEPS: List<EncodeStep> =
