@@ -185,6 +185,10 @@ private fun lastPassLine(sync: SyncPassState): String {
         // damage and send someone looking for a problem that does not exist -- see the same
         // distinction in the desktop app's `unlockDiagnosticsMessage`.
         if (summary.ignored > 0) add("skipped ${summary.ignored} needing a newer version of the app")
+        // Worded around the server, not the record: nothing is wrong with the note, the server it
+        // is currently talking to just will not take something this size yet. It will sync the
+        // moment that changes, with no action needed here.
+        if (summary.rejected > 0) add("couldn't send ${summary.rejected} -- too large for this server")
     }
     if (parts.isEmpty()) return "The last sync had nothing to send or receive."
     return "The last sync ${parts.joinToString(", ")}."

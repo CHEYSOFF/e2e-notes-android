@@ -280,6 +280,25 @@ class SyncRowTest {
     }
 
     /**
+     * A record the server refused as too large is not lost and nothing here is broken -- it just
+     * has to be visible, because a record skipped on every pass with no signal is silent, permanent
+     * data loss dressed up as a steady state.
+     */
+    @Test
+    fun `a rejected record says so, and blames the server rather than the note`() {
+        val line = syncStatusLine(
+            SyncStatus.SYNC_RAN,
+            SyncPassState.Completed(SyncPassSummary(pushed = 2, rejected = 1)),
+        )
+
+        assertTrue(
+            "the exact wording must appear, not merely a stray \"1\": $line",
+            line.contains("couldn't send 1 -- too large for this server"),
+        )
+        assertFalse("it is not a failure: $line", line.contains("failed", ignoreCase = true))
+    }
+
+    /**
      * A halt shows the engine's own sentence, because each halt reason names a different thing a
      * person has to decide and none of them clears by itself.
      */
