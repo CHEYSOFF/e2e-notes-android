@@ -1,6 +1,7 @@
 package my.cheysoff.feature_notes
 
 import my.cheysoff.core_domain.sketch.Point
+import my.cheysoff.core_domain.sketch.SketchLimits
 import my.cheysoff.core_domain.sketch.StrokeCodec
 import my.cheysoff.feature_notes.ui.sketch.SketchCaptureState
 import org.junit.Assert.assertEquals
@@ -249,6 +250,54 @@ class SketchCaptureStateTest {
 
         assertEquals(3, s.strokes.size)
         assertEquals(Point(10, 10), s.strokes[1].points.first())
+    }
+
+    // --- size guard ----------------------------------------------------------------------------
+
+    /**
+     * Draws one zigzag stroke: x advances steadily while y alternates between 0 and 30 on every
+     * point, so every interior point is a real corner far outside RDP's epsilon of 2 and survives
+     * simplification -- unlike a merely-perturbed-but-still-near-straight line, which RDP (rightly)
+     * thins back down to two points regardless of how "jittery" it looks, defeating the point of
+     * this helper. Piling up many of these approaches [SketchLimits.MAX_ENCODED_BYTES] the same way
+     * a real dense scribble would.
+     */
+    private fun drawJitteryStroke(s: SketchCaptureState, seed: Int, pointCount: Int = 40) =
+        run {
+            val baseX = (seed * 5) % 3000
+            s.beginStroke(baseX, 0)
+            for (p in 1 until pointCount) {
+                val y = if (p % 2 == 0) 0 else 30
+                s.extendStroke(baseX + p * 5, y)
+            }
+            s.endStroke()
+        }
+
+    @Test
+    fun `a stroke that would breach the cap is not committed and leaves nothing to redo`() {
+        val s = state()
+        var result = SketchCaptureState.EndStrokeResult.ADDED
+        var seed = 0
+        while (result != SketchCaptureState.EndStrokeResult.REJECTED_TOO_LARGE && seed < 5000) {
+            result = drawJitteryStroke(s, seed)
+            seed++
+        }
+
+        assertEquals(SketchCaptureState.EndStrokeResult.REJECTED_TOO_LARGE, result)
+        assertFalse("a rejected stroke must not become redoable", s.canRedo)
+    }
+
+    @Test
+    fun `repeatedly drawing past the cap never produces a toSketch whose encoding exceeds the limit`() {
+        val s = state()
+
+        repeat(1000) { seed -> drawJitteryStroke(s, seed) }
+
+        val encoded = StrokeCodec.encode(s.toSketch())
+        assertTrue(
+            "encoded sketch was ${encoded.encodeToByteArray().size} bytes, over the ${SketchLimits.MAX_ENCODED_BYTES}-byte cap",
+            SketchLimits.withinLimit(encoded),
+        )
     }
 
     // --- toSketch / codec round trip ------------------------------------------------------------
