@@ -3,7 +3,10 @@ package my.cheysoff.feature_notes.ui.sketch
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -291,21 +294,29 @@ private fun DrawingSurface(
                 if (capture == null || canvasSize == null) return@pointerInput
                 val (canvasWidth, canvasHeight) = canvasSize
                 val fit = SketchRenderer.fit(canvasWidth, canvasHeight, Size(size.width.toFloat(), size.height.toFloat()))
-                detectDragGestures(
-                    onDragStart = { offset ->
-                        val point = fit.toCanvas(offset.x.toDouble(), offset.y.toDouble())
-                        if (eraseMode) capture.eraseAt(point.x, point.y).also { onErase() }
-                        else capture.beginStroke(point.x, point.y).also { onExtend() }
-                    },
-                    onDrag = { change, _ ->
+                // Hand-rolled rather than detectDragGestures: that detector's onDragStart fires
+                // only once touch slop is exceeded, so a deliberate tap that lifts before any
+                // slop-worthy movement never reaches it at all -- not beginStroke, not endStroke,
+                // nothing. That silently ate every attempt at a dot (SketchCaptureState.endStroke
+                // and SketchRenderer.isDot both support a one-point stroke; nothing upstream of
+                // here ever handed them one). awaitFirstDown + drag() have no slop gate: beginStroke
+                // runs on the down itself, drag() reports movement if and only if there is any, and
+                // a plain tap -- down then up with no movement in between -- leaves exactly the
+                // one point beginStroke recorded, which finishStroke() commits as a dot.
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    val start = fit.toCanvas(down.position.x.toDouble(), down.position.y.toDouble())
+                    if (eraseMode) capture.eraseAt(start.x, start.y).also { onErase() }
+                    else capture.beginStroke(start.x, start.y).also { onExtend() }
+                    down.consume()
+                    drag(down.id) { change ->
                         change.consume()
                         val point = fit.toCanvas(change.position.x.toDouble(), change.position.y.toDouble())
                         if (eraseMode) capture.eraseAt(point.x, point.y).also { onErase() }
                         else capture.extendStroke(point.x, point.y).also { onExtend() }
-                    },
-                    onDragEnd = { if (!eraseMode) onStrokeEnd() },
-                    onDragCancel = { if (!eraseMode) onStrokeEnd() },
-                )
+                    }
+                    if (!eraseMode) onStrokeEnd()
+                }
             },
     ) {
         // A state read purely to make this draw phase depend on `revision`.
@@ -444,10 +455,17 @@ private fun LimitBanner(message: String, onDismissed: () -> Unit) {
     }
 }
 
-/** A `clickable`-equivalent that does not pull in a ripple dependency for a small round swatch. */
+/**
+ * A `clickable`-equivalent that does not pull in a ripple dependency for a small round swatch.
+ *
+ * `detectTapGestures`, not `detectDragGestures`: the latter's `onDragStart` fires only once touch
+ * slop is exceeded, so a deliberate tap -- which lifts well before that -- never reached it, and
+ * every colour swatch and nib-size dot was unselectable by touch. `detectTapGestures.onTap` fires
+ * on an ordinary down-then-up with no such gate.
+ */
 private fun Modifier.pointerInputClick(onClick: () -> Unit): Modifier =
     this.pointerInput(onClick) {
-        detectDragGestures(onDragStart = { onClick() }, onDrag = { _, _ -> }, onDragEnd = {}, onDragCancel = {})
+        detectTapGestures(onTap = { onClick() })
     }
 
 /**
