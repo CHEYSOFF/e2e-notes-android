@@ -6,6 +6,7 @@ import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import my.cheysoff.core_data.data.RoomNotesRepository
+import my.cheysoff.core_data.data.local.DIRTY_ATTACHMENT_PAGE
 import my.cheysoff.core_data.data.local.NoteDatabase
 import my.cheysoff.core_data.data.sync.SyncClock
 import my.cheysoff.core_domain.model.AttachmentData
@@ -109,6 +110,37 @@ class RoomNotesRepositoryAttachmentTest {
 
         assertEquals("", repository.attachment("a1")!!.meta)
         assertEquals("", repository.attachmentsOf("n1").first().single().meta)
+    }
+
+    // -- fix round 1, H1: dirtyAttachments is a memory bound, not a paging convenience --------
+
+    /**
+     * With more dirty rows than [DIRTY_ATTACHMENT_PAGE], the query must return **exactly** that
+     * many -- not fewer, not all of them -- and the oldest clocks first, so a second call (the
+     * next sync pass) makes progress instead of returning the same page forever.
+     */
+    @Test
+    fun `dirtyAttachments returns at most the page size, oldest clock first`() = runTest {
+        val ids = (0..DIRTY_ATTACHMENT_PAGE).map { "a$it" } // one more than the page size
+        ids.forEach { id -> repository.saveAttachment(attachment(id, "n1")) }
+
+        val page = database.attachmentDao.dirtyAttachments(DIRTY_ATTACHMENT_PAGE)
+
+        assertEquals(
+            "a bound that returns fewer or more than the page size is not the bound the KDoc promises",
+            DIRTY_ATTACHMENT_PAGE,
+            page.size,
+        )
+        for (i in 0 until page.size - 1) {
+            assertTrue(
+                "must be oldest-clock-first, or a repeated call cannot make progress through the backlog",
+                page[i].rowHlc() <= page[i + 1].rowHlc(),
+            )
+        }
+        assertFalse(
+            "the page must be the OLDEST rows -- the most recently saved row must be left for the next pass",
+            page.map { it.uuid }.contains(ids.last()),
+        )
     }
 
     @Test

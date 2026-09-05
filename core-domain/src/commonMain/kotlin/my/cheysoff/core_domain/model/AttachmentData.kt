@@ -44,6 +44,15 @@ data class AttachmentData(
      * This build only ever writes `""` and must round-trip whatever it reads back unmodified --
      * normalising it, clearing it on save, or otherwise "cleaning it up" destroys data a future
      * build put there on purpose. See `docs/design/image-attachments.md` §5/§6.
+     *
+     * **It must be in `PayloadFields.ATTACHMENT_COLUMNS` from the very first shipped `ATTACHMENT`
+     * record, not added later** -- "later" is the one option this protocol does not offer, per the
+     * decode failure described above. And it is deliberately **outside**
+     * `FieldClocks.ATTACHMENT_FIELDS`: it merges at the row clock rather than getting a clock of its
+     * own, the same precedent `PayloadFields.CREATED_AT` sets for `sketches` (on the wire, but
+     * absent from `FieldClocks.SKETCH_FIELDS`, because no write path ever moves it once a sketch is
+     * created). `RoomNotesRepository.attachmentTouchedFields` does not mention `meta` and does not
+     * need to, for the same reason.
      */
     val meta: String = "",
 ) {
