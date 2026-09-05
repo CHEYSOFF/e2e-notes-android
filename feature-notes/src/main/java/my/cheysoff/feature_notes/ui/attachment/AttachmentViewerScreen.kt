@@ -74,12 +74,11 @@ private const val MaxScale = 6f
  *
  * ## Zoom and pan
  * `detectTransformGestures` drives a `graphicsLayer` scale/translation pair. Scale is clamped to
- * [MinScale]..[MaxScale]; pan is clamped against the *current* scale so the image can be dragged
- * further once zoomed in, but never at all at 1x -- at `scale == 1f` the bound collapses to zero,
- * which is what keeps the image from being thrown off-screen while unzoomed. The bound uses the
- * viewer's own measured size as a stand-in for the rendered image rect (`ContentScale.Fit`
- * letterboxes to it), which is an approximation, not pixel-exact math against the photo's own
- * aspect ratio -- adequate for "can't drag it away", which is all this needs to guarantee.
+ * [MinScale]..[MaxScale]; pan is clamped by [panBounds] against the *rendered* image rect under
+ * `ContentScale.Fit` -- not against the viewer's own box -- so a photo whose aspect ratio differs
+ * from the screen's (the letterboxed axis renders smaller than the box) still cannot be dragged
+ * until a gap opens along that axis. See [panBounds]'s own KDoc for the geometry and why the
+ * naive box-bound version is wrong above 1x even though it happens to be exact at 1x.
  *
  * ## Delete
  * The overflow trash icon confirms before calling [onDeleted]. The dialog says plainly that this
@@ -112,12 +111,20 @@ fun AttachmentViewerScreen(
         val data = loadAttachment(attachmentId)
         if (data == null) {
             loadFailed = true
-        } else {
-            attachment = data
-            bitmap = withContext(Dispatchers.Default) {
-                BitmapFactory.decodeByteArray(data.bytes, 0, data.bytes.size).asImageBitmap()
-            }
+            return@LaunchedEffect
         }
+        // decodeByteArray returns a nullable Bitmap -- a row that exists but whose bytes fail to
+        // decode (corrupt, truncated) lands in exactly the same "couldn't be loaded" branch as a
+        // missing row below, rather than crashing this coroutine.
+        val decoded = withContext(Dispatchers.Default) {
+            BitmapFactory.decodeByteArray(data.bytes, 0, data.bytes.size)
+        }
+        if (decoded == null) {
+            loadFailed = true
+            return@LaunchedEffect
+        }
+        attachment = data
+        bitmap = decoded.asImageBitmap()
     }
 
     Box(modifier = Modifier.fillMaxSize().background(AppBlack)) {
@@ -141,13 +148,23 @@ fun AttachmentViewerScreen(
                     .pointerInput(attachmentId) {
                         detectTransformGestures { _, pan, zoom, _ ->
                             val newScale = (scale * zoom).coerceIn(MinScale, MaxScale)
-                            // At newScale == MinScale both bounds are zero, so the image snaps
-                            // back to centered -- the "can't drag it off-screen at 1x" rule.
-                            val maxX = (containerSize.width * (newScale - 1f) / 2f).coerceAtLeast(0f)
-                            val maxY = (containerSize.height * (newScale - 1f) / 2f).coerceAtLeast(0f)
+                            // Bound against the rendered image rect (panBounds), not the box --
+                            // see that function's own KDoc. `attachment` is guaranteed non-null
+                            // here (it is set in the same LaunchedEffect, just before `bitmap`,
+                            // and this branch only renders once `bitmap` is non-null), but the
+                            // `?: Offset.Zero` fallback keeps this block from ever needing `!!`.
+                            val bounds = attachment?.let {
+                                panBounds(
+                                    imageWidth = it.width,
+                                    imageHeight = it.height,
+                                    boxWidth = containerSize.width.toFloat(),
+                                    boxHeight = containerSize.height.toFloat(),
+                                    scale = newScale,
+                                )
+                            } ?: Offset.Zero
                             offset = Offset(
-                                x = (offset.x + pan.x * newScale).coerceIn(-maxX, maxX),
-                                y = (offset.y + pan.y * newScale).coerceIn(-maxY, maxY),
+                                x = (offset.x + pan.x * newScale).coerceIn(-bounds.x, bounds.x),
+                                y = (offset.y + pan.y * newScale).coerceIn(-bounds.y, bounds.y),
                             )
                             scale = newScale
                         }
@@ -213,4 +230,40 @@ fun AttachmentViewerScreen(
             },
         )
     }
+}
+
+/**
+ * How far the image may be panned from centre, in pixels, at [scale].
+ *
+ * Bound against the rect the image actually occupies under `ContentScale.Fit`, not against the
+ * viewer's box: for any photo whose aspect ratio differs from the screen's, the letterboxed axis
+ * renders smaller than the box, and clamping to the box lets a zoomed image be dragged until a
+ * gap opens along one edge -- exactly the zoomed-in-on-a-receipt case the zoom exists for.
+ *
+ * [imageWidth]/[imageHeight] are the stored dimensions ([AttachmentData.width]/`.height`), which
+ * are trustworthy for this: Task 5 was fixed to read them from the bitmap the encoder actually
+ * produced, not the downscale target it requested, so they describe the same rect this decodes
+ * and displays.
+ *
+ * Zero on both axes at scale 1, so a photo that exactly fits cannot be nudged at all -- the one
+ * case the box-bound version got right by accident, since both its bounds collapse to zero there
+ * regardless of aspect ratio.
+ *
+ * Degenerate inputs (a zero or negative width, height, or box dimension) return [Offset.Zero]
+ * rather than dividing by zero.
+ */
+internal fun panBounds(
+    imageWidth: Int,
+    imageHeight: Int,
+    boxWidth: Float,
+    boxHeight: Float,
+    scale: Float,
+): Offset {
+    if (imageWidth <= 0 || imageHeight <= 0 || boxWidth <= 0f || boxHeight <= 0f) return Offset.Zero
+    val fitScale = minOf(boxWidth / imageWidth, boxHeight / imageHeight)
+    val renderedWidth = imageWidth * fitScale
+    val renderedHeight = imageHeight * fitScale
+    val maxX = ((renderedWidth * scale - boxWidth) / 2f).coerceAtLeast(0f)
+    val maxY = ((renderedHeight * scale - boxHeight) / 2f).coerceAtLeast(0f)
+    return Offset(maxX, maxY)
 }
