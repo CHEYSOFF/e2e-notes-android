@@ -9,6 +9,9 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -164,7 +167,16 @@ fun SketchCanvasScreen(initialSketch: Sketch? = null, onDone: (Sketch) -> Unit, 
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize().background(AppBlack)) {
+    // `safeDrawing`, because MainActivity calls `enableEdgeToEdge` and this screen is not inside a
+    // Scaffold -- nothing else here applies the system-bar insets, so without this the toolbar sits
+    // underneath the status bar and the clock draws on top of it. The note editor gets the same
+    // treatment for free from its Scaffold, which is why only this screen showed the problem.
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(AppBlack)
+            .windowInsetsPadding(WindowInsets.safeDrawing)
+    ) {
         TopBar(
             canUndo = capture?.canUndo == true,
             canRedo = capture?.canRedo == true,

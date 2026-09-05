@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -248,6 +249,12 @@ fun SingleNoteScreen(
     // are mutually exclusive full-screen overlays of this one editor, so one composable has to own
     // which (if either) is on top.
     var viewingAttachmentId by remember { mutableStateOf<String?>(null) }
+
+    // Hoisted above the canvas and viewer branches below, both of which `return` and so unmount the
+    // whole editor. A `rememberScrollState()` owned by `NoteEditor` is forgotten by that unmount, so
+    // closing a drawing or a photo used to drop the reader back to the top of the note -- worst on
+    // exactly the notes worth scrolling. Living out here, it outlives both branches.
+    val editorScrollState = rememberScrollState()
 
     // No runtime permission and no manifest permission -- that is the whole reason this contract is
     // used rather than ACTION_GET_CONTENT or a MediaStore query wired to READ_MEDIA_IMAGES. A null
@@ -467,6 +474,7 @@ fun SingleNoteScreen(
             // cleanly, in the first place.
             onSketchTapped = { id, sketch -> sketchTarget = SketchEditTarget.Existing(id, sketch) },
             onAttachmentTapped = { preview -> viewingAttachmentId = preview.id },
+            scrollState = editorScrollState,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues),
@@ -484,12 +492,12 @@ private fun NoteEditor(
     onIntent: (SingleNoteIntent) -> Unit,
     onSketchTapped: (String, Sketch) -> Unit,
     onAttachmentTapped: (AttachmentPreview) -> Unit,
+    scrollState: ScrollState,
     modifier: Modifier = Modifier,
 ) {
     val spacing = LocalSpacing.current
     val sw = LocalConfiguration.current.screenWidthDp
     val focusManager = LocalFocusManager.current
-    val scrollState = rememberScrollState()
     var showFolderChooser by remember { mutableStateOf(false) }
     val currentFolder = state.folders.firstOrNull { it.id == state.folderId }
 
