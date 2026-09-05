@@ -80,6 +80,17 @@ class Migration10to11Test {
         "`dirty` INTEGER NOT NULL DEFAULT 1, `lastSyncedSeq` INTEGER NOT NULL DEFAULT 0, " +
         "PRIMARY KEY(`uuid`))"
 
+    /**
+     * v10's index on `sketches`, which the table DDL above does not carry.
+     *
+     * Room validates a migrated database against the whole entity, and `TableInfo` includes
+     * indices — so seeding the table without this fails as "Migration didn't properly handle:
+     * sketches", pointing at the migration when the fault is in the fixture. Any table seeded here
+     * needs its indices as well as its columns.
+     */
+    private val v10SketchesIndex =
+        "CREATE INDEX IF NOT EXISTS `index_sketches_noteId` ON `sketches` (`noteId`)"
+
     @Before
     fun setUp() {
         ctx.deleteDatabase(dbName)
@@ -98,6 +109,7 @@ class Migration10to11Test {
         db.execSQL(v10Folders)
         db.execSQL(v10SyncState)
         db.execSQL(v10Sketches)
+        db.execSQL(v10SketchesIndex)
         db.execSQL(
             "INSERT INTO notes (id, title, content, contentFormat, checklist, isPinned, " +
                 "isFavorite, folderId, createdAt, updatedAt, isDeleted, deletedAt, " +
