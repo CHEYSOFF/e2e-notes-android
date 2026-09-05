@@ -53,4 +53,17 @@ class AttachmentDataTest {
 
         assertEquals(a.hashCode(), b.hashCode())
     }
+
+    @Test
+    fun `meta defaults to the empty string`() {
+        assertEquals("", attachment().meta)
+    }
+
+    @Test
+    fun `instances differing only in meta are not equal`() {
+        val a = attachment().copy(meta = "")
+        val b = attachment().copy(meta = "caption")
+
+        assertNotEquals(a, b)
+    }
 }

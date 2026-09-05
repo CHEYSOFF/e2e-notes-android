@@ -12,6 +12,7 @@ import my.cheysoff.core_crypto.SecureUnlockManager
 import my.cheysoff.core_data.data.DataStoreSettingsRepository
 import my.cheysoff.core_data.data.RoomNotesRepository
 import my.cheysoff.core_data.data.RoomSketchesRepository
+import my.cheysoff.core_data.data.local.AttachmentDao
 import my.cheysoff.core_data.data.local.FolderDao
 import my.cheysoff.core_data.data.local.NoteDao
 import my.cheysoff.core_data.data.local.NoteDatabase
@@ -154,6 +155,12 @@ abstract class DataModule {
         @Singleton
         fun provideSketchDao(database: NoteDatabase): SketchDao {
             return database.sketchDao
+        }
+
+        @Provides
+        @Singleton
+        fun provideAttachmentDao(database: NoteDatabase): AttachmentDao {
+            return database.attachmentDao
         }
 
         /**

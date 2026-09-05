@@ -66,7 +66,7 @@ class SketchDeletionTest {
         database = Room.inMemoryDatabaseBuilder(context, NoteDatabase::class.java)
             .allowMainThreadQueries()
             .build()
-        notesRepository = RoomNotesRepository(database.noteDao, database.folderDao, database.sketchDao, database, clock)
+        notesRepository = RoomNotesRepository(database.noteDao, database.folderDao, database.sketchDao, database.attachmentDao, database, clock)
         sketchesRepository = RoomSketchesRepository(database.sketchDao, database, clock)
         syncStore = RoomSyncStore(
             database = database,
