@@ -62,4 +62,14 @@ sealed interface SingleNoteIntent {
      * see `ImageImporter`'s own KDoc for why that round trip is lossless.
      */
     data class ImportAttachment(val uri: String) : SingleNoteIntent
+
+    /**
+     * Deletes one attachment by id, through `AttachmentsRepository.deleteAttachment`. Sent only
+     * from the full-screen viewer's confirmed delete -- there is no inline delete on a rail tile,
+     * matching `docs/design/image-attachments.md` §8. Unlike [SketchDeleted]'s soft delete, which
+     * at least leaves a route back through a sketch-aware future build, an attachment has no
+     * Trash entry at all (`TrashEntryKind` is `{NOTE, FOLDER}`), so the viewer's confirmation
+     * dialog says plainly that this cannot be undone.
+     */
+    data class AttachmentDeleted(val id: String) : SingleNoteIntent
 }

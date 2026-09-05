@@ -452,6 +452,15 @@ class SingleNoteViewModel @Inject constructor(
             .launchIn(viewModelScope)
     }
 
+    /**
+     * The one seam `AttachmentViewerScreen` uses to load an attachment's full bytes, by id, on
+     * demand. Everything else on this screen (the toolbar, [SingleNoteScreenState.attachments])
+     * holds only [AttachmentPreview] -- this is deliberately the single call site in the whole
+     * screen that can return [AttachmentData.bytes], matching
+     * `docs/design/image-attachments.md` §5's "one DAO method, by id" rule one layer up.
+     */
+    suspend fun attachment(id: String): AttachmentData? = attachmentsRepository.attachment(id)
+
     fun onIntent(intent: SingleNoteIntent) {
         when (intent) {
             is SingleNoteIntent.TitleChanged -> {
@@ -613,6 +622,10 @@ class SingleNoteViewModel @Inject constructor(
             }
 
             is SingleNoteIntent.ImportAttachment -> importAttachment(intent.uri)
+
+            is SingleNoteIntent.AttachmentDeleted -> {
+                viewModelScope.launch { attachmentsRepository.deleteAttachment(intent.id) }
+            }
 
             is SingleNoteIntent.DuplicateNote -> duplicateNote()
 
