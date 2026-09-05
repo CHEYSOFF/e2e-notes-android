@@ -26,6 +26,7 @@ import androidx.compose.ui.window.Window
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import my.cheysoff.core_domain.repository.NotesRepository
+import my.cheysoff.desktop.store.DesktopAttachments
 import my.cheysoff.desktop.store.DesktopSketches
 import my.cheysoff.desktop.ui.notes.MaxSidebarWidth
 import my.cheysoff.desktop.ui.notes.MinSidebarWidth
@@ -77,6 +78,8 @@ fun MananaWindow(
     onAddDevice: (() -> Unit)? = null,
     /** Null on the preview build below -- see [DesktopSketches]'s own KDoc. */
     sketches: DesktopSketches? = null,
+    /** Null on the preview build below -- see [DesktopAttachments]'s own KDoc. */
+    attachments: DesktopAttachments? = null,
     onExit: () -> Unit,
 ) {
     val windowState = rememberWindowState(
@@ -87,7 +90,9 @@ fun MananaWindow(
         placement = if (WindowGeometry.isMaximized()) WindowPlacement.Maximized else WindowPlacement.Floating,
     )
     val scope = rememberCoroutineScope()
-    val model = remember { NotesWorkspaceModel(repository = repository, scope = scope, sketches = sketches) }
+    val model = remember {
+        NotesWorkspaceModel(repository = repository, scope = scope, sketches = sketches, attachments = attachments)
+    }
     val state by model.state.collectAsState()
 
     // Saved the moment it changes rather than on close, because the whole point of a preference
