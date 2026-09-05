@@ -45,7 +45,7 @@ class SketchDisplayTest {
     }
 
     @Test
-    fun `garbage strokes text becomes a visible placeholder, not a dropped row`() {
+    fun `garbage strokes text becomes a visible placeholder -- not a dropped row`() {
         val result = sketchesForDisplay(listOf(sketch("a", strokes = "not a sketch at all")))
 
         assertEquals(1, result.size)
@@ -60,7 +60,7 @@ class SketchDisplayTest {
     }
 
     @Test
-    fun `a decoded sketch with a zero dimension is still a placeholder, not an unrenderable Drawing`() {
+    fun `a decoded sketch with a zero dimension is still a placeholder -- not an unrenderable Drawing`() {
         // `StrokeCodec.decode` accepts "0x0" -- it is a well-formed header, just not a canvas
         // `Modifier.aspectRatio` (or SketchGeometry.fit's own `require`) can do anything with.
         val result = sketchesForDisplay(listOf(sketch("a", strokes = "1|0x0")))
