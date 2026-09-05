@@ -1,6 +1,7 @@
 package my.cheysoff.feature_notes
 
 import androidx.lifecycle.SavedStateHandle
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -12,6 +13,11 @@ import kotlinx.coroutines.test.runTest
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.model.NoteContentFormat
+import my.cheysoff.core_domain.model.SketchData
+import my.cheysoff.core_domain.sketch.Point
+import my.cheysoff.core_domain.sketch.Sketch
+import my.cheysoff.core_domain.sketch.Stroke
+import my.cheysoff.core_domain.sketch.StrokeCodec
 import my.cheysoff.feature_notes.model.single.SingleNoteIntent
 import my.cheysoff.feature_notes.ui.single.SingleNoteEvent
 import my.cheysoff.feature_notes.ui.single.SingleNoteViewModel
@@ -49,6 +55,7 @@ class SingleNoteViewModelTest {
     val mainDispatcherRule = MainDispatcherRule()
 
     private val repo = FakeNotesRepository()
+    private val sketchRepo = FakeSketchesRepository()
 
     private companion object {
         const val NOTE_ID = "n1"
@@ -77,6 +84,29 @@ class SingleNoteViewModelTest {
         updatedAt = updatedAt,
     )
 
+    private fun sketch(): Sketch = Sketch(
+        width = 4096,
+        height = 4096,
+        strokes = listOf(Stroke(colorArgb = 0xFF000000L, width = 8, points = listOf(Point(0, 0), Point(1, 1)))),
+    )
+
+    private fun sketchData(
+        id: String,
+        noteId: String = NOTE_ID,
+        anchor: Int = 0,
+        order: Int = 0,
+        createdAt: Long = 1_000L,
+        updatedAt: Long = 1_000L,
+    ) = SketchData(
+        id = id,
+        noteId = noteId,
+        anchor = anchor,
+        order = order,
+        strokes = StrokeCodec.encode(sketch()),
+        createdAt = createdAt,
+        updatedAt = updatedAt,
+    )
+
     /**
      * Builds the ViewModel the way the nav graph does. [isNew] is written into the handle only when
      * true, because every route other than the "+" button omits the argument entirely — and the
@@ -87,7 +117,7 @@ class SingleNoteViewModelTest {
             if (noteId != null) put("noteId", noteId)
             if (isNew) put("isNew", true)
         }
-        return SingleNoteViewModel(repo, SavedStateHandle(map))
+        return SingleNoteViewModel(repo, sketchRepo, SavedStateHandle(map))
     }
 
     /**
@@ -1093,5 +1123,170 @@ class SingleNoteViewModelTest {
             advanceUntilIdle()
 
             assertEquals("Untitled (copy)", repo.savedNotes.single().title)
+        }
+
+    // ============================================================================================
+    // Sketches
+    // ============================================================================================
+
+    @Test
+    fun `a brand-new sketch is anchored at the note's current block count`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            repo.noteById.value = note(content = "<p>one</p><p>two</p>", contentFormat = NoteContentFormat.HTML)
+            val vm = viewModel()
+            advanceUntilIdle()
+
+            vm.onIntent(SingleNoteIntent.SketchSaved(editingId = null, sketch = sketch()))
+            advanceUntilIdle()
+
+            val saved = sketchRepo.saved.single()
+            assertEquals(2, saved.anchor)
+            assertEquals(NOTE_ID, saved.noteId)
+        }
+
+    @Test
+    fun `a new sketch's order continues after the last sketch already at that anchor`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            repo.noteById.value = note(content = "")
+            sketchRepo.sketchesByNote.value = listOf(
+                sketchData(id = "s1", anchor = 0, order = 0),
+                sketchData(id = "s2", anchor = 0, order = 3),
+                // A different anchor's order must not leak into this one's calculation.
+                sketchData(id = "s3", anchor = 1, order = 99),
+            )
+            val vm = viewModel()
+            advanceUntilIdle()
+
+            vm.onIntent(SingleNoteIntent.SketchSaved(editingId = null, sketch = sketch()))
+            advanceUntilIdle()
+
+            assertEquals(4, sketchRepo.saved.single().order)
+        }
+
+    @Test
+    fun `saving a brand-new sketch stamps createdAt and updatedAt together`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            repo.noteById.value = note()
+            val vm = viewModel()
+            advanceUntilIdle()
+
+            val before = System.currentTimeMillis()
+            vm.onIntent(SingleNoteIntent.SketchSaved(editingId = null, sketch = sketch()))
+            advanceUntilIdle()
+            val after = System.currentTimeMillis()
+
+            val saved = sketchRepo.saved.single()
+            assertTrue(
+                "updatedAt must be stamped by this save -- SketchData's timestamps are caller-owned",
+                saved.updatedAt in before..after,
+            )
+            assertEquals(
+                "a brand-new sketch's createdAt and updatedAt start together",
+                saved.createdAt,
+                saved.updatedAt,
+            )
+        }
+
+    @Test
+    fun `re-editing an existing sketch keeps its anchor, order and createdAt but moves updatedAt`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            repo.noteById.value = note()
+            sketchRepo.sketchesByNote.value = listOf(
+                sketchData(id = "s1", anchor = 2, order = 5, createdAt = 111L, updatedAt = 111L),
+            )
+            val vm = viewModel()
+            advanceUntilIdle()
+
+            vm.onIntent(SingleNoteIntent.SketchSaved(editingId = "s1", sketch = sketch()))
+            advanceUntilIdle()
+
+            val saved = sketchRepo.saved.single()
+            assertEquals("s1", saved.id)
+            assertEquals("re-editing must not move the anchor", 2, saved.anchor)
+            assertEquals("re-editing must not move the order", 5, saved.order)
+            assertEquals("re-editing must not move createdAt", 111L, saved.createdAt)
+            assertTrue("re-editing still stamps a fresh updatedAt", saved.updatedAt > 111L)
+        }
+
+    @Test
+    fun `deleting a sketch goes through the repository's soft delete`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            repo.noteById.value = note()
+            val vm = viewModel()
+            advanceUntilIdle()
+
+            vm.onIntent(SingleNoteIntent.SketchDeleted("s1"))
+            advanceUntilIdle()
+
+            assertEquals(listOf("s1"), sketchRepo.deleted)
+        }
+
+    // -- H1: a drawing must never be left orphaned by the blank-note discard on back -----------
+
+    @Test
+    fun `a note opened as new whose only content is a drawing is not purged on back`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            repo.noteById.value = note()
+            val vm = viewModel(isNew = true)
+            advanceUntilIdle()
+
+            vm.onIntent(SingleNoteIntent.SketchSaved(editingId = null, sketch = sketch()))
+            advanceUntilIdle()
+            vm.onIntent(SingleNoteIntent.BackClicked)
+            advanceUntilIdle()
+
+            assertEquals(
+                "a note whose only content is a drawing must not be hard-deleted out from under it",
+                emptyList<String>(),
+                repo.callsNamed("purgeNote"),
+            )
+        }
+
+    @Test
+    fun `BackClicked waits for a pending sketch save before deciding the note is blank`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            // Falsifiability: with the isEmpty() guard restored but the sketchSaveJob join removed,
+            // this test's first assertion fails -- BackClicked reads current.sketches while the
+            // save is still parked on the gate below (unset by the write, which has not resumed
+            // yet) and purges the note right then, before the drawing has landed.
+            repo.noteById.value = note()
+            val vm = viewModel(isNew = true)
+            advanceUntilIdle()
+
+            val gate = CompletableDeferred<Unit>()
+            sketchRepo.saveGate = gate
+            vm.onIntent(SingleNoteIntent.SketchSaved(editingId = null, sketch = sketch()))
+            vm.onIntent(SingleNoteIntent.BackClicked)
+            runCurrent()
+
+            assertEquals(
+                "the save has not landed yet, so BackClicked must still be waiting on it",
+                emptyList<String>(),
+                repo.callsNamed("purgeNote"),
+            )
+
+            gate.complete(Unit)
+            advanceUntilIdle()
+
+            assertEquals(
+                "the drawing landed before back navigated away, so the note must survive",
+                emptyList<String>(),
+                repo.callsNamed("purgeNote"),
+            )
+        }
+
+    @Test
+    fun `sketches in state are ordered by anchor then uuid, not db or insertion order`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            repo.noteById.value = note()
+            val vm = viewModel()
+            sketchRepo.sketchesByNote.value = listOf(
+                sketchData(id = "z", anchor = 1),
+                sketchData(id = "a", anchor = 0),
+                sketchData(id = "b", anchor = 0),
+            )
+            advanceUntilIdle()
+
+            assertEquals(listOf("a", "b", "z"), vm.state.value.sketches.map { it.id })
         }
 }

@@ -182,6 +182,96 @@ class RecordNotesRepositoryTest {
         assertEquals("1|10x10|ff000000,4:0,0", reloaded.sketchRows().getValue("sk1").sketch.strokes)
     }
 
+    /** Seals a sketch record straight into [store], the same way [reload] finds one on disk. */
+    private fun seedSketch(id: String, noteId: String, isDeleted: Boolean = false) {
+        val row = SketchRow(
+            sketch = SketchData(
+                id = id,
+                noteId = noteId,
+                anchor = 0,
+                order = 0,
+                strokes = "1|10x10|ff000000,4:0,0",
+                createdAt = 1_000L,
+                updatedAt = 1_000L,
+                isDeleted = isDeleted,
+                deletedAt = if (isDeleted) 1_000L else null,
+            ),
+            rowClock = Hlc(1_000L, 0, "abcd1234"),
+            clocks = emptyMap(),
+            dirty = true,
+            lastSyncedSeq = 0L,
+        )
+        val sealed = codec.seal(SketchRecords.toPayload(row, createdAt = row.sketch.createdAt))
+        store.put(sealed.blindedId, sealed.envelope)
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // Sketches -- task 6's own reader and writer
+    // -------------------------------------------------------------------------------------------
+
+    @Test
+    fun `getSketchesForNote returns only that note's live sketches`() = runTest {
+        seedSketch("sk1", noteId = "a")
+        seedSketch("sk2", noteId = "b")
+        seedSketch("sk3", noteId = "a", isDeleted = true)
+        val reloaded = reload()
+
+        assertEquals(listOf("sk1"), reloaded.getSketchesForNote("a").first().map { it.id })
+        assertEquals(listOf("sk2"), reloaded.getSketchesForNote("b").first().map { it.id })
+        assertTrue(reloaded.getSketchesForNote("nonexistent").first().isEmpty())
+    }
+
+    @Test
+    fun `getSketchesForNote is live -- a delete is reflected without reselecting`() = runTest {
+        seedSketch("sk1", noteId = "a")
+        val reloaded = reload()
+
+        reloaded.deleteSketch("sk1")
+
+        assertTrue(reloaded.getSketchesForNote("a").first().isEmpty())
+    }
+
+    @Test
+    fun `deleteSketch soft-deletes -- the row survives a reload, tombstoned`() = runTest {
+        now = 5_000L
+        seedSketch("sk1", noteId = "a")
+        val reloaded = reload()
+
+        reloaded.deleteSketch("sk1")
+
+        val roundTripped = reload()
+        assertTrue(roundTripped.getSketchesForNote("a").first().isEmpty())
+        val stored = roundTripped.sketchRows().getValue("sk1").sketch
+        assertTrue(stored.isDeleted)
+        assertEquals(5_000L, stored.deletedAt)
+    }
+
+    /**
+     * The same idempotence guard [deleteNote] carries, transcribed for sketches: a second delete
+     * must not re-stamp `deletedAt`.
+     */
+    @Test
+    fun `deleting an already-deleted sketch does not restamp it`() = runTest {
+        now = 1_000L
+        seedSketch("sk1", noteId = "a")
+        val reloaded = reload()
+        reloaded.deleteSketch("sk1")
+        now = 9_000_000L
+
+        reloaded.deleteSketch("sk1")
+
+        assertEquals(1_000L, reloaded.sketchRows().getValue("sk1").sketch.deletedAt)
+    }
+
+    @Test
+    fun `deleting an unknown sketch id is a no-op`() = runTest {
+        val reloaded = reload()
+
+        reloaded.deleteSketch("nonexistent")
+
+        assertTrue(reloaded.sketchRows().isEmpty())
+    }
+
     // -------------------------------------------------------------------------------------------
     // Column ownership — the same rules as NoteDao.upsertNote
     // -------------------------------------------------------------------------------------------
@@ -328,6 +418,51 @@ class RecordNotesRepositoryTest {
         repository.saveNote(note("live"))
         assertEquals(0, repository.purgeExpiredTrash(now + TrashPolicy.RETENTION_MILLIS * 10))
         assertEquals(1, repository.getNotes(NotesSortOrder.RECENTLY_EDITED).first().size)
+    }
+
+    /**
+     * L5: `RoomNotesRepository.purgeExpiredTrash` on the phone purges notes, folders AND sketches
+     * in the same pass -- see that class's own KDoc on why a tombstoned sketch has to age out on
+     * its own, independently of the note it was tombstoned with. The desktop's version purged only
+     * notes and folders, so a desktop-only vault would leak a tombstoned sketch forever: nothing
+     * else here ever removes a `sketches` record.
+     *
+     * [seedSketch] stamps a tombstoned sketch's `deletedAt` at a fixed 1_000L, so expiry here is
+     * driven entirely by the `now` handed to `purgeExpiredTrash`, not by the mutable `now` field
+     * the note/folder purge tests above use to control `deleteNote`'s own stamp.
+     */
+    @Test
+    fun `purgeExpiredTrash purges an expired sketch tombstone too`() = runTest {
+        seedSketch("expired", noteId = "a", isDeleted = true) // deletedAt = 1_000L
+        val reloaded = reload()
+
+        val purged = reloaded.purgeExpiredTrash(1_000L + TrashPolicy.RETENTION_MILLIS)
+
+        assertEquals(1, purged)
+        assertTrue("the tombstoned sketch row must be gone", reloaded.sketchRows().isEmpty())
+        assertTrue("and gone from disk too", store.readAll().isEmpty())
+    }
+
+    @Test
+    fun `purgeExpiredTrash keeps a sketch tombstone still inside its retention window`() = runTest {
+        seedSketch("fresh", noteId = "a", isDeleted = true) // deletedAt = 1_000L
+        val reloaded = reload()
+
+        val purged = reloaded.purgeExpiredTrash(1_000L + TrashPolicy.RETENTION_MILLIS - 1)
+
+        assertEquals(0, purged)
+        assertTrue("a fresh tombstone must survive the purge", reloaded.sketchRows().containsKey("fresh"))
+    }
+
+    @Test
+    fun `purgeExpiredTrash leaves a live sketch alone`() = runTest {
+        seedSketch("live", noteId = "a", isDeleted = false)
+        val reloaded = reload()
+
+        val purged = reloaded.purgeExpiredTrash(1_000L + TrashPolicy.RETENTION_MILLIS * 10)
+
+        assertEquals(0, purged)
+        assertTrue(reloaded.sketchRows().containsKey("live"))
     }
 
     // -------------------------------------------------------------------------------------------

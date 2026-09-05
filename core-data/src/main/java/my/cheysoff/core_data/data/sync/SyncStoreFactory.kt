@@ -2,6 +2,7 @@ package my.cheysoff.core_data.data.sync
 
 import my.cheysoff.core_data.data.local.NoteDatabase
 import my.cheysoff.core_domain.sync.RecordType
+import my.cheysoff.core_sync_engine.ClockObserver
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -19,9 +20,21 @@ import javax.inject.Singleton
  *
  * Injected as a `dagger.Lazy` by its caller, because constructing it opens the encrypted database
  * and that is only possible after an unlock.
+ *
+ * ## [syncClock] is the same instance `DefaultSyncController` observes its engine with
+ *
+ * `SyncClock` is a `@Singleton`, so this and `DefaultSyncController` share one generator process
+ * -wide. [RoomSyncStore] mints a clock of its own in exactly one place — reconciling a note's
+ * sketches when its tombstone arrives — and that clock has to reach the same generator
+ * `DefaultSyncController` feeds from `SyncEngine`'s remote clocks, or a local write minted after a
+ * pass could go below a tombstone this device just wrote. See [RoomSyncStore]'s `clockObserver`
+ * parameter.
  */
 @Singleton
-class SyncStoreFactory @Inject constructor(private val database: NoteDatabase) {
+class SyncStoreFactory @Inject constructor(
+    private val database: NoteDatabase,
+    private val syncClock: SyncClock,
+) {
 
     /** The store for [accountId]. Cheap; a new one per pass is the intended shape. */
     fun create(accountId: String): RoomSyncStore = RoomSyncStore(
@@ -31,6 +44,7 @@ class SyncStoreFactory @Inject constructor(private val database: NoteDatabase) {
         sketchDao = database.sketchDao,
         syncStateDao = database.syncStateDao,
         accountId = accountId,
+        clockObserver = ClockObserver { syncClock.observe(it) },
     )
 
     /**

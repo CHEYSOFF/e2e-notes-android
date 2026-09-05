@@ -53,6 +53,7 @@ class SyncEngineRoomRebaselineTest {
             sketchDao = database.sketchDao,
             syncStateDao = database.syncStateDao,
             accountId = account,
+            clockObserver = ClockObserver {},
         )
     }
 
