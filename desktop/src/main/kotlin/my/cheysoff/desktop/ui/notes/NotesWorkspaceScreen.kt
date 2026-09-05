@@ -147,6 +147,8 @@ fun NotesWorkspaceScreen(
                         onRemoveChecklistItem = model::removeChecklistItem,
                         sketches = state.sketches,
                         onDeleteSketch = model::deleteSketch,
+                        attachments = state.attachments,
+                        onDeleteAttachment = model::deleteAttachment,
                         modifier = Modifier.weight(1f),
                     )
                 }
