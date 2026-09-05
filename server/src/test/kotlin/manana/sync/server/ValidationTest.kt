@@ -3,7 +3,6 @@ package manana.sync.server
 import io.ktor.server.testing.ApplicationTestBuilder
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 /**
  * Input validation. Every one of these is a request a well-behaved client never makes, which is
@@ -48,9 +47,11 @@ class ValidationTest {
 
             val page: ChangesResponse = client.getAuth("/v1/changes?since=0&limit=200", me.token).decode()
 
-            assertTrue(page.records.size < 10)
+            // 100 KiB, then 200 KiB would still fit a 250 KiB budget, but a third would not: two
+            // records in, exactly, not merely "fewer than ten".
+            assertEquals(2, page.records.size)
             val totalBytes = page.records.sumOf { B64.decodeOrNull(it.envelope)!!.size }
-            assertTrue(totalBytes <= 250 * 1024 + 100 * 1024)
+            assertEquals(200 * 1024, totalBytes)
         }
 
     /**
