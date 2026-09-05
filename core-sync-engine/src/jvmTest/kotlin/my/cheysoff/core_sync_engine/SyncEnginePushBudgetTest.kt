@@ -62,6 +62,35 @@ class SyncEnginePushBudgetTest {
         assertTrue(store.load(RecordType.NOTE, "large")!!.dirty)
     }
 
+    /**
+     * The session-scoped memory exists so a permanently-too-large record is not re-sealed and
+     * re-uploaded every single pass while nothing about it has changed -- see
+     * [SyncEngine.MAX_REMEMBERED_REJECTIONS]'s KDoc. It must not survive an edit, because an edit
+     * is exactly the "something changed, try again" signal the design is built around.
+     */
+    @Test
+    fun `a rejected record is skipped on the next pass and retried after being edited`() = runBlocking {
+        val store = RecordingStore()
+        store.put(stored(bigNote("large", contentBytes = 300_000), dirty = true))
+        val transport = RejectingTransport(rejectedUuid = "large")
+        val syncEngine = engine(store, transport)
+
+        val first = (syncEngine.pushOnce() as SyncOutcome.Completed).stats
+        assertEquals(1, first.rejected)
+        assertEquals(1, transport.pushes.size)
+
+        transport.pushes.clear()
+        val second = (syncEngine.pushOnce() as SyncOutcome.Completed).stats
+        assertEquals("still counted, even though nothing was sent", 1, second.rejected)
+        assertTrue("skipped before it was even sealed -- no network call at all", transport.pushes.isEmpty())
+
+        // Editing the record -- a new row clock -- is a different key, so it is retried.
+        store.put(stored(bigNote("large", contentBytes = 300_000).copy(rowClock = hlc(2)), dirty = true))
+        transport.pushes.clear()
+        syncEngine.pushOnce()
+        assertEquals(1, transport.pushes.size)
+    }
+
     private fun engine(store: SyncStore, transport: SyncTransport) = SyncEngine(
         store = store,
         transport = transport,
