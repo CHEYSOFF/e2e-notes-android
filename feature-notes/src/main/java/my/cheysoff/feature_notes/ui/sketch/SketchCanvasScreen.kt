@@ -86,13 +86,19 @@ import my.cheysoff.core_ui.theme.ToolbarDark
  * reports it with a plain, transient message, rather than the person discovering it as an
  * unactionable `413` from the server sometime later.
  *
+ * @param initialSketch when reopening an existing drawing for further editing, the [Sketch] it was
+ *   last saved as. Null starts from a blank canvas. Its `width`/`height` are used AS-IS for the
+ *   session -- not rederived from this box's current measurement -- because every one of its
+ *   points is expressed in that canvas's units; [SketchRenderer.fit] already letterboxes whatever
+ *   size it is given into whatever box it is handed, so reusing the original size costs nothing and
+ *   never distorts, while remeasuring could silently disagree with the points being loaded.
  * @param onDone called with the finished [Sketch] when the person taps Done. If nothing was drawn,
  *   this behaves like [onCancel] instead -- there is nothing to save.
  * @param onCancel called when the person backs out. A confirmation is asked first only if at least
  *   one stroke exists; confirming an empty canvas would be noise.
  */
 @Composable
-fun SketchCanvasScreen(onDone: (Sketch) -> Unit, onCancel: () -> Unit) {
+fun SketchCanvasScreen(initialSketch: Sketch? = null, onDone: (Sketch) -> Unit, onCancel: () -> Unit) {
     var selectedColorArgb by remember { mutableStateOf(TitleGrey.toArgb().toLong()) }
     var selectedNib by remember { mutableIntStateOf(NIB_SIZES[1]) }
     var eraseMode by remember { mutableStateOf(false) }
@@ -106,11 +112,15 @@ fun SketchCanvasScreen(onDone: (Sketch) -> Unit, onCancel: () -> Unit) {
 
     // Derived from `measuredSize` alone -- computed separately from `capture` below so
     // `SketchCaptureState`'s own private `width`/`height` never need a public getter added just
-    // for this screen to remember the numbers it already chose.
-    val canvasSize = remember(measuredSize) { measuredSize?.let { canvasDimensionsFor(it.width, it.height) } }
+    // for this screen to remember the numbers it already chose. A reopened drawing skips this
+    // entirely and keeps its own stored size -- see [initialSketch]'s KDoc.
+    val canvasSize = remember(measuredSize, initialSketch) {
+        initialSketch?.let { it.width to it.height }
+            ?: measuredSize?.let { canvasDimensionsFor(it.width, it.height) }
+    }
     val capture = remember(canvasSize) {
         canvasSize?.let { (width, height) ->
-            SketchCaptureState(width, height).apply {
+            SketchCaptureState(width, height, initialSketch?.strokes ?: emptyList()).apply {
                 colorArgb = selectedColorArgb
                 strokeWidth = selectedNib
             }

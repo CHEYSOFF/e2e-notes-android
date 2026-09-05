@@ -2,6 +2,7 @@ package my.cheysoff.feature_notes
 
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.model.NoteContentFormat
+import my.cheysoff.core_domain.model.SketchData
 import my.cheysoff.feature_notes.model.single.ChecklistItem
 import my.cheysoff.feature_notes.model.single.SingleNoteScreenState
 import my.cheysoff.feature_notes.model.single.normalizeChecklistText
@@ -10,6 +11,8 @@ import my.cheysoff.feature_notes.model.single.serializeChecklist
 import my.cheysoff.feature_notes.ui.single.isDiscardableOnOpen
 import my.cheysoff.feature_notes.ui.single.mergeChecklist
 import my.cheysoff.feature_notes.ui.single.mergeIncomingNote
+import my.cheysoff.feature_notes.ui.single.nextSketchOrder
+import my.cheysoff.feature_notes.ui.single.sortSketches
 import my.cheysoff.feature_notes.ui.single.toEditorBaseline
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -376,5 +379,62 @@ class SingleNoteMergeTest {
         )
         assertEquals(NoteContentFormat.HTML, merged.state.contentFormat)
         assertEquals(NoteContentFormat.HTML, merged.baseline.contentFormat)
+    }
+
+    // ============================================================================================
+    // sortSketches / nextSketchOrder
+    // ============================================================================================
+
+    private fun sketch(id: String, anchor: Int = 0, order: Int = 0) = SketchData(
+        id = id,
+        noteId = "n1",
+        anchor = anchor,
+        order = order,
+        strokes = "1|4096x4096",
+        createdAt = 1_000L,
+        updatedAt = 1_000L,
+    )
+
+    @Test
+    fun `sortSketches orders by anchor first`() {
+        val sketches = listOf(sketch("a", anchor = 2), sketch("b", anchor = 0), sketch("c", anchor = 1))
+
+        assertEquals(listOf("b", "c", "a"), sortSketches(sketches).map { it.id })
+    }
+
+    @Test
+    fun `sortSketches ties break by id, not by order or insertion position`() {
+        // Same anchor, `order` deliberately disagreeing with the desired id order, insertion order
+        // deliberately reversed too -- only an explicit id tie-break can produce "a, b, c" here.
+        val sketches = listOf(
+            sketch("c", anchor = 0, order = 0),
+            sketch("b", anchor = 0, order = 5),
+            sketch("a", anchor = 0, order = 9),
+        )
+
+        assertEquals(listOf("a", "b", "c"), sortSketches(sketches).map { it.id })
+    }
+
+    @Test
+    fun `nextSketchOrder is 0 for an anchor with no sketches yet`() {
+        assertEquals(0, nextSketchOrder(emptyList(), anchor = 3))
+    }
+
+    @Test
+    fun `nextSketchOrder continues one past the highest order at that anchor`() {
+        val sketches = listOf(sketch("a", anchor = 0, order = 0), sketch("b", anchor = 0, order = 3))
+
+        assertEquals(4, nextSketchOrder(sketches, anchor = 0))
+    }
+
+    @Test
+    fun `nextSketchOrder ignores sketches at a different anchor`() {
+        val sketches = listOf(sketch("a", anchor = 1, order = 99))
+
+        assertEquals(
+            "a different anchor's order must not leak into this one's next value",
+            0,
+            nextSketchOrder(sketches, anchor = 0),
+        )
     }
 }
