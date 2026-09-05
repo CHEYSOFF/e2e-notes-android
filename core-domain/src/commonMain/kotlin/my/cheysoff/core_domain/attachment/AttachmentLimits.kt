@@ -20,6 +20,21 @@ object AttachmentLimits {
      */
     const val MAX_THUMB_BYTES = 65_536
 
+    /**
+     * How the thumbnail encode retreats when [THUMB_QUALITY] alone doesn't fit [MAX_THUMB_BYTES]:
+     * drop by [THUMB_QUALITY_STEP] each rung, never below [MIN_THUMB_QUALITY], and use the best
+     * attempt so far once the floor is reached rather than failing (a large thumbnail is a slow
+     * rail, not a broken attachment).
+     *
+     * This is its own small ladder, deliberately not [ImportLadder]'s quality rungs (85/75/65/55
+     * never lands on 70's descent) and deliberately not left as importer-local constants: an
+     * importer on a second platform (the desktop, should it ever gain one) must retreat by exactly
+     * this much or the same source photo's thumbnail diverges between the two devices -- the exact
+     * drift [ImportLadder]'s own derived dimension rungs exist to prevent for the main encode.
+     */
+    const val THUMB_QUALITY_STEP = 10
+    const val MIN_THUMB_QUALITY = 10
+
     /** Everything is re-encoded to JPEG (spec §3). Stored per row so a second format is additive. */
     const val MIME_JPEG = "image/jpeg"
 }
