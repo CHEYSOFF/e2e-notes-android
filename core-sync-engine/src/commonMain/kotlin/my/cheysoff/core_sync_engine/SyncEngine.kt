@@ -87,6 +87,21 @@ class SyncEngine(
     private val pass = Mutex()
 
     /**
+     * Records this session has already seen [TransportFault.REJECTED], keyed by type, uuid **and
+     * row clock**, so a permanently-too-large record is not re-sealed and re-uploaded on every
+     * pass while nothing about it has changed.
+     *
+     * In-memory and bounded, deliberately: this is the interim state before a server understands
+     * attachments, not a permanent record of failure, so it needs no schema and no migration.
+     * Keying on the row clock rather than just the identity is what makes editing the record (a
+     * new clock) or restarting the process (an empty set again) both retry it -- the two ordinary
+     * "something changed, try again" triggers, for free. Insertion-ordered so the oldest entry is
+     * what [rememberRejected] evicts once the bound is hit, which is the entry least likely to
+     * still be relevant.
+     */
+    private val rejectedThisSession = LinkedHashSet<String>()
+
+    /**
      * Pull, push, and round again while the push merged something.
      *
      * The product entry point. Never throws: every failure is a [SyncOutcome].
@@ -317,7 +332,17 @@ class SyncEngine(
         val pending = store.dirtyRecords()
         if (pending.isEmpty()) return Phase(stats, null)
 
-        for (batch in batches(pending)) {
+        // A record this session already watched the server refuse for its bytes is skipped before
+        // it is even sealed. Nothing about it can have changed -- the row clock is part of the
+        // key, so an edit would already have missed this set -- and re-sending the identical bytes
+        // costs a full re-seal and upload of, potentially, a multi-megabyte attachment every single
+        // pass for no different outcome. Still counted as rejected: the signal must not disappear
+        // just because the network call it used to cost did.
+        val (known, sendable) = pending.partition { rejectionKeyOf(it.record) in rejectedThisSession }
+        stats = stats.copy(rejected = stats.rejected + known.size)
+        if (sendable.isEmpty()) return Phase(stats, null)
+
+        for (batch in batches(sendable)) {
             // Keyed by identity rather than read back by position: the transport contract allows a
             // response in any order, and an engine that trusted the order would acknowledge one row
             // with another row's seq -- a lost update that looks like nothing at all.
@@ -341,6 +366,7 @@ class SyncEngine(
                 // which is why anything large enough to provoke this was put in one.
                 if (failure.fault == TransportFault.REJECTED && batch.size == 1) {
                     stats = stats.copy(rejected = stats.rejected + 1)
+                    rememberRejected(batch.single().record)
                     continue
                 }
                 return Phase(stats, stop(failure))
@@ -384,6 +410,30 @@ class SyncEngine(
             }
         }
         return Phase(stats, null)
+    }
+
+    /** [rejectedThisSession]'s key: identity plus row clock, so an edit is a different key. */
+    private fun rejectionKeyOf(record: SyncRecord): String =
+        "${keyOf(record.type, record.uuid)}:${record.rowClock}"
+
+    /**
+     * Remembers [record] as rejected for the rest of this session, evicting the oldest entry first
+     * if [MAX_REMEMBERED_REJECTIONS] is already reached.
+     *
+     * The bound exists so a pathological account -- or an attacker who can make this device dirty
+     * records faster than it can learn they are hopeless -- cannot grow this set without limit.
+     * Losing the oldest entry only means that one record is re-sent once more than strictly
+     * necessary; it is never lost track of forever, because the row stays dirty either way.
+     */
+    private fun rememberRejected(record: SyncRecord) {
+        val key = rejectionKeyOf(record)
+        rejectedThisSession.remove(key) // re-insert at the end, so it reads as the most recent
+        rejectedThisSession.add(key)
+        if (rejectedThisSession.size > MAX_REMEMBERED_REJECTIONS) {
+            val oldest = rejectedThisSession.iterator()
+            oldest.next()
+            oldest.remove()
+        }
     }
 
     /**
@@ -622,6 +672,15 @@ class SyncEngine(
          * still has company.
          */
         const val LARGE_RECORD_BYTES = 128 * 1024
+
+        /**
+         * How many rejected-record keys [rejectedThisSession] holds at once.
+         *
+         * A few hundred is enormous for what this guards against -- an interim state before a
+         * server understands attachments, on an account with at most a handful of devices -- and
+         * small enough that the set is never a memory concern.
+         */
+        const val MAX_REMEMBERED_REJECTIONS = 256
 
         private fun keyOf(type: RecordType, uuid: String): String = "${type.wireKey}:$uuid"
     }
