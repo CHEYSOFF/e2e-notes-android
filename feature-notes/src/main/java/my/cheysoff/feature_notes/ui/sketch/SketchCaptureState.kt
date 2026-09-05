@@ -187,9 +187,18 @@ class SketchCaptureState(private val width: Int, private val height: Int) {
         private const val SIMPLIFY_EPSILON = 2
 
         // A touch point rarely lands exactly on the path it means to erase -- a fingertip is much
-        // wider than the stroke underneath it. 24 units (out of a 4096-unit canvas) is comfortably
-        // wider than a typical thin stroke without being so generous that erasing one mark risks
-        // catching its neighbour.
-        private const val ERASE_TOLERANCE = 24.0
+        // wider than the stroke underneath it, so this needs to be sized to a fingertip, not to the
+        // stroke.
+        //
+        // Derivation of the old value's problem: the canvas long edge is 4096 units. On a phone
+        // whose screen is ~2992 physical px tall, 24 units of canvas maps to 24/4096 * 2992 ~= 17.5
+        // screen px -- about a third of a conventional 48dp touch target (48dp is comfortably over
+        // 48 physical px on any density this app ships to). For a tool whose whole premise is a
+        // fingertip, that barely responded.
+        //
+        // 48 canvas units maps to ~35 screen px on that same phone -- roughly doubling the old
+        // radius puts it in the same ballpark as a real fingertip, while still being narrow enough
+        // that erasing one stroke does not reliably catch a neighbour drawn a normal pen-width away.
+        private const val ERASE_TOLERANCE = 48.0
     }
 }
