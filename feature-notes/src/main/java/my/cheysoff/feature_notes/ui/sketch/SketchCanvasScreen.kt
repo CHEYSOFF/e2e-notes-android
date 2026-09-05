@@ -173,7 +173,11 @@ fun SketchCanvasScreen(initialSketch: Sketch? = null, onDone: (Sketch) -> Unit, 
             onCancel = { requestCancel() },
             onDone = {
                 val state = capture
-                if (state != null && state.strokes.isNotEmpty()) onDone(state.toSketch()) else onCancel()
+                if (state != null && shouldSaveSketchOnDone(state.strokes.isNotEmpty(), initialSketch != null)) {
+                    onDone(state.toSketch())
+                } else {
+                    onCancel()
+                }
             },
         )
 
@@ -485,6 +489,20 @@ private fun canvasDimensionsFor(boxWidthPx: Int, boxHeightPx: Int): Pair<Int, In
 }
 
 private const val CANVAS_LONG_EDGE = 4096
+
+/**
+ * Whether tapping Done should hand the current strokes to [onDone] rather than falling through to
+ * [onCancel] as if nothing had happened.
+ *
+ * A brand-new canvas ([isReopenedSketch] false) that ends up with no strokes has nothing to
+ * create -- that is a real cancel, exactly as before. But once a sketch already exists on disk,
+ * ending up with zero strokes is not "nothing happened": it is the user erasing every stroke and
+ * then confirming that with Done. That is a legitimate edit and must be saved as an empty result,
+ * not silently discarded back to whatever drawing was there before -- which is what treating an
+ * empty reopened canvas the same as a never-drawn-on new one would do.
+ */
+internal fun shouldSaveSketchOnDone(hasStrokes: Boolean, isReopenedSketch: Boolean): Boolean =
+    hasStrokes || isReopenedSketch
 
 /** Three nib widths, in canvas units -- not screen px -- so a stroke reads the same width on every
  * device regardless of its screen's density or size. */
