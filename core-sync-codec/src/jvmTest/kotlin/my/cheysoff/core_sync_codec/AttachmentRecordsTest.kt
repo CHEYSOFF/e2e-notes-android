@@ -128,6 +128,30 @@ class AttachmentRecordsTest {
         )
     }
 
+    /**
+     * A JSON-null image column is refused, not read as an empty image.
+     *
+     * `deletedAt` two tests below is nullable and legitimately absent; `bytes` is not, and neither
+     * of this project's encoders can emit a null one. A peer can, though, and turning that into
+     * `ByteArray(0)` is the blank-grey-box outcome refusing undecodable base64 exists to prevent --
+     * reached by a different route.
+     */
+    @Test
+    fun `a null image column refuses the record`() {
+        val payload = AttachmentRecords.toPayload(row(), createdAt = 100L)
+
+        assertNull(
+            AttachmentRecords.fromPayload(
+                payload.copy(fields = payload.fields + (PayloadFields.BYTES to null)),
+            ),
+        )
+        assertNull(
+            AttachmentRecords.fromPayload(
+                payload.copy(fields = payload.fields + (PayloadFields.THUMB_BYTES to null)),
+            ),
+        )
+    }
+
     @Test
     fun `a null deletedAt round-trips as null`() {
         val original = row(attachment(isDeleted = false, deletedAt = null))
