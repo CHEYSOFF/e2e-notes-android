@@ -1,5 +1,6 @@
 package my.cheysoff.feature_notes
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import my.cheysoff.core_domain.model.SketchData
@@ -22,9 +23,19 @@ internal class FakeSketchesRepository : SketchesRepository {
     /** Every id handed to [deleteSketch], in call order. */
     val deleted = mutableListOf<String>()
 
+    /**
+     * When set, [saveSketch] suspends here before recording anything -- the hook a test uses to
+     * pin down the ViewModel's actual concurrent interleaving (e.g. a `BackClicked` racing an
+     * in-flight `SketchSaved`) instead of the two always happening to run sequentially, which is
+     * all a plain suspend fun with no real suspension point can ever exercise on
+     * `StandardTestDispatcher`. `null` by default, so every other test's timing is unaffected.
+     */
+    var saveGate: CompletableDeferred<Unit>? = null
+
     override fun getSketchesForNote(noteId: String): Flow<List<SketchData>> = sketchesByNote
 
     override suspend fun saveSketch(sketch: SketchData) {
+        saveGate?.await()
         saved += sketch
     }
 

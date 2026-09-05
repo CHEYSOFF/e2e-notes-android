@@ -1,6 +1,7 @@
 package my.cheysoff.feature_notes
 
 import androidx.lifecycle.SavedStateHandle
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -1218,6 +1219,60 @@ class SingleNoteViewModelTest {
             advanceUntilIdle()
 
             assertEquals(listOf("s1"), sketchRepo.deleted)
+        }
+
+    // -- H1: a drawing must never be left orphaned by the blank-note discard on back -----------
+
+    @Test
+    fun `a note opened as new whose only content is a drawing is not purged on back`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            repo.noteById.value = note()
+            val vm = viewModel(isNew = true)
+            advanceUntilIdle()
+
+            vm.onIntent(SingleNoteIntent.SketchSaved(editingId = null, sketch = sketch()))
+            advanceUntilIdle()
+            vm.onIntent(SingleNoteIntent.BackClicked)
+            advanceUntilIdle()
+
+            assertEquals(
+                "a note whose only content is a drawing must not be hard-deleted out from under it",
+                emptyList<String>(),
+                repo.callsNamed("purgeNote"),
+            )
+        }
+
+    @Test
+    fun `BackClicked waits for a pending sketch save before deciding the note is blank`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            // Falsifiability: with the isEmpty() guard restored but the sketchSaveJob join removed,
+            // this test's first assertion fails -- BackClicked reads current.sketches while the
+            // save is still parked on the gate below (unset by the write, which has not resumed
+            // yet) and purges the note right then, before the drawing has landed.
+            repo.noteById.value = note()
+            val vm = viewModel(isNew = true)
+            advanceUntilIdle()
+
+            val gate = CompletableDeferred<Unit>()
+            sketchRepo.saveGate = gate
+            vm.onIntent(SingleNoteIntent.SketchSaved(editingId = null, sketch = sketch()))
+            vm.onIntent(SingleNoteIntent.BackClicked)
+            runCurrent()
+
+            assertEquals(
+                "the save has not landed yet, so BackClicked must still be waiting on it",
+                emptyList<String>(),
+                repo.callsNamed("purgeNote"),
+            )
+
+            gate.complete(Unit)
+            advanceUntilIdle()
+
+            assertEquals(
+                "the drawing landed before back navigated away, so the note must survive",
+                emptyList<String>(),
+                repo.callsNamed("purgeNote"),
+            )
         }
 
     @Test

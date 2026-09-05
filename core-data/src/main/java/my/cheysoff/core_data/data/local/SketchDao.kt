@@ -159,6 +159,22 @@ interface SketchDao {
     suspend fun sketchesDeletedAtForNote(noteId: String, deletedAt: Long): List<SketchEntity>
 
     /**
+     * The hard DELETE for every sketch under [noteId], live or tombstoned. `RoomNotesRepository
+     * .purgeNote` calls this in the same transaction as the note's own row delete.
+     *
+     * Unlike the tombstone cascade above (deletion by reconciliation, never `ON DELETE CASCADE`),
+     * a purge is not a sync event the other device needs to hear about — it is the local, once-
+     * unsynced row simply ceasing to exist. Leaving a live sketch behind here is exactly the bug
+     * this closes: `noteId` would then name a note that no longer exists, and nothing else in the
+     * schema (there is no foreign key, by design — see this file's own KDoc) would ever notice or
+     * clean it up. No `isDeleted` guard, deliberately: a tombstoned sketch under this note would
+     * otherwise survive the note's own purge and wait out `purgeSketchesDeletedBefore` on its own,
+     * which is needless once the note itself is gone for good.
+     */
+    @Query("DELETE FROM sketches WHERE noteId = :noteId")
+    suspend fun purgeSketchesForNote(noteId: String)
+
+    /**
      * Brings one sketch back out of Trash. Mirrors `NoteDao.restoreNote`: clears the tombstone,
      * bumps the clock and marks the row dirty so the un-delete is pushed — a restore the other
      * device never hears about is not a restore.

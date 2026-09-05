@@ -308,6 +308,13 @@ class SingleNoteViewModel @Inject constructor(
     // insert mid-flight.
     private var duplicateJob: Job? = null
 
+    // The in-flight sketch save, if any. saveSketch's write and current.sketches (which the
+    // blank-note discard in BackClicked reads) are connected only through this device's own Flow
+    // echo — without joining this job first, a drawing saved just before Done->back can still be
+    // mid-flight (or written but not yet re-emitted into _state) when the guard runs, so the note
+    // gets purged with the sketch orphaned under it.
+    private var sketchSaveJob: Job? = null
+
     // Serializes DB writes so an older/delayed save can't run concurrently with a newer one.
     private val saveMutex = Mutex()
 
@@ -555,15 +562,25 @@ class SingleNoteViewModel @Inject constructor(
                     // duplicate: its INSERT runs on viewModelScope, which the pop cancels.
                     metaWriteJob?.join()
                     duplicateJob?.join()
+                    // A drawing saved between the last edit and this back tap must be counted before
+                    // the guard below decides whether the note is still blank — otherwise the note
+                    // gets purged with the sketch orphaned live underneath it. See saveSketch's own
+                    // comment for why joining this job is what makes current.sketches trustworthy
+                    // here, not just "usually right in time".
+                    sketchSaveJob?.join()
                     val current = _state.value
                     val id = noteId
                     when {
                         // A note created for this screen and never written into is discarded rather
                         // than saved — otherwise an abandoned "+" tap would sit at the top of the
                         // newest-first list. Note the guard is createdBlankNote, not "is blank now":
-                        // an existing note the user emptied out is kept.
+                        // an existing note the user emptied out is kept. current.sketches is checked
+                        // too: a note whose only content is a drawing is not "still blank" either —
+                        // without this, purgeNote's hard delete below would leave that drawing's row
+                        // live in the database under a note id that no longer exists.
                         id != null && createdBlankNote && current.title.isBlank() &&
-                                current.content.isBlank() && current.checklist.isEmpty() -> {
+                                current.content.isBlank() && current.checklist.isEmpty() &&
+                                current.sketches.isEmpty() -> {
                             saveJob?.cancel()
                             // purgeNote, NOT deleteNote: this is a discard, not a deletion the user
                             // asked for. deleteNote became a soft delete when Trash landed, and
@@ -639,7 +656,7 @@ class SingleNoteViewModel @Inject constructor(
      */
     private fun saveSketch(editingId: String?, sketch: Sketch) {
         val id = noteId ?: return
-        viewModelScope.launch {
+        val job = viewModelScope.launch {
             val current = _state.value
             val now = System.currentTimeMillis()
             val encoded = StrokeCodec.encode(sketch)
@@ -657,7 +674,16 @@ class SingleNoteViewModel @Inject constructor(
                 )
             }
             sketchesRepository.saveSketch(data)
+            // Mirror the write into `_state` right here, rather than waiting for
+            // sketchesRepository's Flow to echo it back: BackClicked's blank-note discard guard
+            // reads current.sketches immediately after joining this job (sketchSaveJob), and
+            // Room's invalidation-tracker re-query runs on its own dispatcher — without this, the
+            // guard could still observe an empty list for a sketch that has, in fact, just been
+            // durably saved, and purge the note out from under it (see purgeNote's own cascade for
+            // the other half of that fix).
+            _state.update { it.copy(sketches = sortSketches(it.sketches.filterNot { s -> s.id == data.id } + data)) }
         }
+        sketchSaveJob = job
     }
 
     /**
