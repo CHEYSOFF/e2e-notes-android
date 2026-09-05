@@ -189,7 +189,8 @@ fun AppNavHost(
 
             SingleNoteScreen(
                 state = state,
-                onIntent = { intent -> viewModel.onIntent(intent) }
+                onIntent = { intent -> viewModel.onIntent(intent) },
+                loadAttachment = { id -> viewModel.attachment(id) },
             )
         }
 
