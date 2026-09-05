@@ -171,7 +171,7 @@ stated here rather than hidden.
 
 ```sql
 CREATE TABLE attachments (
-    id            TEXT    NOT NULL PRIMARY KEY,
+    uuid          TEXT    NOT NULL PRIMARY KEY,
     noteId        TEXT    NOT NULL,
     anchor        INTEGER NOT NULL,
     sortOrder     INTEGER NOT NULL,
@@ -196,7 +196,7 @@ CREATE TABLE attachments (
 CREATE INDEX index_attachments_noteId ON attachments(noteId);
 ```
 
-Following the sketch table exactly: `sortOrder` rather than `order` (a SQL keyword), **no
+Following the sketch table exactly: `uuid` as the primary key and `sortOrder` rather than `order` (a SQL keyword), both matching `sketches`, **no
 foreign key and no cascade** (§6), and `dirty DEFAULT 1` pinned in all three places — the
 entity, the migration SQL, and the exported schema JSON — because a row that defaults to
 clean is a row that never syncs, and nothing fails loudly when it happens.
