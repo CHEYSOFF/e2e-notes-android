@@ -153,6 +153,8 @@ fun MananaWindow(
                 onCloseSearch = model::closeSearch,
                 onMoveHighlight = model::moveSearchHighlight,
                 onOpenHighlighted = { model.openHighlightedSearchHit() },
+                attachmentViewerOpen = state.viewingAttachmentId != null,
+                onCloseAttachmentViewer = model::closeAttachmentViewer,
                 onFlushSave = model::flushPendingSave,
                 onToggleSidebar = { sidebarVisible = !sidebarVisible },
                 onTextScale = { step ->
@@ -206,6 +208,8 @@ private fun handleShortcut(
     onCloseSearch: () -> Unit,
     onMoveHighlight: (Int) -> Unit,
     onOpenHighlighted: () -> Unit,
+    attachmentViewerOpen: Boolean,
+    onCloseAttachmentViewer: () -> Unit,
     onFlushSave: () -> Unit,
     onToggleSidebar: () -> Unit,
     onTextScale: (TextScaleStep) -> Unit,
@@ -222,6 +226,14 @@ private fun handleShortcut(
             Key.DirectionUp -> { onMoveHighlight(-1); return true }
             Key.Enter, Key.NumPadEnter -> { onOpenHighlighted(); return true }
         }
+    }
+
+    // The attachment viewer overlay closes on Escape, the same binding the search palette gets
+    // above -- see AttachmentViewer's own KDoc for why this lives here rather than a local key
+    // handler on the overlay itself.
+    if (attachmentViewerOpen && event.key == Key.Escape) {
+        onCloseAttachmentViewer()
+        return true
     }
 
     if (!command) return false

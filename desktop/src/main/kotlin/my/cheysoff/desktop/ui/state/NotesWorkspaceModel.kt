@@ -114,7 +114,9 @@ class NotesWorkspaceModel(
         // Flush before switching: the debounce may still be holding the outgoing note's last few
         // keystrokes, and loadDraft is about to replace the draft that holds them.
         flushPendingSave()
-        _state.value = recompute(_state.value.copy(selectedNoteId = noteId))
+        // A viewer left open on the outgoing note's photo must not silently persist over the
+        // incoming note -- see WorkspaceUiState.viewingAttachmentId's own KDoc.
+        _state.value = recompute(_state.value.copy(selectedNoteId = noteId, viewingAttachmentId = null))
     }
 
     /**
@@ -140,7 +142,7 @@ class NotesWorkspaceModel(
             updatedAt = timestamp,
         )
         latestNotes = listOf(note) + latestNotes
-        _state.value = recompute(_state.value.copy(selectedNoteId = note.id))
+        _state.value = recompute(_state.value.copy(selectedNoteId = note.id, viewingAttachmentId = null))
         scope.launch { repository.saveNote(note) }
         return note.id
     }
@@ -150,7 +152,9 @@ class NotesWorkspaceModel(
         autosaveJob?.cancel()
         val draft = _state.value.editor
         latestNotes = latestNotes.filterNot { it.id == id }
-        _state.value = recompute(_state.value.copy(selectedNoteId = null, saveStatus = SaveStatus.Idle))
+        _state.value = recompute(
+            _state.value.copy(selectedNoteId = null, saveStatus = SaveStatus.Idle, viewingAttachmentId = null),
+        )
         scope.launch {
             // A note that was created and left blank must never reach Trash — it would be a row
             // the user has to clean up for having pressed Ctrl+N by accident.
@@ -196,6 +200,16 @@ class NotesWorkspaceModel(
         val port = attachments ?: return
         _state.value = _state.value.copy(attachments = _state.value.attachments.filterNot { it.id == id })
         scope.launch { port.deleteAttachment(id) }
+    }
+
+    /** Opens the full-screen viewer on [id]. See [WorkspaceUiState.viewingAttachmentId]. */
+    fun openAttachmentViewer(id: String) {
+        _state.value = _state.value.copy(viewingAttachmentId = id)
+    }
+
+    /** Closes the full-screen viewer, whichever attachment it was showing. */
+    fun closeAttachmentViewer() {
+        _state.value = _state.value.copy(viewingAttachmentId = null)
     }
 
     // ---------------------------------------------------------------- editing
@@ -296,6 +310,7 @@ class NotesWorkspaceModel(
                 selectedNoteId = noteId,
                 selectedFolderId = if (folderStillShowsIt) _state.value.selectedFolderId else null,
                 search = SearchState(),
+                viewingAttachmentId = null,
             )
         )
     }

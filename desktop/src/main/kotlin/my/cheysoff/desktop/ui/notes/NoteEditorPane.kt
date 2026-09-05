@@ -69,7 +69,6 @@ import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.core_domain.sketch.DisplaySketch
 import my.cheysoff.desktop.ui.attachment.AttachmentRail
-import my.cheysoff.desktop.ui.attachment.AttachmentViewer
 import my.cheysoff.desktop.ui.state.EditorDraft
 import my.cheysoff.desktop.ui.state.SaveStatus
 import my.cheysoff.desktop.ui.theme.AccentIndigo
@@ -111,7 +110,7 @@ fun NoteEditorPane(
     sketches: List<DisplaySketch>,
     onDeleteSketch: (String) -> Unit,
     attachments: List<AttachmentData>,
-    onDeleteAttachment: (String) -> Unit,
+    onAttachmentTapped: (AttachmentData) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (draft == null) {
@@ -212,24 +211,12 @@ fun NoteEditorPane(
 
             SketchSection(sketches = sketches, onDelete = onDeleteSketch)
 
-            // Keyed on the note id so switching notes closes a viewer left open on the previous
-            // one's photo rather than carrying it across -- the same reason richTextState's own
-            // LaunchedEffect above is keyed on draft.id.
-            var openAttachment by remember(draft.id) { mutableStateOf<AttachmentData?>(null) }
-            AttachmentRail(attachments = attachments, onTapped = { openAttachment = it })
+            // The viewer itself is not rendered here -- it is a full-bleed overlay owned by
+            // NotesWorkspaceScreen (see AttachmentViewer's own KDoc for why), so this pane only
+            // ever forwards the tap.
+            AttachmentRail(attachments = attachments, onTapped = onAttachmentTapped)
 
             Spacer(Modifier.height(60.dp))
-
-            openAttachment?.let { attachment ->
-                AttachmentViewer(
-                    attachment = attachment,
-                    onClose = { openAttachment = null },
-                    onDelete = { id ->
-                        openAttachment = null
-                        onDeleteAttachment(id)
-                    },
-                )
-            }
         }
     }
 }
