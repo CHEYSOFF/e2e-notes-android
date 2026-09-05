@@ -592,6 +592,24 @@ class RoomNotesRepository @Inject constructor(
      * Creates or updates an attachment. Mirrors `RoomSketchesRepository.saveSketch` — one stamp,
      * one transaction, the row's prior clocks read inside it so [attachmentTouchedFields] can tell
      * what this write actually changed.
+     *
+     * ## `attachment.meta` is deliberately ignored
+     *
+     * The stored row's `meta` is carried forward and the incoming object's is discarded — this
+     * method has **no** path that writes a `meta` a caller supplied. That looks like a bug and is
+     * the opposite: `meta` is an opaque escape hatch (`AttachmentData.meta`,
+     * `PayloadFields.META`) that no code in this build ever sets, so the only value a caller can
+     * plausibly be holding is one it read out of a row that a *newer* build wrote. UI code builds
+     * an `AttachmentData` out of what an editor has in hand — the same way `upsertNote` ignores
+     * `isFavorite` and the tombstone, and for the same reason — so the first caller that rebuilds
+     * a row without carrying `meta` forward would blank it on a local edit and then push the
+     * blank. Reading it off the row makes that impossible rather than merely discouraged.
+     *
+     * **A future caption feature must not simply start honouring `attachment.meta` here.** It
+     * needs its own write path, so that "this call is deliberately setting `meta`" and "this call
+     * happens to be holding a default-constructed one" stay distinguishable. `meta` is also absent
+     * from [attachmentTouchedFields] and stays absent: it has no clock of its own and merges at
+     * the row clock.
      */
     override suspend fun saveAttachment(attachment: AttachmentData) {
         val stamp = stamp()
@@ -614,7 +632,8 @@ class RoomNotesRepository @Inject constructor(
                     updatedAt = attachment.updatedAt,
                     isDeleted = attachment.isDeleted,
                     deletedAt = attachment.deletedAt,
-                    meta = attachment.meta,
+                    // The row's own, never the caller's -- see this method's KDoc.
+                    meta = prior?.meta.orEmpty(),
                     hlcMs = stamp.hlc.ms,
                     hlcCounter = stamp.hlc.counter,
                     hlcNode = stamp.hlc.node,

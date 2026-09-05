@@ -30,9 +30,9 @@ package my.cheysoff.core_domain.sync
  * programming error rather than a "same as something else" shorthand, and [validate] says so.
  */
 data class SyncRecord(
-    /** Note or folder. Decides which field set and which merge rules apply. */
+    /** Which kind of record this is. Decides which field set and which merge rules apply. */
     val type: RecordType,
-    /** The record's local UUID — `notes.id` or `folders.id`. Stable for the record's whole life. */
+    /** The record's local UUID — its table's primary key. Stable for the record's whole life. */
     val uuid: String,
     /**
      * The row clock: the clock of the most recent write to this record, from whichever device.

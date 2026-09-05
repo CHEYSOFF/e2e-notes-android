@@ -112,6 +112,32 @@ class RoomNotesRepositoryAttachmentTest {
         assertEquals("", repository.attachmentsOf("n1").first().single().meta)
     }
 
+    /**
+     * A local edit must not blank a `meta` a newer build wrote.
+     *
+     * The row is seeded through the DAO on purpose, breaking this file's usual
+     * seed-through-the-repository rule: `saveAttachment` deliberately has no path that writes a
+     * caller-supplied `meta` (see its KDoc), so the repository cannot produce this state and a
+     * newer build is the only thing that can. What is under test is the *edit*, which does go
+     * through the real seam.
+     *
+     * The `AttachmentData` handed to [RoomNotesRepository.saveAttachment] carries `meta = ""`,
+     * which is exactly what an editor screen constructing one from what it has in hand will pass.
+     * Honouring that field would blank the caption here and push the blank to every device.
+     */
+    @Test
+    fun `saving over a row written by a newer build keeps that build's meta`() = runTest {
+        repository.saveAttachment(attachment("a1", "n1"))
+        val seeded = database.attachmentDao.attachmentRow("a1")!!
+        database.attachmentDao.upsertAttachment(seeded.copy(meta = "{\"caption\":\"newer build\"}"))
+
+        repository.saveAttachment(attachment("a1", "n1", bytes = byteArrayOf(4, 5, 6)))
+
+        val stored = database.attachmentDao.attachmentRow("a1")!!
+        assertEquals("{\"caption\":\"newer build\"}", stored.meta)
+        assertTrue("the edit itself must still land", byteArrayOf(4, 5, 6).contentEquals(stored.bytes))
+    }
+
     // -- fix round 1, H1: dirtyAttachments is a memory bound, not a paging convenience --------
 
     /**

@@ -88,7 +88,6 @@ class AttachmentSyncStoreTest {
     private fun attachment(
         id: String,
         noteId: String = "n1",
-        meta: String = "",
     ) = AttachmentData(
         id = id,
         noteId = noteId,
@@ -103,7 +102,6 @@ class AttachmentSyncStoreTest {
         thumbBytes = byteArrayOf(7, -7),
         createdAt = 1_000L,
         updatedAt = 1_000L,
-        meta = meta,
     )
 
     private fun hlc(ms: Long, counter: Int = 0) = Hlc(ms, counter, node)
@@ -169,8 +167,11 @@ class AttachmentSyncStoreTest {
     @Test
     fun `an attachment round-trips through the record and back into the row`() = runTest {
         repository.saveNote(Note(id = "n1", title = "Title", content = "Body"))
-        repository.saveAttachment(attachment("a1", meta = """{"caption":"newer build"}"""))
+        repository.saveAttachment(attachment("a1"))
 
+        // `meta` arrives on the wire, never from `saveAttachment` -- that method deliberately
+        // ignores the caller's value and carries the row's own forward. A newer build is the only
+        // thing that can put something in here, and this is the shape it arrives in.
         val record = syncStore.load(RecordType.ATTACHMENT, "a1")!!.record
         syncStore.applyMerged(merged(record, remoteMeta = """{"caption":"newer build"}"""))
 
@@ -195,7 +196,10 @@ class AttachmentSyncStoreTest {
     @Test
     fun `a merged write with no incoming meta keeps the row's own`() = runTest {
         repository.saveNote(Note(id = "n1", title = "Title", content = "Body"))
-        repository.saveAttachment(attachment("a1", meta = "keep-me"))
+        repository.saveAttachment(attachment("a1"))
+        syncStore.applyMerged(
+            merged(attachmentRecord("a1", rowClock = hlc(8_000)), remoteMeta = "keep-me"),
+        )
 
         syncStore.applyMerged(merged(attachmentRecord("a1", rowClock = hlc(9_000)), remoteMeta = null))
 
