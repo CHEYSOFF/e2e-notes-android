@@ -235,7 +235,7 @@ fun SingleNoteScreen(
     // no-op, not a failure.
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia(),
-    ) { uri -> if (uri != null) currentOnIntent(SingleNoteIntent.ImportAttachment(uri)) }
+    ) { uri -> if (uri != null) currentOnIntent(SingleNoteIntent.ImportAttachment(uri.toString())) }
 
     // The canvas' capture state (SketchCaptureState) and sketchTarget above are both plain
     // `remember`, and the manifest locks neither `configChanges` nor `screenOrientation` (see

@@ -72,13 +72,6 @@ dependencies {
     // failed to initialize"), AND it is a transitive dependency of ui-test-junit4, so it blocks
     // Compose UI tests too. It resolves from Maven Central only.
     testImplementation(libs.kotlinx.coroutines.test)
-    // mockito-core, for exactly one thing: constructing an android.net.Uri in a JVM unit test.
-    // Uri has no public constructor, and every static factory (Uri.parse, Uri.fromParts, ...) is
-    // one of the android.jar stub methods that throws "not mocked" under a plain unit test -- so
-    // Mockito's mock (built by subclassing without ever calling those bodies) is the only way to
-    // get a Uri value at all here, not a preference over a simpler alternative. Resolves through
-    // the same Maven Central mirror already relied on elsewhere (see settings.gradle.kts).
-    testImplementation("org.mockito:mockito-core:5.14.2")
     androidTestImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

@@ -44,14 +44,25 @@ sealed interface ImportResult {
 
 /**
  * Turns a picked photo into a stored [AttachmentData]: decode, downscale, flatten, encode, cap,
- * thumbnail. An interface (with [AndroidImageImporter] the only real implementation) purely so a
+ * thumbnail. An interface (with [AndroidImageImporter] the only real implementation) so a
  * ViewModel test can substitute a fake -- [ImageDecoder] is real-device-only and cannot run under a
- * plain JVM unit test, which is also why nothing in this file is covered by one; see
- * `ImageImportOutcomeTest` for what *is* tested without a device, and Task 8's instrumented pass for
- * the encode path itself.
+ * plain JVM unit test.
+ *
+ * [import] takes a `String`, not an `android.net.Uri`, even though the only real implementation
+ * needs a `Uri` internally. This keeps [ImportResult], [ImageImporter] and every caller of
+ * `import` (`SingleNoteViewModel`, `SingleNoteIntent.ImportAttachment`) platform-free -- worth more
+ * here than usual, since `core-domain` is already Kotlin Multiplatform and the desktop is a live
+ * target for this codebase, and a `String` is a shape that can cross that boundary while
+ * `android.net.Uri` is not. There is exactly one producer today: the photo-picker callback in
+ * `SingleNoteScreen.kt`, which converts the platform `Uri` it receives with `.toString()` immediately
+ * and never holds onto the `Uri` itself. `Uri.parse(uri.toString())` round-trips a content URI
+ * losslessly, and the picker's temporary read grant is keyed on the URI's content rather than
+ * object identity, so re-parsing here does not lose access to the picked image. The cost is type
+ * safety -- a `String` parameter accepts any string, where a `Uri` parameter declares provenance --
+ * paid deliberately for the platform-independence above.
  */
 interface ImageImporter {
-    suspend fun import(uri: Uri): ImportResult
+    suspend fun import(uri: String): ImportResult
 }
 
 /**
@@ -77,7 +88,8 @@ class AndroidImageImporter @Inject constructor(
 
     private val contentResolver: ContentResolver = context.contentResolver
 
-    override suspend fun import(uri: Uri): ImportResult = withContext(Dispatchers.IO) {
+    override suspend fun import(uri: String): ImportResult = withContext(Dispatchers.IO) {
+        val contentUri = Uri.parse(uri)
         var cachedLongEdge = -1
         var cachedBitmap: Bitmap? = null
         var cachedSize: PixelSize? = null
@@ -87,7 +99,7 @@ class AndroidImageImporter @Inject constructor(
                 val rung = step
                 if (rung.longEdge != cachedLongEdge) {
                     cachedBitmap?.recycle()
-                    val decoded = decodeFittedAndFlattened(uri, rung.longEdge)
+                    val decoded = decodeFittedAndFlattened(contentUri, rung.longEdge)
                     cachedBitmap = decoded.first
                     cachedSize = decoded.second
                     cachedLongEdge = rung.longEdge
@@ -98,7 +110,22 @@ class AndroidImageImporter @Inject constructor(
 
                 val bytes = compress(bitmap, rung.quality)
                 if (bytes.size <= AttachmentLimits.MAX_ATTACHMENT_BYTES) {
-                    val thumb = buildThumbnail(uri)
+                    // The main encode already fit under the cap by this point -- a failure past
+                    // this line must never discard it. buildThumbnail opens a second, independent
+                    // decode of the same source, and a grant revoked between the two decodes (or an
+                    // OOM on a pathological source -- see the outer catch's own KDoc) would
+                    // otherwise turn a photo that already succeeded into a reported failure. Falling
+                    // back to a thumbnail scaled down from the bitmap already in hand keeps the
+                    // import honest about what actually went wrong: nothing.
+                    val thumb = try {
+                        buildThumbnail(contentUri)
+                    } catch (e: IOException) {
+                        thumbnailFromBitmap(bitmap)
+                    } catch (e: SecurityException) {
+                        thumbnailFromBitmap(bitmap)
+                    } catch (e: OutOfMemoryError) {
+                        thumbnailFromBitmap(bitmap)
+                    }
                     return@withContext ImportResult.Imported(
                         AttachmentData(
                             id = UUID.randomUUID().toString(),
@@ -106,6 +133,10 @@ class AndroidImageImporter @Inject constructor(
                             anchor = 0,
                             order = 0,
                             mimeType = AttachmentLimits.MIME_JPEG,
+                            // Read off the bitmap actually produced, not the ImportLadder.fit()
+                            // target requested of the decoder. They agree today because
+                            // setTargetSize is honoured, but reading the bitmap costs nothing and
+                            // cannot drift if that ever stops being true.
                             width = size.width,
                             height = size.height,
                             bytes = bytes,
@@ -127,30 +158,78 @@ class AndroidImageImporter @Inject constructor(
         } catch (e: SecurityException) {
             // A revoked/expired content-URI grant -- the source will not open either way.
             ImportResult.NotAnImage
+        } catch (e: OutOfMemoryError) {
+            // Catching Error is normally wrong, and is right here for a specific, bounded reason:
+            // ImageDecoder.setTargetSize only bounds peak allocation for codecs that can decode
+            // scaled (libjpeg can, so an ordinary JPEG photo is safe). PNG and WebP decode at full
+            // resolution first and downsample afterwards -- and PickVisualMedia(ImageOnly) admits
+            // both -- so a 12000x8000 PNG screenshot allocates roughly 384 MB of ARGB_8888 before a
+            // single pixel is scaled, and decodeFittedAndFlattened allocates a second full-size copy
+            // on top of that for the white flatten. Left uncaught, that OOM propagates out of this
+            // withContext, out of the ViewModel's launch, and into the default uncaught-exception
+            // handler -- a process kill on the one code path whose entire error design exists to
+            // produce a message instead. This handler runs on a background dispatcher with nothing
+            // else of this import in flight, and `finally` below has already released what it can,
+            // so mapping to a result here is a bounded, deliberate exception to "never catch Error".
+            // TooLarge, not NotAnImage: "too large to attach" is truthful for an image too big to
+            // decode; "isn't a photo" would be actively misleading.
+            ImportResult.TooLarge
         } finally {
             cachedBitmap?.recycle()
         }
     }
 
     /**
-     * The thumbnail encode. Never fails the import: a large thumbnail is a slow rail, not a broken
-     * attachment, so quality is dropped one rung at a time (mirroring [ImportLadder]'s own
-     * quality-first shape) until [AttachmentLimits.MAX_THUMB_BYTES] is met or the quality floor is
-     * reached -- at which point the best attempt so far is used regardless of size.
+     * The thumbnail encode, decoding [uri] a second time at [AttachmentLimits.THUMB_LONG_EDGE]
+     * rather than downscaling the caller's already-fitted bitmap, so a thumbnail is never worse
+     * than the sharpest crop `ImageDecoder` itself can produce at that size. On failure the caller
+     * falls back to [thumbnailFromBitmap] instead of calling this again.
      */
     private fun buildThumbnail(uri: Uri): ThumbResult {
         val (bitmap, size) = decodeFittedAndFlattened(uri, AttachmentLimits.THUMB_LONG_EDGE)
         try {
-            var quality = AttachmentLimits.THUMB_QUALITY
-            var bytes = compress(bitmap, quality)
-            while (bytes.size > AttachmentLimits.MAX_THUMB_BYTES && quality > MIN_THUMB_QUALITY) {
-                quality = (quality - THUMB_QUALITY_STEP).coerceAtLeast(MIN_THUMB_QUALITY)
-                bytes = compress(bitmap, quality)
-            }
-            return ThumbResult(size, bytes)
+            return encodeThumbnail(bitmap, size)
         } finally {
             bitmap.recycle()
         }
+    }
+
+    /**
+     * The thumbnail encode's fallback: scales [source] (the main encode's own bitmap, already
+     * decoded, flattened and opaque) down to thumbnail size in memory, touching neither
+     * `ContentResolver` nor `ImageDecoder`. Used only when [buildThumbnail]'s own, independent
+     * decode of the source fails after the main encode has already succeeded -- see the call site's
+     * KDoc. Never upscales, matching [ImportLadder.fit]'s own rule.
+     */
+    private fun thumbnailFromBitmap(source: Bitmap): ThumbResult {
+        val target = ImportLadder.fit(source.width, source.height, AttachmentLimits.THUMB_LONG_EDGE)
+        val scaled = if (target.width == source.width && target.height == source.height) {
+            source
+        } else {
+            Bitmap.createScaledBitmap(source, target.width, target.height, true)
+        }
+        try {
+            return encodeThumbnail(scaled, PixelSize(scaled.width, scaled.height))
+        } finally {
+            if (scaled !== source) scaled.recycle()
+        }
+    }
+
+    /**
+     * Compresses [bitmap] as the thumbnail, dropping quality one rung at a time (mirroring
+     * [ImportLadder]'s own quality-first shape, with its own rung size and floor in
+     * [AttachmentLimits]) until [AttachmentLimits.MAX_THUMB_BYTES] is met or the floor is reached --
+     * at which point the best attempt so far is used regardless of size. Never fails: a large
+     * thumbnail is a slow rail, not a broken attachment.
+     */
+    private fun encodeThumbnail(bitmap: Bitmap, size: PixelSize): ThumbResult {
+        var quality = AttachmentLimits.THUMB_QUALITY
+        var bytes = compress(bitmap, quality)
+        while (bytes.size > AttachmentLimits.MAX_THUMB_BYTES && quality > AttachmentLimits.MIN_THUMB_QUALITY) {
+            quality = (quality - AttachmentLimits.THUMB_QUALITY_STEP).coerceAtLeast(AttachmentLimits.MIN_THUMB_QUALITY)
+            bytes = compress(bitmap, quality)
+        }
+        return ThumbResult(size, bytes)
     }
 
     /**
@@ -162,9 +241,8 @@ class AndroidImageImporter @Inject constructor(
      */
     private fun decodeFittedAndFlattened(uri: Uri, longEdge: Int): Pair<Bitmap, PixelSize> {
         val source = ImageDecoder.createSource(contentResolver, uri)
-        var target = PixelSize(0, 0)
         val decoded = ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
-            target = ImportLadder.fit(info.size.width, info.size.height, longEdge)
+            val target = ImportLadder.fit(info.size.width, info.size.height, longEdge)
             decoder.setTargetSize(target.width, target.height)
             decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE)
         }
@@ -174,7 +252,7 @@ class AndroidImageImporter @Inject constructor(
             drawBitmap(decoded, 0f, 0f, null)
         }
         decoded.recycle()
-        return flattened to target
+        return flattened to PixelSize(flattened.width, flattened.height)
     }
 
     private fun compress(bitmap: Bitmap, quality: Int): ByteArray {
@@ -184,9 +262,4 @@ class AndroidImageImporter @Inject constructor(
     }
 
     private data class ThumbResult(val size: PixelSize, val bytes: ByteArray)
-
-    private companion object {
-        const val THUMB_QUALITY_STEP = 10
-        const val MIN_THUMB_QUALITY = 10
-    }
 }
