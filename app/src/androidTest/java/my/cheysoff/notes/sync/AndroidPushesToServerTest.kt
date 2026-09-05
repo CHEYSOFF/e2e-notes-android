@@ -132,7 +132,11 @@ class AndroidPushesToServerTest {
         val codec = RecordCodec(keys)
         // Built through the factory the app itself uses, rather than by hand: `createdAtOf` lives
         // there, and a second way of assembling the store is a second thing that can disagree.
-        val factory = SyncStoreFactory(db)
+        // `clock` is the same SyncClock the engine below observes remote clocks into -- sharing it
+        // with the factory is exactly the wiring `DefaultSyncController` gives production, and this
+        // test pushes a real record to a real server, so a store whose minted clocks were invisible
+        // to the generator is exactly the hazard the parameter exists to prevent.
+        val factory = SyncStoreFactory(db, clock)
         val syncStore = factory.create(accountId)
         val engine = SyncEngine(
             store = syncStore,

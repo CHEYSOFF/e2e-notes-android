@@ -19,7 +19,13 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.model.NoteContentFormat
+import my.cheysoff.core_domain.model.SketchData
 import my.cheysoff.core_domain.repository.NotesRepository
+import my.cheysoff.core_domain.repository.SketchesRepository
+import my.cheysoff.core_domain.sketch.NoteBlocks
+import my.cheysoff.core_domain.sketch.Sketch
+import my.cheysoff.core_domain.sketch.StrokeCodec
+import my.cheysoff.core_domain.sketch.sortSketches as sortSketchesForDisplay
 import my.cheysoff.feature_notes.model.single.ChecklistItem
 import my.cheysoff.feature_notes.model.single.SingleNoteIntent
 import my.cheysoff.feature_notes.model.single.SingleNoteScreenState
@@ -254,9 +260,28 @@ internal fun buildDuplicate(state: SingleNoteScreenState, newId: String): Note =
     folderId = state.folderId,
 )
 
+/**
+ * Sketches in the order [SketchSection][my.cheysoff.feature_notes.ui.single.SketchSection] renders
+ * them: by [SketchData.anchor], ties broken by [SketchData.id].
+ *
+ * A one-line delegation to `:core-domain`'s `sortSketches` -- see that function's own KDoc for the
+ * rule itself and for why it is one shared function rather than a copy kept in step with the
+ * desktop's by hand. This wrapper exists only so every call site and test in this module keeps
+ * referring to `sortSketches` unqualified; the rule it applies lives in `:core-domain`, not here.
+ */
+internal fun sortSketches(sketches: List<SketchData>): List<SketchData> = sortSketchesForDisplay(sketches)
+
+/**
+ * The `order` a brand-new sketch anchored at [anchor] should be given: one past the highest
+ * `order` any existing sketch at that same anchor already holds, or `0` if none does.
+ */
+internal fun nextSketchOrder(sketches: List<SketchData>, anchor: Int): Int =
+    (sketches.filter { it.anchor == anchor }.maxOfOrNull { it.order } ?: -1) + 1
+
 @HiltViewModel
 class SingleNoteViewModel @Inject constructor(
     private val notesRepository: NotesRepository,
+    private val sketchesRepository: SketchesRepository,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
     private val noteId: String? = savedStateHandle["noteId"]
@@ -282,6 +307,13 @@ class SingleNoteViewModel @Inject constructor(
     // first insert is still running, and BackClicked joins it so navigating away can't cancel that
     // insert mid-flight.
     private var duplicateJob: Job? = null
+
+    // The in-flight sketch save, if any. saveSketch's write and current.sketches (which the
+    // blank-note discard in BackClicked reads) are connected only through this device's own Flow
+    // echo — without joining this job first, a drawing saved just before Done->back can still be
+    // mid-flight (or written but not yet re-emitted into _state) when the guard runs, so the note
+    // gets purged with the sketch orphaned under it.
+    private var sketchSaveJob: Job? = null
 
     // Serializes DB writes so an older/delayed save can't run concurrently with a newer one.
     private val saveMutex = Mutex()
@@ -330,6 +362,13 @@ class SingleNoteViewModel @Inject constructor(
                     baseline = merged.baseline
                     _state.value = merged.state
                 }
+                .launchIn(viewModelScope)
+
+            // Independent of the note-load flow above, exactly like the folders collection below:
+            // sketches live in their own table with their own Flow, and their write path (the
+            // canvas' Done button) never goes through the editor's title/body/checklist baseline.
+            sketchesRepository.getSketchesForNote(id)
+                .onEach { list -> _state.update { it.copy(sketches = sortSketches(list)) } }
                 .launchIn(viewModelScope)
         }
 
@@ -492,6 +531,12 @@ class SingleNoteViewModel @Inject constructor(
                 }
             }
 
+            is SingleNoteIntent.SketchSaved -> saveSketch(intent.editingId, intent.sketch)
+
+            is SingleNoteIntent.SketchDeleted -> {
+                viewModelScope.launch { sketchesRepository.deleteSketch(intent.id) }
+            }
+
             is SingleNoteIntent.DuplicateNote -> duplicateNote()
 
             is SingleNoteIntent.DeleteNote -> {
@@ -517,15 +562,25 @@ class SingleNoteViewModel @Inject constructor(
                     // duplicate: its INSERT runs on viewModelScope, which the pop cancels.
                     metaWriteJob?.join()
                     duplicateJob?.join()
+                    // A drawing saved between the last edit and this back tap must be counted before
+                    // the guard below decides whether the note is still blank — otherwise the note
+                    // gets purged with the sketch orphaned live underneath it. See saveSketch's own
+                    // comment for why joining this job is what makes current.sketches trustworthy
+                    // here, not just "usually right in time".
+                    sketchSaveJob?.join()
                     val current = _state.value
                     val id = noteId
                     when {
                         // A note created for this screen and never written into is discarded rather
                         // than saved — otherwise an abandoned "+" tap would sit at the top of the
                         // newest-first list. Note the guard is createdBlankNote, not "is blank now":
-                        // an existing note the user emptied out is kept.
+                        // an existing note the user emptied out is kept. current.sketches is checked
+                        // too: a note whose only content is a drawing is not "still blank" either —
+                        // without this, purgeNote's hard delete below would leave that drawing's row
+                        // live in the database under a note id that no longer exists.
                         id != null && createdBlankNote && current.title.isBlank() &&
-                                current.content.isBlank() && current.checklist.isEmpty() -> {
+                                current.content.isBlank() && current.checklist.isEmpty() &&
+                                current.sketches.isEmpty() -> {
                             saveJob?.cancel()
                             // purgeNote, NOT deleteNote: this is a discard, not a deletion the user
                             // asked for. deleteNote became a soft delete when Trash landed, and
@@ -577,6 +632,58 @@ class SingleNoteViewModel @Inject constructor(
             saveMutex.withLock { notesRepository.saveNote(copy) }
             _events.send(SingleNoteEvent.NoteDuplicated(copy.title))
         }
+    }
+
+    /**
+     * Persists a drawing just finished on the canvas.
+     *
+     * A brand-new sketch ([editingId] null) is anchored at the note's CURRENT block count -- the
+     * end of the text, which is where [SketchSection][my.cheysoff.feature_notes.ui.single.SketchSection]
+     * renders every drawing -- and given the next [SketchData.order] at that anchor via
+     * [nextSketchOrder]; the screen flushes any pending body edit before opening the canvas for a
+     * new sketch, so `current.content` here is never a debounce behind what is on screen.
+     *
+     * Re-editing an existing one ([editingId] non-null) only ever replaces its `strokes`: its
+     * `anchor`/`order`/`createdAt` are left exactly as they were, because reopening a drawing to add
+     * a line is not a re-anchor. If the id is not found in `current.sketches` (a delete raced the
+     * canvas being open, say) this falls back to creating a fresh row rather than silently dropping
+     * the drawing.
+     *
+     * `updatedAt` is stamped HERE, on every branch: `SketchData`'s timestamps are caller-owned,
+     * unlike `Note`'s (whose repository stamps `updatedAt` itself) -- a save that forgot this would
+     * leave a stale value that sorts and merges wrongly, looking like a sync bug that is really
+     * this code's own.
+     */
+    private fun saveSketch(editingId: String?, sketch: Sketch) {
+        val id = noteId ?: return
+        val job = viewModelScope.launch {
+            val current = _state.value
+            val now = System.currentTimeMillis()
+            val encoded = StrokeCodec.encode(sketch)
+            val existing = editingId?.let { eid -> current.sketches.find { it.id == eid } }
+            val data = existing?.copy(strokes = encoded, updatedAt = now) ?: run {
+                val anchor = NoteBlocks.count(current.content, current.contentFormat)
+                SketchData(
+                    id = UUID.randomUUID().toString(),
+                    noteId = id,
+                    anchor = anchor,
+                    order = nextSketchOrder(current.sketches, anchor),
+                    strokes = encoded,
+                    createdAt = now,
+                    updatedAt = now,
+                )
+            }
+            sketchesRepository.saveSketch(data)
+            // Mirror the write into `_state` right here, rather than waiting for
+            // sketchesRepository's Flow to echo it back: BackClicked's blank-note discard guard
+            // reads current.sketches immediately after joining this job (sketchSaveJob), and
+            // Room's invalidation-tracker re-query runs on its own dispatcher — without this, the
+            // guard could still observe an empty list for a sketch that has, in fact, just been
+            // durably saved, and purge the note out from under it (see purgeNote's own cascade for
+            // the other half of that fix).
+            _state.update { it.copy(sketches = sortSketches(it.sketches.filterNot { s -> s.id == data.id } + data)) }
+        }
+        sketchSaveJob = job
     }
 
     /**

@@ -3,6 +3,8 @@ package my.cheysoff.desktop.ui.state
 import androidx.compose.runtime.Immutable
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.NoteContentFormat
+import my.cheysoff.core_domain.sketch.DisplaySketch
+import my.cheysoff.core_domain.sketch.sketchesForDisplay
 
 /** Everything the two panes draw, in one snapshot. */
 @Immutable
@@ -15,6 +17,11 @@ data class WorkspaceUiState(
     val editor: EditorDraft? = null,
     val search: SearchState = SearchState(),
     val saveStatus: SaveStatus = SaveStatus.Idle,
+    /**
+     * The open note's sketches, already ordered and decode-checked -- see [sketchesForDisplay].
+     * Empty whenever nothing is open, or on the preview build (no [DesktopSketches] to read from).
+     */
+    val sketches: List<DisplaySketch> = emptyList(),
     /**
      * False until the repository has emitted once. Distinguishes "no notes yet" from "not asked
      * yet" — without it the empty state flashes on every launch before the first emission lands.

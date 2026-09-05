@@ -145,6 +145,8 @@ fun NotesWorkspaceScreen(
                         onChecklistTextChange = model::setChecklistItemText,
                         onToggleChecklistItem = model::toggleChecklistItem,
                         onRemoveChecklistItem = model::removeChecklistItem,
+                        sketches = state.sketches,
+                        onDeleteSketch = model::deleteSketch,
                         modifier = Modifier.weight(1f),
                     )
                 }
