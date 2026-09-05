@@ -143,10 +143,13 @@ class EnvelopeSyncTransport(
 
                     is PushResult.Conflict -> identities[result.blindedId]?.let { sent ->
                         val blocking = result.current
-                        val record = blocking?.let { current ->
-                            (codec.open(current.blindedId, current.envelope) as? OpenResult.Ok)
-                                ?.let { SyncRecords.fromPayload(it.payload) }
+                        // The payload is kept, not just the record it decodes to: `meta` is not a
+                        // clocked field, so it exists only on the payload and is gone by the time
+                        // `fromPayload` has run.
+                        val opened = blocking?.let { current ->
+                            (codec.open(current.blindedId, current.envelope) as? OpenResult.Ok)?.payload
                         }
+                        val record = opened?.let { SyncRecords.fromPayload(it) }
                         // A conflict whose inline version will not open is reported with no record
                         // rather than as a fault: the row simply stays dirty and the next pull
                         // fetches the blocking version the ordinary way, which is slower and
@@ -156,7 +159,14 @@ class EnvelopeSyncTransport(
                             type = sent.type,
                             uuid = sent.uuid,
                             current = record,
-                            currentSeq = if (record == null) 0L else blocking!!.seq,
+                            // A null `record` is the "nothing to merge" state: no version to
+                            // build on, and no `meta` to carry either. When it is non-null so are
+                            // `blocking` and `opened`, which the compiler follows through both
+                            // `?.let` hops -- hence no null handling on either below.
+                            currentSeq = if (record == null) 0L else blocking.seq,
+                            // Indexed rather than `field(...)`, which throws for a column the
+                            // record's type does not own -- every type but ATTACHMENT.
+                            currentMeta = if (record == null) null else opened.fields[PayloadFields.META],
                         )
                     }
                 }

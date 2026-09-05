@@ -201,12 +201,22 @@ sealed interface PushAck {
      *   a legal response. Without it the engine can only leave the row dirty for the next pass,
      *   which pulls the blocking version the ordinary way.
      * @param currentSeq the blocking version's `seq`, or `0` when [current] is null.
+     * @param currentMeta the opaque `meta` [current]'s payload carried, or null for a record type
+     *   without the column and for a null [current]. Travels beside [current] for the same reason
+     *   `IncomingRecord.Opened.meta` does -- it is not a clocked field, so the `SyncRecord` cannot
+     *   carry it -- and it is not decoration. A conflict merge in which any local field wins leaves
+     *   the row dirty (`Merge`'s `dirty = merged != remote.normalized()`), and the next push
+     *   re-serialises `meta` from the local row. Without this the local row still holds the stale
+     *   value and that push overwrites the server's newer `meta` account-wide -- the one path on
+     *   which "a build that does not understand `meta` preserves it byte-for-byte" would otherwise
+     *   be false.
      */
     class Conflicted(
         override val type: RecordType,
         override val uuid: String,
         val current: SyncRecord?,
         val currentSeq: Long,
+        val currentMeta: String? = null,
     ) : PushAck
 }
 

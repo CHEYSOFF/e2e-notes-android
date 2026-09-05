@@ -408,14 +408,18 @@ class SyncEngine(
                         // is in this store already and its `createdAt` is set. The value is only
                         // ever consulted for a record being seen for the first time.
                         //
-                        // No `remoteMeta` either, and for a weaker but sufficient reason: the
-                        // blocking version is handed back as a decoded `SyncRecord` by the
-                        // transport's conflict path, which never carried the column, so there is
-                        // nothing here to pass. Null makes the store keep the row's stored `meta`,
-                        // which is the value this device just pushed -- so nothing is lost, and the
-                        // next pull of that record delivers the blocking version's `meta` properly.
+                        // `remoteMeta` is NOT null on this route, and that is load-bearing. A
+                        // conflict merge in which any local field wins leaves the row dirty
+                        // (`Merge`'s `dirty = merged != remote.normalized()`), and the next push
+                        // re-serialises `meta` out of the local row. Passing null would leave that
+                        // row holding the stale value, and the re-push would overwrite the server's
+                        // newer `meta` for the whole account -- a loss, not a delay. So the
+                        // transport carries the blocking version's `meta` beside its record.
                         val applied = applyIncoming(
-                            current, ack.currentSeq, remoteCreatedAt = null, remoteMeta = null,
+                            current,
+                            ack.currentSeq,
+                            remoteCreatedAt = null,
+                            remoteMeta = ack.currentMeta,
                         )
                         stats += applied.stats
                         applied.stop?.let { return Phase(stats, it) }
