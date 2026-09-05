@@ -1,9 +1,11 @@
 package my.cheysoff.feature_notes.ui.single
 
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.os.Build
 import android.widget.Toast
 import androidx.compose.foundation.Canvas
@@ -155,8 +157,10 @@ fun SingleNoteScreen(
 ) {
     val focusManager = LocalFocusManager.current
     val isImeVisible = WindowInsets.isImeVisible
-    // Only used by the overflow actions, which start an activity / write the clipboard.
+    // Used by the overflow actions (start an activity / write the clipboard) and by the sketch
+    // canvas' orientation lock below.
     val context = LocalContext.current
+    val activity = context as? Activity
 
     val accent = remember(state.folderId, state.folders) { editorAccent(state.folderId, state.folders) }
     val richTextState = rememberRichTextState()
@@ -218,6 +222,32 @@ fun SingleNoteScreen(
     // canvas itself) because opening it has to read live editor state (flushContent, the current
     // body for anchoring) that only this composable holds.
     var sketchTarget by remember { mutableStateOf<SketchEditTarget?>(null) }
+
+    // The canvas' capture state (SketchCaptureState) and sketchTarget above are both plain
+    // `remember`, and the manifest locks neither `configChanges` nor `screenOrientation` (see
+    // AndroidManifest.xml), so an activity recreation -- a rotation, most obviously -- destroys
+    // both and silently throws away whatever was drawn. The note's own text survives a rotation
+    // (the ViewModel is retained and flushContent runs on dispose), so without this a rotated
+    // drawing is the one thing on this screen a config change can still eat.
+    //
+    // The fix is to make the drawing unreachable by rotation, not to make it survive rotation.
+    // Reopening an existing sketch already trusts its own stored width/height without
+    // remeasuring (see SketchCanvasScreen's own KDoc on `initialSketch`) precisely because a
+    // fresh canvas always starts from a fresh, single-orientation measurement; letting a
+    // rotation happen mid-drawing would make that assumption reachable mid-session too, which
+    // is a materially bigger fix than this screen owes here.
+    //
+    // `isCanvasOpen` is captured by value, not read back from `sketchTarget` inside `onDispose`:
+    // by the time the effect is torn down for the transition from open to closed, `sketchTarget`
+    // has already become null (that transition is what triggered the recomposition), so
+    // re-reading it there would see "closed" on both sides and never call the unlock.
+    val isCanvasOpen = sketchTarget != null
+    DisposableEffect(isCanvasOpen) {
+        if (isCanvasOpen) activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
+        onDispose {
+            if (isCanvasOpen) activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
 
     // System back must run the same flush/discard logic as the top-bar arrow — a plain nav pop
     // would skip the final save and leave an abandoned empty note behind. Disabled while the sketch
