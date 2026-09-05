@@ -134,8 +134,7 @@ fun PairingScreen(
         onIntent(PairingIntent.CameraPermissionChanged(granted, permanentlyDenied))
     }
 
-    val needsCamera = state.stage is PairingStage.ScanningOffer ||
-        state.stage is PairingStage.ScanningSeal
+    val needsCamera = state.stage.needsCamera()
 
     LaunchedEffect(needsCamera, state.cameraPermission) {
         if (!needsCamera) return@LaunchedEffect
