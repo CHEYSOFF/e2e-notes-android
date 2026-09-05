@@ -83,6 +83,23 @@ class EnvelopeSyncTransportTest {
             metaOf = { _, _ -> "" },
         )
 
+    /** A minimal attachment record. `AA` is `Base64Url.encode(byteArrayOf(0))`. */
+    private fun attachmentRecord() = SyncRecord(
+        type = RecordType.ATTACHMENT,
+        uuid = "att-1",
+        rowClock = Hlc(1_000, 0, "nodeA"),
+        fieldClocks = emptyMap(),
+        fields = mapOf(
+            FieldClocks.NOTE_ID to FieldValue.of("n1"),
+            FieldClocks.ANCHOR to FieldValue.of("0"),
+            FieldClocks.ORDER to FieldValue.of("0"),
+            FieldClocks.IMAGE to FieldValue.of("AA", "image/jpeg", "1", "1"),
+            FieldClocks.THUMB to FieldValue.of("AA", "1", "1"),
+            FieldClocks.UPDATED_AT to FieldValue.of("100"),
+            FieldClocks.DELETED to FieldValue.of("0", null),
+        ),
+    )
+
     private fun sealed(record: SyncRecord, createdAt: Long = 50L) =
         codec.seal(SyncRecords.toPayload(record, createdAt))
 
@@ -246,6 +263,44 @@ class EnvelopeSyncTransportTest {
         val ack = response.results.single() as PushAck.Conflicted
         assertEquals(blocking, ack.current)
         assertEquals(9L, ack.currentSeq)
+    }
+
+    /**
+     * The blocking version's `meta` comes back beside its record.
+     *
+     * It cannot come back inside it: `meta` has no clock, so `SyncRecords.fromPayload` drops it the
+     * same way it drops `createdAt`. Without this the engine hands the store a null, the store
+     * keeps the row's stale value, and the re-push of a row the conflict merge left dirty
+     * overwrites the server's newer `meta` account-wide.
+     */
+    @Test
+    fun `a conflict hands the blocking version's meta back beside the record`() = runTest {
+        val blocking = attachmentRecord()
+        val blob = codec.seal(
+            SyncRecords.toPayload(blocking, createdAt = 50L, meta = "written-by-a-newer-build"),
+        )
+        val api = FakeApi(conflictWith = RemoteRecord(blob.blindedId, 9L, blob.envelope))
+
+        val ack = transport(api).push(
+            listOf(PushRequest(RecordType.ATTACHMENT, "att-1", 3L, blocking))
+        ).results.single() as PushAck.Conflicted
+
+        assertEquals(blocking, ack.current)
+        assertEquals("written-by-a-newer-build", ack.currentMeta)
+    }
+
+    /** A note has no `meta` column, so the answer is null rather than a throw from `field(...)`. */
+    @Test
+    fun `a conflict on a record type without meta reports null rather than throwing`() = runTest {
+        val blocking = record(content = "theirs")
+        val blob = sealed(blocking)
+        val api = FakeApi(conflictWith = RemoteRecord(blob.blindedId, 9L, blob.envelope))
+
+        val ack = transport(api).push(
+            listOf(PushRequest(RecordType.NOTE, "n1", 3L, record(content = "mine")))
+        ).results.single() as PushAck.Conflicted
+
+        assertNull(ack.currentMeta)
     }
 
     /**
