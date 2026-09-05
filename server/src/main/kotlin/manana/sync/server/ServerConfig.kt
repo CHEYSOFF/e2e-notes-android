@@ -14,14 +14,34 @@ class ServerConfig(
     val databasePath: String = "sync.db",
 
     /** Hard cap on any request body. A batch larger than this is the client's to split. */
-    val maxRequestBytes: Int = 4 * 1024 * 1024,
-    /** Hard cap on one sealed envelope. */
-    val maxEnvelopeBytes: Int = 256 * 1024,
+    val maxRequestBytes: Int = 8 * 1024 * 1024,
+    /**
+     * Hard cap on one sealed envelope.
+     *
+     * 2 MiB rather than the original 256 KiB because an attachment is one record: a 1 MiB image
+     * base64s to about 1.34 MiB (`docs/design/image-attachments.md` §4). A client that sends more
+     * than this gets a `400`, which its engine attributes to the single record it sent alone.
+     */
+    val maxEnvelopeBytes: Int = 2 * 1024 * 1024,
     /** Hard cap on items in one `POST /v1/records` batch. */
     val maxBatchItems: Int = 64,
 
     val defaultChangesLimit: Int = 200,
     val maxChangesLimit: Int = 500,
+    /**
+     * How many envelope bytes one `GET /v1/changes` page may carry.
+     *
+     * `limit` bounds the page in records and this bounds it in bytes; without the second, a page of
+     * attachments is `limit` times `maxEnvelopeBytes` and no client can hold it. 8 MiB of envelopes
+     * base64s to about 10.7 MiB, under the client's existing 16 MiB response cap, which therefore
+     * does not change.
+     *
+     * **A page is never empty because of this budget.** The first record always goes in, however
+     * large. A client stops paging when a page comes back empty, so an empty page here would not
+     * mean "too big to send" -- it would mean "you are caught up", and the cursor would stop at
+     * that record permanently.
+     */
+    val maxChangesBytes: Int = 8 * 1024 * 1024,
     val defaultHistoryLimit: Int = 10,
     val maxHistoryLimit: Int = 50,
     /**
@@ -138,9 +158,10 @@ class ServerConfig(
                 port = int("MANANA_PORT", 8080),
                 host = env["MANANA_HOST"] ?: "127.0.0.1",
                 databasePath = env["MANANA_DB"] ?: "sync.db",
-                maxRequestBytes = int("MANANA_MAX_REQUEST_BYTES", 4 * 1024 * 1024),
-                maxEnvelopeBytes = int("MANANA_MAX_ENVELOPE_BYTES", 256 * 1024),
+                maxRequestBytes = int("MANANA_MAX_REQUEST_BYTES", 8 * 1024 * 1024),
+                maxEnvelopeBytes = int("MANANA_MAX_ENVELOPE_BYTES", 2 * 1024 * 1024),
                 maxBatchItems = int("MANANA_MAX_BATCH_ITEMS", 64),
+                maxChangesBytes = int("MANANA_MAX_CHANGES_BYTES", 8 * 1024 * 1024),
                 historyDepth = int("MANANA_HISTORY_DEPTH", 10),
                 signatureWindowMillis = long("MANANA_SIGNATURE_WINDOW_MS", 5 * 60 * 1000),
                 sessionTtlMillis = long("MANANA_SESSION_TTL_MS", 24 * 60 * 60 * 1000),

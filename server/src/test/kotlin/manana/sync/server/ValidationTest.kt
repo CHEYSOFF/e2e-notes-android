@@ -3,6 +3,7 @@ package manana.sync.server
 import io.ktor.server.testing.ApplicationTestBuilder
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * Input validation. Every one of these is a request a well-behaved client never makes, which is
@@ -28,6 +29,46 @@ class ValidationTest {
             val response = push(me.token, upsertItem(blindedId(1), ByteArray(65), baseSeq = 0))
             assertEquals(400, response.status.value)
             assertEquals("invalid_envelope", response.errorCode())
+        }
+
+    /**
+     * `limit` bounds a page in records; this bounds it in bytes. Without the byte cap, a page of
+     * ten 100 KiB records at a 250 KiB budget would come back whole and a client holding it would
+     * be holding four times the budget it was promised.
+     */
+    @Test
+    fun `a changes page stops at the byte budget`() =
+        serverTest(testConfig(maxChangesBytes = 250 * 1024)) { harness ->
+            val me = enrol(harness)
+            val items = (0 until 10)
+                .map { i -> upsertItem(blindedId(i), ByteArray(100 * 1024), baseSeq = 0) }
+                .toTypedArray()
+            val pushResponse = push(me.token, *items)
+            assertEquals(200, pushResponse.status.value)
+
+            val page: ChangesResponse = client.getAuth("/v1/changes?since=0&limit=200", me.token).decode()
+
+            assertTrue(page.records.size < 10)
+            val totalBytes = page.records.sumOf { B64.decodeOrNull(it.envelope)!!.size }
+            assertTrue(totalBytes <= 250 * 1024 + 100 * 1024)
+        }
+
+    /**
+     * The first record always goes in, however large. A page that came back empty here would not
+     * mean "too big to send" -- it would mean "you are caught up" to a client that stops paging on
+     * an empty page, and the cursor would stop at this record forever.
+     */
+    @Test
+    fun `a single record larger than the whole budget is still returned`() =
+        serverTest(testConfig(maxChangesBytes = 100 * 1024, maxEnvelopeBytes = 512 * 1024)) { harness ->
+            val me = enrol(harness)
+            val response = push(me.token, upsertItem(blindedId(1), ByteArray(300 * 1024), baseSeq = 0))
+            assertEquals(200, response.status.value)
+
+            val page: ChangesResponse = client.getAuth("/v1/changes?since=0&limit=200", me.token).decode()
+
+            assertEquals(1, page.records.size)
+            assertEquals(300 * 1024, B64.decodeOrNull(page.records.single().envelope)!!.size)
         }
 
     @Test
