@@ -79,7 +79,7 @@ object AttachmentRecords {
 
     /**
      * Rebuilds a row from a payload, or returns null if a numeric column is not a number or an
-     * image column is not base64url.
+     * image column is null or not base64url.
      *
      * Null rather than a default, for [SketchRecords.fromPayload]'s reason applied to pixels.
      * Substituting 0 for an unreadable [AttachmentData.anchor] or [AttachmentData.order] would
@@ -89,7 +89,8 @@ object AttachmentRecords {
      * cannot read is one to count and skip, which is exactly what every caller of this does.
      *
      * `mimeType` and `meta` have no failure mode of their own: both are opaque strings, and an
-     * absent one reads as `""` the way `SketchData.strokes` does.
+     * absent one reads as `""` the way `SketchData.strokes` does. `bytes` and `thumbBytes` are the
+     * exception to that leniency and deliberately so -- see the comment at their decode.
      */
     fun fromPayload(payload: RecordPayload): AttachmentRow? {
         val anchor = payload.field(PayloadFields.ANCHOR)?.toIntOrNull() ?: return null
@@ -98,9 +99,12 @@ object AttachmentRecords {
         val height = payload.field(PayloadFields.HEIGHT)?.toIntOrNull() ?: return null
         val thumbWidth = payload.field(PayloadFields.THUMB_WIDTH)?.toIntOrNull() ?: return null
         val thumbHeight = payload.field(PayloadFields.THUMB_HEIGHT)?.toIntOrNull() ?: return null
-        val bytes = Base64Url.decode(payload.field(PayloadFields.BYTES).orEmpty()) ?: return null
-        val thumbBytes =
-            Base64Url.decode(payload.field(PayloadFields.THUMB_BYTES).orEmpty()) ?: return null
+        // `?: return null` on the column itself, NOT `.orEmpty()`. A null `bytes` is not an empty
+        // image, it is a record this build cannot render, and turning it into `ByteArray(0)` is
+        // precisely the blank grey box this function refuses undecodable base64 to avoid. Neither
+        // of this project's encoders can emit one; a peer can.
+        val bytes = payload.field(PayloadFields.BYTES)?.let(Base64Url::decode) ?: return null
+        val thumbBytes = payload.field(PayloadFields.THUMB_BYTES)?.let(Base64Url::decode) ?: return null
         val createdAt = payload.field(PayloadFields.CREATED_AT)?.toLongOrNull() ?: return null
         val updatedAt = payload.field(PayloadFields.UPDATED_AT)?.toLongOrNull() ?: return null
         val deletedAtText = payload.field(PayloadFields.DELETED_AT)

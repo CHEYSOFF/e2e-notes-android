@@ -102,7 +102,14 @@ object SyncRecords {
         // than left to `RecordRows` so that the refusal happens once, at the boundary, and the
         // store's own decode is unreachable rather than merely unlikely.
         for (column in BASE64_COLUMNS) {
-            val text = payload.fields[column] ?: continue
+            // Absent means "this record type has no such column" and is skipped; **present and
+            // null is refused**, unlike the nullable numeric columns above. `bytes` and
+            // `thumbBytes` are not nullable in this schema -- neither encoder can produce a null
+            // one -- so a peer that sends `"bytes": null` is sending a record this build cannot
+            // render, and defaulting it to an empty array is the blank-grey-box outcome the
+            // decode check exists to prevent.
+            if (column !in payload.fields) continue
+            val text = payload.fields[column] ?: return null
             if (Base64Url.decode(text) == null) return null
         }
         val fields = LinkedHashMap<String, FieldValue>(payload.recType.fields.size)
@@ -176,7 +183,10 @@ object SyncRecords {
         PayloadFields.THUMB_WIDTH, PayloadFields.THUMB_HEIGHT,
     )
 
-    /** The columns that must decode as unpadded base64url, checked on the way in. See [fromPayload]. */
+    /**
+     * The columns that must be present, non-null and decodable as unpadded base64url on any record
+     * type that declares them. See [fromPayload].
+     */
     private val BASE64_COLUMNS = listOf(PayloadFields.BYTES, PayloadFields.THUMB_BYTES)
 
     /** [FIELD_TO_COLUMNS] inverted: column to (field, index within the field's value). */
