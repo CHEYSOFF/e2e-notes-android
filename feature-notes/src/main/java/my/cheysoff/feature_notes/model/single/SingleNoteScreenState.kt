@@ -24,6 +24,8 @@ data class SingleNoteScreenState(
     // it purges a note that would otherwise look empty. Always in display order already: sorted by
     // anchor then id (see `SingleNoteViewModel.sortAttachments`), matching `sketches` above.
     val attachments: List<AttachmentPreview> = emptyList(),
+    /** Colours recently mixed in the sketch canvas, most recent first. Device-local, never synced. */
+    val recentSketchColors: List<Long> = emptyList(),
     // True while a picked photo is being decoded, downscaled and encoded off the main thread.
     // Drives the toolbar's progress indication for `SingleNoteIntent.ImportAttachment`.
     val isImportingAttachment: Boolean = false,

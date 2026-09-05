@@ -8,11 +8,13 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -43,6 +45,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -108,8 +111,15 @@ import my.cheysoff.core_ui.theme.ToolbarDark
  *   and miss the other.
  */
 @Composable
-fun SketchCanvasScreen(initialSketch: Sketch? = null, onDone: (Sketch) -> Unit, onCancel: () -> Unit) {
+fun SketchCanvasScreen(
+    initialSketch: Sketch? = null,
+    recentColors: List<Long> = emptyList(),
+    onColorMixed: (Long) -> Unit = {},
+    onDone: (Sketch) -> Unit,
+    onCancel: () -> Unit,
+) {
     var selectedColorArgb by remember { mutableStateOf(TitleGrey.toArgb().toLong()) }
+    var showColorPicker by remember { mutableStateOf(false) }
     var selectedNib by remember { mutableIntStateOf(NIB_SIZES[1]) }
     var eraseMode by remember { mutableStateOf(false) }
     var limitMessage by remember { mutableStateOf<String?>(null) }
@@ -216,6 +226,8 @@ fun SketchCanvasScreen(initialSketch: Sketch? = null, onDone: (Sketch) -> Unit, 
         }
 
         Toolbar(
+            recentColors = recentColors,
+            onOpenPicker = { showColorPicker = true },
             selectedColorArgb = selectedColorArgb,
             selectedNib = selectedNib,
             eraseMode = eraseMode,
@@ -229,6 +241,33 @@ fun SketchCanvasScreen(initialSketch: Sketch? = null, onDone: (Sketch) -> Unit, 
             },
             onEraseToggled = { eraseMode = !eraseMode },
         )
+    }
+
+    // Over the canvas rather than inside the toolbar: the field needs real estate, and a sheet that
+    // pushed the toolbar up would resize the drawing box underneath it -- which `SketchCaptureState`
+    // treats as a new canvas size.
+    if (showColorPicker) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(AppBlack.copy(alpha = 0.6f))
+                .pointerInputClick { showColorPicker = false },
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(modifier = Modifier.padding(24.dp).pointerInputClick { }) {
+                ColorPickerSheet(
+                    initialArgb = selectedColorArgb,
+                    recents = recentColors,
+                    onPicked = { argb ->
+                        selectedColorArgb = argb
+                        eraseMode = false
+                        onColorMixed(argb)
+                        showColorPicker = false
+                    },
+                    onDismiss = { showColorPicker = false },
+                )
+            }
+        }
     }
 
     if (showCancelConfirm) {
@@ -368,6 +407,8 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawRendered(
 
 @Composable
 private fun Toolbar(
+    recentColors: List<Long>,
+    onOpenPicker: () -> Unit,
     selectedColorArgb: Long,
     selectedNib: Int,
     eraseMode: Boolean,
@@ -382,9 +423,12 @@ private fun Toolbar(
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        // Scrollable rather than SpaceBetween: six presets, up to three mixed colours and the
+        // picker trigger is ten circles, which overflows a narrow phone. Scrolling degrades to a
+        // plain row when they all fit, so nothing changes for someone who never mixes a colour.
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             SWATCH_COLORS.forEach { color ->
@@ -394,6 +438,18 @@ private fun Toolbar(
                     onClick = { onColorSelected(color.toArgb().toLong()) },
                 )
             }
+
+            // Mixed colours sit after the fixed six, so a preset never moves. A row that reordered
+            // itself as you drew would make the muscle memory for "the grey one" worthless.
+            recentColors.forEach { argb ->
+                ColorSwatch(
+                    color = Color(argb.toInt()),
+                    selected = argb == selectedColorArgb,
+                    onClick = { onColorSelected(argb) },
+                )
+            }
+
+            PickerTrigger(onClick = onOpenPicker)
         }
 
         Row(
@@ -417,6 +473,36 @@ private fun Toolbar(
         }
     }
 }
+
+/**
+ * The seventh control in the swatch row: opens [ColorPickerSheet].
+ *
+ * Drawn as a spectrum ring rather than a solid circle on purpose. A flat swatch here would read as
+ * a seventh preset and would have to be *some* colour, which would then be the one colour you
+ * cannot mix. A ring says "choose" instead of naming a colour.
+ */
+@Composable
+private fun PickerTrigger(onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(30.dp)
+            .clip(CircleShape)
+            .padding(4.dp)
+            .pointerInputClick(onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(modifier = Modifier.size(22.dp)) {
+            drawCircle(Brush.sweepGradient(SPECTRUM_STOPS))
+            drawCircle(ToolbarDark, radius = size.minDimension / 2f - 5f)
+        }
+    }
+}
+
+/** A full turn of hue for [PickerTrigger]'s ring; first and last match so the sweep has no seam. */
+private val SPECTRUM_STOPS = listOf(
+    Color(0xFFFF0000), Color(0xFFFFFF00), Color(0xFF00FF00),
+    Color(0xFF00FFFF), Color(0xFF0000FF), Color(0xFFFF00FF), Color(0xFFFF0000),
+)
 
 @Composable
 private fun ColorSwatch(color: Color, selected: Boolean, onClick: () -> Unit) {
@@ -479,7 +565,7 @@ private fun LimitBanner(message: String, onDismissed: () -> Unit) {
  * every colour swatch and nib-size dot was unselectable by touch. `detectTapGestures.onTap` fires
  * on an ordinary down-then-up with no such gate.
  */
-private fun Modifier.pointerInputClick(onClick: () -> Unit): Modifier =
+internal fun Modifier.pointerInputClick(onClick: () -> Unit): Modifier =
     this.pointerInput(onClick) {
         detectTapGestures(onTap = { onClick() })
     }

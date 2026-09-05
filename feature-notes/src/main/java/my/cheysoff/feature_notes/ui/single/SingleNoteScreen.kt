@@ -173,6 +173,7 @@ fun SingleNoteScreen(
     // one screen (the viewer) that ever needs them, rather than letting it ask for exactly the id
     // it is showing.
     loadAttachment: suspend (String) -> AttachmentData?,
+    onColorMixed: (Long) -> Unit,
 ) {
     val focusManager = LocalFocusManager.current
     val isImeVisible = WindowInsets.isImeVisible
@@ -373,6 +374,8 @@ fun SingleNoteScreen(
         val target = sketchTarget
         SketchCanvasScreen(
             initialSketch = (target as? SketchEditTarget.Existing)?.sketch,
+            recentColors = state.recentSketchColors,
+            onColorMixed = onColorMixed,
             onDone = { sketch ->
                 onIntent(SingleNoteIntent.SketchSaved((target as? SketchEditTarget.Existing)?.id, sketch))
                 sketchTarget = null

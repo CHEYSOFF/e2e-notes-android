@@ -62,6 +62,7 @@ class SingleNoteViewModelTest {
     private val sketchRepo = FakeSketchesRepository()
     private val attachmentRepo = FakeAttachmentsRepository()
     private val imageImporter = FakeImageImporter()
+    private val settingsRepo = FakeSettingsRepository()
 
     private companion object {
         const val NOTE_ID = "n1"
@@ -154,7 +155,7 @@ class SingleNoteViewModelTest {
             if (noteId != null) put("noteId", noteId)
             if (isNew) put("isNew", true)
         }
-        return SingleNoteViewModel(repo, sketchRepo, attachmentRepo, imageImporter, SavedStateHandle(map))
+        return SingleNoteViewModel(repo, sketchRepo, attachmentRepo, imageImporter, settingsRepo, SavedStateHandle(map))
     }
 
     /**
@@ -1498,4 +1499,45 @@ class SingleNoteViewModelTest {
                 repo.callsNamed("purgeNote"),
             )
         }
+
+    // --- sketch colour picker --------------------------------------------------------------------
+
+    @Test
+    fun `a mixed colour is recorded as recent`() = runTest {
+        val vm = viewModel()
+        runCurrent()
+
+        vm.onSketchColorMixed(0xFF3366CCL)
+        runCurrent()
+
+        assertEquals(listOf(0xFF3366CCL), settingsRepo.recentSketchColorsState.value)
+        assertTrue("addRecentSketchColor(${0xFF3366CCL})" in settingsRepo.calls)
+    }
+
+    @Test
+    fun `recent colours reach the screen state`() = runTest {
+        val vm = viewModel()
+        runCurrent()
+
+        settingsRepo.recentSketchColorsState.value = listOf(1L, 2L)
+        runCurrent()
+
+        assertEquals(listOf(1L, 2L), vm.state.value.recentSketchColors)
+    }
+
+    @Test
+    fun `recording a colour twice does not duplicate it`() = runTest {
+        val vm = viewModel()
+        runCurrent()
+
+        vm.onSketchColorMixed(7L)
+        runCurrent()
+        vm.onSketchColorMixed(9L)
+        runCurrent()
+        vm.onSketchColorMixed(7L)
+        runCurrent()
+
+        assertEquals(listOf(7L, 9L), settingsRepo.recentSketchColorsState.value)
+    }
+
 }
