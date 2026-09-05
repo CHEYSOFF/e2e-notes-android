@@ -47,9 +47,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import my.cheysoff.core_domain.sketch.Sketch
-import my.cheysoff.core_domain.sketch.SketchLimits
 import my.cheysoff.core_domain.sketch.Stroke
-import my.cheysoff.core_domain.sketch.StrokeCodec
 import my.cheysoff.core_ui.sketch.SketchRenderer
 import my.cheysoff.core_ui.theme.AccentIndigo
 import my.cheysoff.core_ui.theme.AppBlack
@@ -82,11 +80,11 @@ import my.cheysoff.core_ui.theme.ToolbarDark
  * [DrawingSurface]'s gesture handling, via the very same [my.cheysoff.core_domain.sketch.CanvasFit]
  * the renderer uses to map canvas -> screen.
  *
- * **The size guard.** [SketchLimits] is checked here, right after a stroke is committed, against
- * the same encoded text the sync store would eventually check -- not only there. A rejected stroke
- * is rolled back with [SketchCaptureState.undo] and reported with a plain, transient message,
- * rather than surfacing as a `413` from the server sometime later that the person drawing cannot
- * act on.
+ * **The size guard.** The cap itself is enforced inside [SketchCaptureState.endStroke] -- an
+ * oversized stroke is never committed in the first place, so there is nothing here to roll back.
+ * This screen only reads that outcome ([SketchCaptureState.EndStrokeResult.REJECTED_TOO_LARGE]) and
+ * reports it with a plain, transient message, rather than the person discovering it as an
+ * unactionable `413` from the server sometime later.
  *
  * @param onDone called with the finished [Sketch] when the person taps Done. If nothing was drawn,
  *   this behaves like [onCancel] instead -- there is nothing to save.
@@ -126,17 +124,14 @@ fun SketchCanvasScreen(onDone: (Sketch) -> Unit, onCancel: () -> Unit) {
     fun hasStrokes() = (capture?.strokes?.isNotEmpty()) == true
 
     fun finishStroke() {
-        val before = capture?.strokes?.size ?: 0
-        capture?.endStroke()
-        revision++
         val state = capture ?: return
-        if (state.strokes.size > before) {
-            val encoded = StrokeCodec.encode(state.toSketch())
-            if (!SketchLimits.withinLimit(encoded)) {
-                state.undo()
-                revision++
-                limitMessage = "This drawing is full -- erase a stroke to make room for more."
-            }
+        // The size guard lives in SketchCaptureState.endStroke itself -- this just reads its
+        // answer and tells the person plainly when a stroke was refused. It never needs to undo
+        // anything after the fact: a refused stroke was never committed in the first place.
+        val result = state.endStroke()
+        revision++
+        if (result == SketchCaptureState.EndStrokeResult.REJECTED_TOO_LARGE) {
+            limitMessage = "This drawing is full -- erase a stroke to make room for more."
         }
     }
 

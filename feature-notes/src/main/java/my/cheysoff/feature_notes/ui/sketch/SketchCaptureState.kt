@@ -2,7 +2,9 @@ package my.cheysoff.feature_notes.ui.sketch
 
 import my.cheysoff.core_domain.sketch.Point
 import my.cheysoff.core_domain.sketch.Sketch
+import my.cheysoff.core_domain.sketch.SketchLimits
 import my.cheysoff.core_domain.sketch.Stroke
+import my.cheysoff.core_domain.sketch.StrokeCodec
 import my.cheysoff.core_domain.sketch.StrokeSimplifier
 import kotlin.math.sqrt
 
@@ -18,11 +20,20 @@ import kotlin.math.sqrt
  *
  * A stroke is [StrokeSimplifier.simplify]d the moment it is completed, in [endStroke] -- not lazily
  * in [toSketch] -- for three reasons: undo then operates on the very strokes that are stored, so
- * undoing never silently changes the shape of the drawing; the size guard in a caller sees the real
- * stored size rather than the raw, unthinned capture; and the canvas renders the same points during
- * the session as it will after a reload, so a drawing never visibly shifts the moment it is saved.
+ * undoing never silently changes the shape of the drawing; [endStroke]'s own [SketchLimits] check
+ * sees the real stored size rather than the raw, unthinned capture; and the canvas renders the same
+ * points during the session as it will after a reload, so a drawing never visibly shifts the moment
+ * it is saved.
  */
 class SketchCaptureState(private val width: Int, private val height: Int) {
+
+    /**
+     * The outcome of [endStroke]: whether a gesture was even in progress ([NONE]), whether it was
+     * committed ([ADDED]), or whether committing it would have pushed the sketch's encoded form past
+     * [SketchLimits.MAX_ENCODED_BYTES] ([REJECTED_TOO_LARGE]) -- in which case nothing was committed
+     * at all, so there is no undo entry for [redo] to ever reintroduce.
+     */
+    enum class EndStrokeResult { NONE, ADDED, REJECTED_TOO_LARGE }
 
     /** The colour a new stroke begins with; a caller (the toolbar) sets this before drawing. */
     var colorArgb: Long = DEFAULT_COLOR_ARGB
@@ -64,15 +75,33 @@ class SketchCaptureState(private val width: Int, private val height: Int) {
         activePoints?.add(clamp(x, y))
     }
 
-    fun endStroke() {
-        val points = activePoints ?: return
+    /**
+     * Completes the in-progress gesture and, unless doing so would breach [SketchLimits], commits it.
+     *
+     * The size check happens *before* anything is added to [committedStrokes] or the undo stack --
+     * refusing the commit outright, rather than committing it and relying on a caller to [undo] it
+     * back out. A stroke that was undone would still occupy a slot in the undo/redo history, and
+     * [redo] reinstates a history entry with no check of its own; committing-then-undoing an
+     * oversized stroke would leave it one tap of Redo away from silently reappearing. Refusing the
+     * commit means no such entry is ever created, so there is nothing for [redo] to reintroduce --
+     * [redo] needs no special-casing, because every entry that ever reaches the undo stack was
+     * already proven to fit.
+     */
+    fun endStroke(): EndStrokeResult {
+        val points = activePoints ?: return EndStrokeResult.NONE
         activePoints = null
 
         val simplified = StrokeSimplifier.simplify(points, SIMPLIFY_EPSILON)
         val stroke = Stroke(activeColorArgb, activeStrokeWidth, simplified)
+
+        if (!fitsWithinLimit(committedStrokes + stroke)) {
+            return EndStrokeResult.REJECTED_TOO_LARGE
+        }
+
         val index = committedStrokes.size
         committedStrokes.add(stroke)
         pushHistory(HistoryEntry(stroke, index, added = true))
+        return EndStrokeResult.ADDED
     }
 
     fun undo() {
@@ -85,6 +114,13 @@ class SketchCaptureState(private val width: Int, private val height: Int) {
         redoStack.add(entry)
     }
 
+    /**
+     * Restores the most recently undone change. No size check here: every [HistoryEntry] on
+     * [redoStack] was already validated against [SketchLimits] the moment it was first committed (in
+     * [endStroke]), by an identical, deterministic encoding of an identical committed-strokes state
+     * -- redo only ever replays a state this instance has already occupied, never a new one -- so
+     * re-checking here would always agree with that original check and never change the outcome.
+     */
     fun redo() {
         val entry = redoStack.removeLastOrNull() ?: return
         if (entry.added) {
@@ -94,6 +130,9 @@ class SketchCaptureState(private val width: Int, private val height: Int) {
         }
         undoStack.add(entry)
     }
+
+    private fun fitsWithinLimit(candidateStrokes: List<Stroke>): Boolean =
+        SketchLimits.withinLimit(StrokeCodec.encode(Sketch(width, height, candidateStrokes)))
 
     /**
      * Stroke-level erase: touching within [ERASE_TOLERANCE] canvas units of the nearest point on a
