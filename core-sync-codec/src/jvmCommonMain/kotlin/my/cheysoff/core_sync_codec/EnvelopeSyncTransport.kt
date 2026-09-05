@@ -184,6 +184,11 @@ class EnvelopeSyncTransport(
         // other `Server` status (a 500, say) is transient in a way a 400 is not, so only this one
         // status leaves PROTOCOL for REJECTED.
         is SyncException.Server -> if (e.status == 400) TransportFault.REJECTED else TransportFault.PROTOCOL
+        // 413: the request body exceeded the server's cap. The most literally permanent "these
+        // exact bytes will be refused again" fault there is -- on a batch of one the engine skips
+        // the record instead of halting; on a multi-item batch it still halts, which is correct,
+        // because a 413 there is about the batch as a whole and not attributable to any one item.
+        SyncException.RequestTooLarge -> TransportFault.REJECTED
         else -> TransportFault.PROTOCOL
     }
 }
