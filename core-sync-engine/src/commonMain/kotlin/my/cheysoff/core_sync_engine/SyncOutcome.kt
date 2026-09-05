@@ -148,9 +148,14 @@ data class PassStats(
      * Pushes the server refused outright with [TransportFault.REJECTED] -- a single oversized
      * record the server will not take, ever, for these bytes.
      *
-     * The row this counts stays dirty and is retried on the next pass, which is only safe because
-     * the engine only ever attributes a `REJECTED` to a record when it travelled alone; see
-     * [SyncEngine.LARGE_RECORD_BYTES].
+     * The row this counts stays dirty -- nothing is lost -- but it is **not** retried on the next
+     * pass. The engine remembers a rejected record for the rest of the session, keyed by its row
+     * clock, so an edit or a restart is what tries it again; without that, a record the server will
+     * not take is re-sealed and re-uploaded in full every minute forever. See
+     * `SyncEngine.rememberRejected`.
+     *
+     * Attributing a `REJECTED` to a record at all is only sound because the engine puts anything
+     * large enough to provoke one in a batch by itself; see [SyncEngine.LARGE_RECORD_BYTES].
      */
     val rejected: Int = 0,
 ) {
