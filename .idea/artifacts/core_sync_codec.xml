@@ -1,0 +1,6 @@
+<component name="ArtifactManager">
+  <artifact type="jar" name="core-sync-codec">
+    <output-path>$PROJECT_DIR$/core-sync-codec/build/libs</output-path>
+    <root id="archive" name="core-sync-codec.jar" />
+  </artifact>
+</component>

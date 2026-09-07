@@ -1,0 +1,6 @@
+<component name="ArtifactManager">
+  <artifact type="jar" name="core-crypto-shared-jvm">
+    <output-path>$PROJECT_DIR$/core-crypto-shared/build/libs</output-path>
+    <root id="archive" name="core-crypto-shared-jvm.jar" />
+  </artifact>
+</component>

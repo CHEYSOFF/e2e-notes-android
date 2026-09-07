@@ -647,15 +647,15 @@ class SyncEngine(
          * pulled under a lower number re-pulls its whole account once, which is cheap for a small
          * library and is not free for a large one.
          *
-         * `3` is `RecordType.ATTACHMENT`. A device on the `2` build sees `recType = "attachment"`,
-         * cannot map it, and skips it as `RecordFault.UNKNOWN_TYPE` -- counted as `ignored`, cursor
-         * still advancing, account not halted. That graceful skip is also what makes the bump
-         * mandatory: the cursor sails past every attachment record while the device is on `2`, so
-         * without a generation change to re-pull from 0 after the upgrade, those attachments would
-         * be invisible on that device permanently. `2` was `RecordType.SKETCH`, for the same
-         * reason.
+         * `4` is `RecordType.EVENT`. A device on the `3` build sees `recType = "event"`, cannot map
+         * it, and skips it as `RecordFault.UNKNOWN_TYPE` -- counted as `ignored`, cursor still
+         * advancing, account not halted. That graceful skip is also what makes the bump mandatory:
+         * the cursor sails past every event record while the device is on `3`, so without a
+         * generation change to re-pull from 0 after the upgrade, those events would be invisible on
+         * that device permanently. `3` was `RecordType.ATTACHMENT` and `2` `RecordType.SKETCH`, for
+         * the same reason each time.
          */
-        const val DATA_VERSION = 3
+        const val DATA_VERSION = 4
 
         /** The server refuses a batch of more than 64 items. */
         const val MAX_BATCH_LIMIT = 64

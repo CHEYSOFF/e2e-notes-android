@@ -250,6 +250,12 @@ object Merge {
         // binding `updatedAt` to it as well would add a second clock to the max() that can only
         // ever equal the first.
         RecordType.ATTACHMENT -> FieldClocks.IMAGE
+        // `schedule` is an event's user-facing payload -- when it is *is* the event, the role
+        // `content` plays for a note. Not `title`: a Google import or a timezone normalisation pass
+        // rewrites titles, and binding `updatedAt` there would drag it on a non-user edit. Not
+        // `null` either, for the reason the SKETCH branch gives -- that would leave `updatedAt`
+        // depending on every write path remembering to stamp it alongside the schedule.
+        RecordType.EVENT -> FieldClocks.SCHEDULE
     }
 
     /** `max(the field's own clock, the companion field's clock)`. See [mergeUpdatedAt]. */

@@ -116,6 +116,61 @@ object FieldClocks {
     const val THUMB = "thumb"
 
     /**
+     * `events.startAt`/`endAt`/`startLocal`/`endLocal`/`timeZone`/`allDay` — one clock for all six.
+     *
+     * The strongest instance of the grouping [IMAGE] exists for. A merge takes a whole `FieldValue`
+     * from one side or the other, so separate clocks here would let `allDay = 1` arrive from one
+     * device and a timed `startAt` from another, producing an all-day event whose date is derived
+     * from a wall-clock instant in the wrong zone — landing on the 4th on one device and the 5th on
+     * the other, with both believing they had converged. Grouped, that state cannot be represented.
+     *
+     * It is also why moving an event's end time re-stamps its zone: they are one value, not six.
+     */
+    const val SCHEDULE = "schedule"
+
+    /** `events.location`. */
+    const val LOCATION = "location"
+
+    /**
+     * `events.description` AND `events.descriptionFormat` — one value, one clock.
+     *
+     * Exactly [CONTENT]'s arrangement and for exactly its reason: a body read with the wrong parser
+     * is silent corruption, so the body and the name of its encoding can never come from different
+     * devices. A distinct key rather than reusing [CONTENT] because that one is wired into
+     * `Merge.conflictCopyFor` and `Baselines`, which are note-only — an event that acquired a
+     * conflict copy would put a visible duplicate on the user's calendar.
+     */
+    const val DESCRIPTION = "description"
+
+    /** `events.reminders` — the encoded reminder list. Empty means none. */
+    const val REMINDERS = "reminders"
+
+    /** `events.recurrence` — an RFC 5545 rule, or empty for a single occurrence. */
+    const val RECURRENCE = "recurrence"
+
+    /**
+     * `events.linkedNoteId` — the note an event was created from, if any.
+     *
+     * Deliberately **not** [NOTE_ID]. That key marks a child that dies with its note:
+     * `RoomSyncStore.reconcileAgainstNote` cascades a note's tombstone onto its `noteId` children.
+     * An event is standalone and must outlive the note it was written next to, so it carries a
+     * different key — which also means a later refactor that uniformly cascades "every type with a
+     * `noteId`" cannot silently delete every event on every device.
+     */
+    const val LINKED_NOTE = "linkedNote"
+
+    /**
+     * `events.shareToGoogle` — whether this event may be mirrored out of the E2E boundary.
+     *
+     * Clocked entirely on its own, never grouped with anything. It is the switch that governs data
+     * leaving the app; grouped, a merge that takes the group from the side where it was on would
+     * re-mark an event the user had just un-marked, and the visible consequence is an event
+     * appearing in their Google Calendar. `SyncValues.toBoolean` accepts only exactly `"1"`, so an
+     * unreadable value fails safe to *do not share*.
+     */
+    const val SHARE_TO_GOOGLE = "shareToGoogle"
+
+    /**
      * Every independently clocked field of a note, in the order they are serialised.
      *
      * `id` and `createdAt` are absent on purpose. `id` is the identity of the record and cannot
@@ -149,6 +204,23 @@ object FieldClocks {
      * [SKETCH_FIELDS] omit them.
      */
     val ATTACHMENT_FIELDS: Set<String> = linkedSetOf(NOTE_ID, ANCHOR, ORDER, IMAGE, THUMB, UPDATED_AT, DELETED)
+
+    /**
+     * Every independently clocked field of a calendar event, in the order they are serialised.
+     *
+     * Eleven fields over eighteen columns — [SCHEDULE] covers six and [DESCRIPTION] two; see each
+     * for why they are grouped rather than clocked apart. `id`, `createdAt` and `meta` are absent
+     * for the reasons [NOTE_FIELDS] and `PayloadFields.META` already give.
+     *
+     * [RECURRENCE] and [REMINDERS] are clocked here although this build never writes a non-empty
+     * value into either. They exist from the first shipped `event` record because
+     * `PayloadFields.EVENT_COLUMNS` is frozen the moment one reaches a server, and a column added
+     * afterwards halts the account of every device still on the older build.
+     */
+    val EVENT_FIELDS: Set<String> = linkedSetOf(
+        TITLE, SCHEDULE, LOCATION, DESCRIPTION, REMINDERS, RECURRENCE, LINKED_NOTE,
+        SHARE_TO_GOOGLE, COLOR, UPDATED_AT, DELETED,
+    )
 
     /** Separator between entries. Neither a field key nor a hex node contains one. */
     private const val ENTRY_SEPARATOR = ";"

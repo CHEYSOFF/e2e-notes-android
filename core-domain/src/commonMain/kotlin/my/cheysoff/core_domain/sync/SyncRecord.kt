@@ -298,7 +298,21 @@ enum class RecordType(val wireKey: String, val fields: Set<String>) {
      * is. No body in the [Merge] sense -- `image` is a plain LWW field, not a text two people typed
      * into concurrently -- so no conflict copy.
      */
-    ATTACHMENT("attachment", FieldClocks.ATTACHMENT_FIELDS);
+    ATTACHMENT("attachment", FieldClocks.ATTACHMENT_FIELDS),
+
+    /**
+     * A calendar event.
+     *
+     * The first type that is **not** a child of a note. [FieldClocks.LINKED_NOTE] is an optional
+     * back-reference, not ownership: an event outlives the note it was written beside, which is why
+     * it does not reuse [FieldClocks.NOTE_ID] and why `RoomSyncStore`'s `EVENT` branch calls neither
+     * note reconciler.
+     *
+     * No conflict copy. A contested description loses one side, which is a real cost — but the
+     * alternative is minting a duplicate onto someone's calendar, where it is alarming and awkward
+     * to clean up, and a calendar entry is not the live-typed text the conflict-copy rule protects.
+     */
+    EVENT("event", FieldClocks.EVENT_FIELDS);
 
     /**
      * How many columns [field] carries — see [FieldValue].
@@ -317,6 +331,9 @@ enum class RecordType(val wireKey: String, val fields: Set<String>) {
         FieldClocks.DELETED -> 2   // isDeleted, deletedAt
         FieldClocks.IMAGE -> 4     // bytes, mimeType, width, height
         FieldClocks.THUMB -> 3     // thumbBytes, thumbWidth, thumbHeight
+        // startAt, endAt, startLocal, endLocal, timeZone, allDay -- an event's when, indivisible.
+        FieldClocks.SCHEDULE -> 6
+        FieldClocks.DESCRIPTION -> 2 // description, descriptionFormat
         else -> 1
     }
 

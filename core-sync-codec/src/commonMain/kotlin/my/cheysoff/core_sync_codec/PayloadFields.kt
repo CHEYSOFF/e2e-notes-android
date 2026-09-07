@@ -44,9 +44,25 @@ object PayloadFields {
     const val THUMB_WIDTH = "thumbWidth"
     const val THUMB_HEIGHT = "thumbHeight"
 
+    // An event's columns. See EVENT_COLUMNS, which is frozen.
+    const val START_AT = "startAt"
+    const val END_AT = "endAt"
+    const val START_LOCAL = "startLocal"
+    const val END_LOCAL = "endLocal"
+    const val TIME_ZONE = "timeZone"
+    const val ALL_DAY = "allDay"
+    const val LOCATION = "location"
+    const val DESCRIPTION = "description"
+    const val DESCRIPTION_FORMAT = "descriptionFormat"
+    const val REMINDERS = "reminders"
+    const val RECURRENCE = "recurrence"
+    const val LINKED_NOTE_ID = "linkedNoteId"
+    const val SHARE_TO_GOOGLE = "shareToGoogle"
+
     /**
-     * An attachment's reserved opaque column. **Never parsed, validated, normalised or defaulted
-     * by this build** -- carried verbatim in both directions.
+     * The reserved opaque column, carried by [ATTACHMENT_COLUMNS] and [EVENT_COLUMNS]. **Never
+     * parsed, validated, normalised or defaulted by this build** -- carried verbatim in both
+     * directions.
      *
      * It is in [ATTACHMENT_COLUMNS] from the very first shipped `attachment` record because
      * "later" is the one option this protocol does not offer: [RecordPayloadCodec] requires a
@@ -101,10 +117,40 @@ object PayloadFields {
         CREATED_AT, UPDATED_AT, IS_DELETED, DELETED_AT,
     )
 
+    /**
+     * A calendar event's twenty columns, in the order they are serialised.
+     *
+     * **This set is frozen.** Adding a column to it after the first `event` record ships halts the
+     * account of every device still on the older build — see [META].
+     *
+     * Three of these carry no value this build ever writes, and are here anyway because "later" is
+     * the one option this protocol does not offer:
+     *
+     *  - [RECURRENCE] — recurrence is deferred, but a repeat rule is certain to be wanted, and
+     *    without the column a future build could not express one without breaking every older
+     *    device. A record arriving with a non-empty value renders as a single occurrence here and
+     *    is refused for editing, so this build can never blank someone else's repeat rule.
+     *  - [REMINDERS] — likewise for notifications.
+     *  - [DESCRIPTION_FORMAT] — always `plain` today. Google Calendar descriptions *are* HTML, so
+     *    the moment anything is imported there has to be somewhere to say which parser a body
+     *    wants. A body read with the wrong one is what `FieldClocks` calls silent corruption.
+     *
+     * [START_AT] and [END_AT] are the only columns any record type requires to be present **and
+     * non-null**: an event with no start has no place on a calendar, and defaulting a missing one
+     * to `0` would file it under 1 Jan 1970 on every device, permanently. See `SyncRecords`.
+     */
+    val EVENT_COLUMNS: Set<String> = linkedSetOf(
+        TITLE, START_AT, END_AT, START_LOCAL, END_LOCAL, TIME_ZONE, ALL_DAY,
+        LOCATION, DESCRIPTION, DESCRIPTION_FORMAT, REMINDERS, RECURRENCE,
+        LINKED_NOTE_ID, SHARE_TO_GOOGLE, COLOR_ARGB, META,
+        CREATED_AT, UPDATED_AT, IS_DELETED, DELETED_AT,
+    )
+
     fun columnsOf(type: RecordType): Set<String> = when (type) {
         RecordType.NOTE -> NOTE_COLUMNS
         RecordType.FOLDER -> FOLDER_COLUMNS
         RecordType.SKETCH -> SKETCH_COLUMNS
         RecordType.ATTACHMENT -> ATTACHMENT_COLUMNS
+        RecordType.EVENT -> EVENT_COLUMNS
     }
 }

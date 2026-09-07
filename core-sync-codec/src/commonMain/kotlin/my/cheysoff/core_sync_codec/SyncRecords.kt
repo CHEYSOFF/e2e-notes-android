@@ -112,6 +112,15 @@ object SyncRecords {
             val text = payload.fields[column] ?: return null
             if (Base64Url.decode(text) == null) return null
         }
+        // Same shape as the base64 loop, and for the sharper version of its reason: absent means
+        // this record type has no such column and is skipped, present-and-null is refused. The
+        // numeric loop above has already accepted a null here -- it only rejects unparseable
+        // non-nulls -- so without this an event with no start would reach the store and be filed
+        // under the epoch on every device, with nothing reporting a problem.
+        for (column in REQUIRED_COLUMNS) {
+            if (column !in payload.fields) continue
+            if (payload.fields[column] == null) return null
+        }
         val fields = LinkedHashMap<String, FieldValue>(payload.recType.fields.size)
         for (field in payload.recType.fields) {
             val columns = FIELD_TO_COLUMNS[field] ?: return null
@@ -159,6 +168,21 @@ object SyncRecords {
         FieldClocks.THUMB to listOf(
             PayloadFields.THUMB_BYTES, PayloadFields.THUMB_WIDTH, PayloadFields.THUMB_HEIGHT,
         ),
+        // Six columns, one value, one clock. The order is load-bearing: every consumer indexes on
+        // it, and `RecordType.partCount(SCHEDULE)` counts these.
+        FieldClocks.SCHEDULE to listOf(
+            PayloadFields.START_AT, PayloadFields.END_AT,
+            PayloadFields.START_LOCAL, PayloadFields.END_LOCAL,
+            PayloadFields.TIME_ZONE, PayloadFields.ALL_DAY,
+        ),
+        FieldClocks.LOCATION to listOf(PayloadFields.LOCATION),
+        FieldClocks.DESCRIPTION to listOf(
+            PayloadFields.DESCRIPTION, PayloadFields.DESCRIPTION_FORMAT,
+        ),
+        FieldClocks.REMINDERS to listOf(PayloadFields.REMINDERS),
+        FieldClocks.RECURRENCE to listOf(PayloadFields.RECURRENCE),
+        FieldClocks.LINKED_NOTE to listOf(PayloadFields.LINKED_NOTE_ID),
+        FieldClocks.SHARE_TO_GOOGLE to listOf(PayloadFields.SHARE_TO_GOOGLE),
     )
 
     /**
@@ -181,7 +205,19 @@ object SyncRecords {
         PayloadFields.COLOR_ARGB, PayloadFields.ANCHOR, PayloadFields.ORDER,
         PayloadFields.WIDTH, PayloadFields.HEIGHT,
         PayloadFields.THUMB_WIDTH, PayloadFields.THUMB_HEIGHT,
+        PayloadFields.START_AT, PayloadFields.END_AT,
     )
+
+    /**
+     * The columns that must be present **and non-null** on any record type that declares them.
+     *
+     * Distinct from [NUMERIC_COLUMNS], which tolerates a null and only rejects a non-null value
+     * that will not parse. An event with no start has no place on a calendar, and the numeric loop
+     * skips nulls — so without this a peer sending `"startAt": null` decodes cleanly, defaults to
+     * `0`, and files the event under 1 Jan 1970 on every device that ever syncs it. That is the
+     * same argument `createdAt` and `updatedAt` already make, applied where it is unrecoverable.
+     */
+    private val REQUIRED_COLUMNS = listOf(PayloadFields.START_AT, PayloadFields.END_AT)
 
     /**
      * The columns that must be present, non-null and decodable as unpadded base64url on any record
