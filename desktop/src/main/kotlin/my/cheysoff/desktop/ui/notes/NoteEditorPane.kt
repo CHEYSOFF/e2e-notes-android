@@ -64,9 +64,11 @@ import com.mohamedrejeb.richeditor.ui.BasicRichTextEditor
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
+import my.cheysoff.core_domain.model.AttachmentData
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.core_domain.sketch.DisplaySketch
+import my.cheysoff.desktop.ui.attachment.AttachmentRail
 import my.cheysoff.desktop.ui.state.EditorDraft
 import my.cheysoff.desktop.ui.state.SaveStatus
 import my.cheysoff.desktop.ui.theme.AccentIndigo
@@ -107,6 +109,8 @@ fun NoteEditorPane(
     onRemoveChecklistItem: (String) -> Unit,
     sketches: List<DisplaySketch>,
     onDeleteSketch: (String) -> Unit,
+    attachments: List<AttachmentData>,
+    onAttachmentTapped: (AttachmentData) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (draft == null) {
@@ -206,6 +210,11 @@ fun NoteEditorPane(
             )
 
             SketchSection(sketches = sketches, onDelete = onDeleteSketch)
+
+            // The viewer itself is not rendered here -- it is a full-bleed overlay owned by
+            // NotesWorkspaceScreen (see AttachmentViewer's own KDoc for why), so this pane only
+            // ever forwards the tap.
+            AttachmentRail(attachments = attachments, onTapped = onAttachmentTapped)
 
             Spacer(Modifier.height(60.dp))
         }

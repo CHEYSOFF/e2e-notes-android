@@ -17,10 +17,15 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import my.cheysoff.core_domain.attachment.sortAttachments
+import my.cheysoff.core_domain.model.AttachmentData
+import my.cheysoff.core_domain.model.AttachmentPreview
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.core_domain.model.SketchData
+import my.cheysoff.core_domain.repository.AttachmentsRepository
 import my.cheysoff.core_domain.repository.NotesRepository
+import my.cheysoff.core_domain.repository.SettingsRepository
 import my.cheysoff.core_domain.repository.SketchesRepository
 import my.cheysoff.core_domain.sketch.NoteBlocks
 import my.cheysoff.core_domain.sketch.Sketch
@@ -32,6 +37,8 @@ import my.cheysoff.feature_notes.model.single.SingleNoteScreenState
 import my.cheysoff.feature_notes.model.single.normalizeChecklistText
 import my.cheysoff.feature_notes.model.single.parseChecklist
 import my.cheysoff.feature_notes.model.single.serializeChecklist
+import my.cheysoff.feature_notes.ui.attachment.ImageImporter
+import my.cheysoff.feature_notes.ui.attachment.ImportResult
 import java.util.UUID
 import javax.inject.Inject
 
@@ -44,6 +51,14 @@ sealed class SingleNoteEvent {
      * changes when a duplicate is made — this event is the only signal that the write happened.
      */
     data class NoteDuplicated(val title: String) : SingleNoteEvent()
+
+    /**
+     * An attachment import ([SingleNoteIntent.ImportAttachment]) could not be completed. [tooLarge]
+     * distinguishes "every rung of the ladder was still over the cap" from "the picked source never
+     * decoded as an image at all" -- a single generic failure message is worse than none
+     * (`docs/design/image-attachments.md` §7).
+     */
+    data class AttachmentImportFailed(val tooLarge: Boolean) : SingleNoteEvent()
 }
 
 /**
@@ -278,10 +293,45 @@ internal fun sortSketches(sketches: List<SketchData>): List<SketchData> = sortSk
 internal fun nextSketchOrder(sketches: List<SketchData>, anchor: Int): Int =
     (sketches.filter { it.anchor == anchor }.maxOfOrNull { it.order } ?: -1) + 1
 
+/**
+ * The `order` a brand-new attachment anchored at [anchor] should be given: one past the highest
+ * `order` any existing attachment at that same anchor already holds, or `0` if none does. Mirrors
+ * [nextSketchOrder] exactly.
+ */
+internal fun nextAttachmentOrder(attachments: List<AttachmentPreview>, anchor: Int): Int =
+    (attachments.filter { it.anchor == anchor }.maxOfOrNull { it.order } ?: -1) + 1
+
+/**
+ * [AttachmentData] as saved, reduced to the [AttachmentPreview] this screen's state actually holds
+ * -- the full-size [AttachmentData.bytes] never sit in Compose state (see
+ * `docs/design/image-attachments.md` §5's "no multi-row query selects `bytes`" rule; this is that
+ * same discipline applied to the one row this screen just wrote, not only to what a query returns).
+ */
+internal fun AttachmentData.toPreview(): AttachmentPreview = AttachmentPreview(
+    id = id,
+    noteId = noteId,
+    anchor = anchor,
+    order = order,
+    mimeType = mimeType,
+    width = width,
+    height = height,
+    thumbWidth = thumbWidth,
+    thumbHeight = thumbHeight,
+    thumbBytes = thumbBytes,
+    createdAt = createdAt,
+    updatedAt = updatedAt,
+    isDeleted = isDeleted,
+    deletedAt = deletedAt,
+    meta = meta,
+)
+
 @HiltViewModel
 class SingleNoteViewModel @Inject constructor(
     private val notesRepository: NotesRepository,
     private val sketchesRepository: SketchesRepository,
+    private val attachmentsRepository: AttachmentsRepository,
+    private val imageImporter: ImageImporter,
+    private val settingsRepository: SettingsRepository,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
     private val noteId: String? = savedStateHandle["noteId"]
@@ -314,6 +364,26 @@ class SingleNoteViewModel @Inject constructor(
     // mid-flight (or written but not yet re-emitted into _state) when the guard runs, so the note
     // gets purged with the sketch orphaned under it.
     private var sketchSaveJob: Job? = null
+
+    // Same reasoning and same fix as sketchSaveJob just above, for the other block-level attachment
+    // to a note: an import saved just before Done->back can still be mid-flight (or written but not
+    // yet re-emitted into _state) when BackClicked's blank-note guard runs, so it must join this job
+    // before reading current.attachments, or the note gets purged with the image orphaned under it.
+    //
+    // Asymmetric with sketchSaveJob in one way worth naming: this job covers the WHOLE import --
+    // decode, up to four ladder re-decodes, encode and thumbnail -- not only the DB write the way
+    // sketchSaveJob does (a sketch is already-encoded Sketch data by the time SketchSaved fires).
+    // Tapping back mid-import therefore blocks navigation for the length of the encode, not just an
+    // insert. That is the correct trade -- joining only the DB write half would still race the
+    // encode that produces the AttachmentData being written -- but it is a real, felt difference
+    // from the sketch path and not an oversight.
+    //
+    // A single slot, so a second concurrent import would overwrite this reference and leave the
+    // first ungoverned by the guard. Unreachable today: the picker is a separate activity, and the
+    // toolbar replaces its icon with a progress spinner (state.isImportingAttachment) before a
+    // second tap could launch it again. sketchSaveJob has the exact same single-slot shape for the
+    // exact same reason.
+    private var attachmentSaveJob: Job? = null
 
     // Serializes DB writes so an older/delayed save can't run concurrently with a newer one.
     private val saveMutex = Mutex()
@@ -370,12 +440,45 @@ class SingleNoteViewModel @Inject constructor(
             sketchesRepository.getSketchesForNote(id)
                 .onEach { list -> _state.update { it.copy(sketches = sortSketches(list)) } }
                 .launchIn(viewModelScope)
+
+            // Independent of both flows above for the same reason sketches are: attachments live in
+            // their own table with their own write path (the photo picker), never through the
+            // editor's title/body/checklist baseline.
+            attachmentsRepository.attachmentsOf(id)
+                .onEach { list -> _state.update { it.copy(attachments = sortAttachments(list)) } }
+                .launchIn(viewModelScope)
         }
 
         notesRepository.getFolders()
             .onEach { folders -> _state.update { it.copy(folders = folders) } }
             .launchIn(viewModelScope)
+
+        // Outside the `noteId` block above: the recent-colour strip belongs to the drawing tool, not
+        // to a note, so it is collected even on a note that has never had a sketch.
+        settingsRepository.recentSketchColors
+            .onEach { colors -> _state.update { it.copy(recentSketchColors = colors) } }
+            .launchIn(viewModelScope)
     }
+
+    /**
+     * Records a colour mixed in the canvas' picker.
+     *
+     * Deliberately fire-and-forget rather than part of a sketch save: the colour is worth keeping
+     * whether or not the drawing it was mixed for is ever committed, and a failure to persist it
+     * must not be able to fail the drawing.
+     */
+    fun onSketchColorMixed(argb: Long) {
+        viewModelScope.launch { settingsRepository.addRecentSketchColor(argb) }
+    }
+
+    /**
+     * The one seam `AttachmentViewerScreen` uses to load an attachment's full bytes, by id, on
+     * demand. Everything else on this screen (the toolbar, [SingleNoteScreenState.attachments])
+     * holds only [AttachmentPreview] -- this is deliberately the single call site in the whole
+     * screen that can return [AttachmentData.bytes], matching
+     * `docs/design/image-attachments.md` §5's "one DAO method, by id" rule one layer up.
+     */
+    suspend fun attachment(id: String): AttachmentData? = attachmentsRepository.attachment(id)
 
     fun onIntent(intent: SingleNoteIntent) {
         when (intent) {
@@ -537,6 +640,12 @@ class SingleNoteViewModel @Inject constructor(
                 viewModelScope.launch { sketchesRepository.deleteSketch(intent.id) }
             }
 
+            is SingleNoteIntent.ImportAttachment -> importAttachment(intent.uri)
+
+            is SingleNoteIntent.AttachmentDeleted -> {
+                viewModelScope.launch { attachmentsRepository.deleteAttachment(intent.id) }
+            }
+
             is SingleNoteIntent.DuplicateNote -> duplicateNote()
 
             is SingleNoteIntent.DeleteNote -> {
@@ -568,19 +677,25 @@ class SingleNoteViewModel @Inject constructor(
                     // comment for why joining this job is what makes current.sketches trustworthy
                     // here, not just "usually right in time".
                     sketchSaveJob?.join()
+                    // Same fix, same reason, for an imported photo: without joining this too, a
+                    // picked image saved just before back can still be mid-flight (or written but
+                    // not yet re-emitted into _state) when current.attachments is read below, and
+                    // the note gets purged with the image orphaned under it.
+                    attachmentSaveJob?.join()
                     val current = _state.value
                     val id = noteId
                     when {
                         // A note created for this screen and never written into is discarded rather
                         // than saved — otherwise an abandoned "+" tap would sit at the top of the
                         // newest-first list. Note the guard is createdBlankNote, not "is blank now":
-                        // an existing note the user emptied out is kept. current.sketches is checked
-                        // too: a note whose only content is a drawing is not "still blank" either —
-                        // without this, purgeNote's hard delete below would leave that drawing's row
-                        // live in the database under a note id that no longer exists.
+                        // an existing note the user emptied out is kept. current.sketches and
+                        // current.attachments are checked too: a note whose only content is a
+                        // drawing or a photo is not "still blank" either — without this, purgeNote's
+                        // hard delete below would leave that row live in the database under a note
+                        // id that no longer exists.
                         id != null && createdBlankNote && current.title.isBlank() &&
                                 current.content.isBlank() && current.checklist.isEmpty() &&
-                                current.sketches.isEmpty() -> {
+                                current.sketches.isEmpty() && current.attachments.isEmpty() -> {
                             saveJob?.cancel()
                             // purgeNote, NOT deleteNote: this is a discard, not a deletion the user
                             // asked for. deleteNote became a soft delete when Trash landed, and
@@ -684,6 +799,71 @@ class SingleNoteViewModel @Inject constructor(
             _state.update { it.copy(sketches = sortSketches(it.sketches.filterNot { s -> s.id == data.id } + data)) }
         }
         sketchSaveJob = job
+    }
+
+    /**
+     * Imports a photo picked via [SingleNoteIntent.ImportAttachment].
+     *
+     * [imageImporter] knows nothing about this note -- it decodes, downscales and encodes off the
+     * main thread and hands back an [AttachmentData] with placeholder identity/anchor/order/
+     * timestamps (see [ImportResult]'s own KDoc). This function supplies the parts only a note can
+     * know: a brand-new attachment is anchored at the note's CURRENT block count, exactly like a
+     * brand-new sketch in [saveSketch], and given the next order at that anchor via
+     * [nextAttachmentOrder].
+     *
+     * [SingleNoteScreenState.isImportingAttachment] brackets the whole suspend call so the toolbar
+     * can show progress; [ImportResult.TooLarge] and [ImportResult.NotAnImage] each report through
+     * [SingleNoteEvent.AttachmentImportFailed] rather than silently doing nothing, because a picker
+     * that appears to eat the tap is worse than a message that says which failure it was.
+     */
+    private fun importAttachment(uri: String) {
+        val id = noteId ?: return
+        _state.update { it.copy(isImportingAttachment = true) }
+        val job = viewModelScope.launch {
+            when (val result = imageImporter.import(uri)) {
+                is ImportResult.Imported -> {
+                    val current = _state.value
+                    val now = System.currentTimeMillis()
+                    val anchor = NoteBlocks.count(current.content, current.contentFormat)
+                    val attachment = result.attachment.copy(
+                        id = UUID.randomUUID().toString(),
+                        noteId = id,
+                        anchor = anchor,
+                        order = nextAttachmentOrder(current.attachments, anchor),
+                        createdAt = now,
+                        updatedAt = now,
+                    )
+                    // saveAttachment deliberately never sets `meta` itself -- it stays "" here and
+                    // the repository is what carries a stored value forward. See AttachmentData.meta
+                    // and AttachmentsRepository.saveAttachment's own KDoc.
+                    attachmentsRepository.saveAttachment(attachment)
+                    // Mirror the write into `_state` right here, for the exact reason saveSketch
+                    // does: BackClicked's blank-note guard reads current.attachments immediately
+                    // after joining this job (attachmentSaveJob), and the repository's own Flow
+                    // echo runs on its own dispatcher -- without this, the guard could observe an
+                    // empty list for an attachment that has, in fact, just been durably saved.
+                    _state.update {
+                        it.copy(
+                            attachments = sortAttachments(
+                                it.attachments.filterNot { a -> a.id == attachment.id } + attachment.toPreview()
+                            ),
+                            isImportingAttachment = false,
+                        )
+                    }
+                }
+
+                ImportResult.TooLarge -> {
+                    _state.update { it.copy(isImportingAttachment = false) }
+                    _events.send(SingleNoteEvent.AttachmentImportFailed(tooLarge = true))
+                }
+
+                ImportResult.NotAnImage -> {
+                    _state.update { it.copy(isImportingAttachment = false) }
+                    _events.send(SingleNoteEvent.AttachmentImportFailed(tooLarge = false))
+                }
+            }
+        }
+        attachmentSaveJob = job
     }
 
     /**

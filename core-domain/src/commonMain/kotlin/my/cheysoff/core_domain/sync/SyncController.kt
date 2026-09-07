@@ -137,6 +137,13 @@ data class SyncPassSummary(
     val unreadable: Int = 0,
     /** Records skipped because this build does not implement their type. See `PassStats.ignored`. */
     val ignored: Int = 0,
+    /**
+     * Pushes the server refused outright as too large to ever accept. See `PassStats.rejected`.
+     *
+     * Surfaced for the same reason `unreadable` and `ignored` are: a record skipped on every pass
+     * with no signal is silent, permanent data loss dressed up as a steady state.
+     */
+    val rejected: Int = 0,
 ) {
     /** True when the pass moved nothing — the ordinary steady state, not a failure. */
     val quiet: Boolean get() = received == 0 && applied == 0 && pushed == 0

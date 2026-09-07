@@ -1,6 +1,9 @@
 package my.cheysoff.core_data.data.sync
 
 import androidx.room.withTransaction
+import my.cheysoff.core_data.data.local.AttachmentDao
+import my.cheysoff.core_data.data.local.AttachmentEntity
+import my.cheysoff.core_data.data.local.DIRTY_ATTACHMENT_PAGE
 import my.cheysoff.core_data.data.local.FolderDao
 import my.cheysoff.core_data.data.local.NoteDao
 import my.cheysoff.core_data.data.local.NoteDatabase
@@ -57,12 +60,20 @@ import my.cheysoff.core_sync_engine.SyncStore
  * one transitioning into deleted, for the sketches this device already holds live under it. See
  * both methods' KDoc, and Task 7's `RoomNotesRepository.deleteNote` for the local-delete cascade
  * these two mirror on the sync-arrival side.
+ *
+ * [reconcileAttachmentAgainstNote] and [tombstoneLiveAttachmentsOf] are the same pair for an
+ * attachment, which is structurally the same record — a child of a note, tombstoned when its note
+ * is — and needs both halves for the same reasons. They are separate methods rather than one
+ * generic one because the two DAOs are separate types with no common supertype, and inventing one
+ * to share nine lines would put an abstraction between this store and the SQL it exists to be a
+ * thin translation of.
  */
 class RoomSyncStore(
     private val database: NoteDatabase,
     private val noteDao: NoteDao,
     private val folderDao: FolderDao,
     private val sketchDao: SketchDao,
+    private val attachmentDao: AttachmentDao,
     private val syncStateDao: SyncStateDao,
     private val accountId: String,
     /**
@@ -123,6 +134,16 @@ class RoomSyncStore(
                 contentBaseline = null,
             )
         }
+
+        RecordType.ATTACHMENT -> attachmentDao.attachmentRow(uuid)?.let { attachment ->
+            StoredRecord(
+                record = RecordRows.toRecord(attachment),
+                dirty = attachment.dirty,
+                lastSyncedSeq = attachment.lastSyncedSeq,
+                // No body, so no conflict copy and no baseline column -- as FOLDER and SKETCH.
+                contentBaseline = null,
+            )
+        }
     }
 
     /**
@@ -164,7 +185,20 @@ class RoomSyncStore(
                 contentBaseline = null,
             )
         }
-        return (notes + folders + sketches).sortedWith(
+        // Bounded, unlike the three above, and the bound is a memory limit rather than a paging
+        // convenience: each row carries up to a mebibyte and the codec base64-encodes it into a
+        // second live copy a third larger again, so an unbounded read here is the whole account's
+        // photo library in heap twice inside one pass. A pass that cannot send them all leaves
+        // them dirty and the next pass takes the next page. See `AttachmentDao.dirtyAttachments`.
+        val attachments = attachmentDao.dirtyAttachments(DIRTY_ATTACHMENT_PAGE).map { attachment ->
+            StoredRecord(
+                record = RecordRows.toRecord(attachment),
+                dirty = true,
+                lastSyncedSeq = attachment.lastSyncedSeq,
+                contentBaseline = null,
+            )
+        }
+        return (notes + folders + sketches + attachments).sortedWith(
             compareBy({ it.record.rowClock }, { it.record.type }, { it.record.uuid }),
         )
     }
@@ -197,6 +231,7 @@ class RoomSyncStore(
                 // why re-stamping on every merged note write is the trap this guard exists to avoid.
                 if (merged.isDeleted && existing?.isDeleted != true) {
                     tombstoneLiveSketchesOf(merged)
+                    tombstoneLiveAttachmentsOf(merged)
                 }
             }
 
@@ -227,6 +262,26 @@ class RoomSyncStore(
                     lastSyncedSeq = write.seq,
                 )
                 sketchDao.upsertSketch(reconcileAgainstNote(incoming))
+            }
+
+            RecordType.ATTACHMENT -> {
+                val existing = attachmentDao.attachmentRow(write.record.uuid)
+                val incoming = RecordRows.toAttachmentEntity(
+                    record = write.record,
+                    createdAt = RecordRows.createdAtFor(
+                        existing = existing?.createdAt,
+                        remote = write.remoteCreatedAt,
+                        record = write.record,
+                    ),
+                    // The incoming value when the payload carried one, otherwise whatever this row
+                    // already holds. Never blanked for an existing row: `meta` is opaque to this
+                    // build, and a build that does not understand it must preserve it rather than
+                    // tidy it away. See `AttachmentData.meta`.
+                    meta = write.remoteMeta ?: existing?.meta.orEmpty(),
+                    dirty = write.dirty,
+                    lastSyncedSeq = write.seq,
+                )
+                attachmentDao.upsertAttachment(reconcileAttachmentAgainstNote(incoming))
             }
         }
 
@@ -387,6 +442,83 @@ class RoomSyncStore(
     }
 
     /**
+     * [reconcileAgainstNote] for an attachment. Same three cases, same reasoning, same clock
+     * choice — read that method's KDoc, which is the canonical statement of the rule; nothing here
+     * differs but the table.
+     *
+     * The one thing worth restating is the case that makes it necessary at all: an attachment that
+     * arrives **live**, pointing at a note this device already knows is tombstoned. That happens
+     * whenever the note's delete was performed by a build with no attachment support (the desktop
+     * is a permanent example — it tombstones a note and nothing else), so no attachment tombstone
+     * was ever minted anywhere. Without this the photograph would be an orphan: never shown, never
+     * tombstoned, and therefore never reaped from Trash.
+     */
+    private suspend fun reconcileAttachmentAgainstNote(entity: AttachmentEntity): AttachmentEntity {
+        if (entity.isDeleted) return entity
+        val note = noteDao.noteRow(entity.noteId) ?: return entity
+        if (!note.isDeleted) return entity
+
+        return entity.copy(
+            isDeleted = true,
+            deletedAt = note.deletedAt ?: entity.updatedAt,
+            dirty = true,
+            fieldHlc = FieldClocks.stamp(
+                previousSerialized = entity.fieldHlc,
+                previousRowClock = entity.rowHlc(),
+                allFields = FieldClocks.ATTACHMENT_FIELDS,
+                touched = setOf(FieldClocks.DELETED),
+                newClock = entity.rowHlc(),
+            ),
+        )
+    }
+
+    /**
+     * [tombstoneLiveSketchesOf] for attachments, and every word of that method's KDoc applies here
+     * unchanged: the shared `deletedAt` taken from [note], the per-attachment clock that must be a
+     * strict bump rather than a reuse of the note's clock, the [floor] chain that keeps two
+     * attachments under one note from landing on the same clock, and — the part that is easiest to
+     * drop and impossible to notice — feeding every minted clock to [clockObserver] before it is
+     * written.
+     *
+     * That last one is why this store takes a non-defaulted `ClockObserver`. A bump derived from
+     * an attachment's own prior clock beats that one row's history and says nothing about the
+     * process-wide generator this device mints its next local write from; without the observe, a
+     * later `restoreNote` could mint *below* this tombstone, look like a perfectly successful local
+     * restore (the restore `UPDATE` has no clock guard), and leave the photograph silently dead on
+     * every other device.
+     *
+     * Reads clocks only, never `bytes`: [AttachmentDao.activeAttachmentsForNote] selects a
+     * projection precisely so that tombstoning a note with twenty photographs does not read twenty
+     * mebibytes off disk to look at four columns.
+     */
+    private suspend fun tombstoneLiveAttachmentsOf(note: NoteEntity) {
+        var floor: Hlc? = null
+        attachmentDao.activeAttachmentsForNote(note.id).forEach { attachment ->
+            val current = attachment.rowHlc()
+            val base = floor?.takeIf { it > current } ?: current
+            val bumped = bumpedClock(base)
+            floor = bumped
+            clockObserver.observe(bumped)
+            attachmentDao.softDeleteAttachment(
+                uuid = attachment.uuid,
+                // The note's own wall-clock instant, so that `restoreNote`'s `>=` comparison can
+                // tell "tombstoned by this delete" from "already deleted beforehand".
+                timestamp = note.deletedAt ?: note.updatedAt,
+                hlcMs = bumped.ms,
+                hlcCounter = bumped.counter,
+                hlcNode = bumped.node,
+                fieldHlc = FieldClocks.stamp(
+                    previousSerialized = attachment.fieldHlc,
+                    previousRowClock = current,
+                    allFields = FieldClocks.ATTACHMENT_FIELDS,
+                    touched = setOf(FieldClocks.DELETED),
+                    newClock = bumped,
+                ),
+            )
+        }
+    }
+
+    /**
      * The next clock strictly after [current], by the textbook HLC send rule
      * ([HlcGenerator.next]'s own algorithm) — but derived from [current] itself rather than minted
      * by a generator, because [RoomSyncStore] has no HLC generator of its own (unlike
@@ -420,6 +552,8 @@ class RoomSyncStore(
         RecordType.FOLDER -> folderDao.recordFolderSeen(uuid, seq)
 
         RecordType.SKETCH -> sketchDao.recordSketchSeen(uuid, seq)
+
+        RecordType.ATTACHMENT -> attachmentDao.recordAttachmentSeen(uuid, seq)
     }
 
     /**
@@ -451,6 +585,14 @@ class RoomSyncStore(
         )
 
         RecordType.SKETCH -> sketchDao.acknowledgeSketchPush(
+            uuid = uuid,
+            seq = seq,
+            sealedMs = sealedRowClock.ms,
+            sealedCounter = sealedRowClock.counter,
+            sealedNode = sealedRowClock.node,
+        )
+
+        RecordType.ATTACHMENT -> attachmentDao.acknowledgeAttachmentPush(
             uuid = uuid,
             seq = seq,
             sealedMs = sealedRowClock.ms,

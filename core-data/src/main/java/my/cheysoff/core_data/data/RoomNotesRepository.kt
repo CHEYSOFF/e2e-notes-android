@@ -5,6 +5,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import my.cheysoff.core_data.data.local.AttachmentDao
+import my.cheysoff.core_data.data.local.AttachmentEntity
 import my.cheysoff.core_data.data.local.FolderDao
 import my.cheysoff.core_data.data.local.FolderEntity
 import my.cheysoff.core_data.data.local.NoteDao
@@ -15,10 +17,13 @@ import my.cheysoff.core_data.data.local.SketchDao
 import my.cheysoff.core_data.data.local.toDomain
 import my.cheysoff.core_data.data.sync.SyncClock
 import my.cheysoff.core_data.data.sync.SyncStamp
+import my.cheysoff.core_domain.model.AttachmentData
+import my.cheysoff.core_domain.model.AttachmentPreview
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.model.NotesSortOrder
 import my.cheysoff.core_domain.model.TrashPolicy
+import my.cheysoff.core_domain.repository.AttachmentsRepository
 import my.cheysoff.core_domain.repository.NotesRepository
 import my.cheysoff.core_domain.sync.FieldClocks
 import javax.inject.Inject
@@ -47,9 +52,10 @@ class RoomNotesRepository @Inject constructor(
     private val noteDao: NoteDao,
     private val folderDao: FolderDao,
     private val sketchDao: SketchDao,
+    private val attachmentDao: AttachmentDao,
     private val database: NoteDatabase,
     private val clock: SyncClock,
-) : NotesRepository {
+) : NotesRepository, AttachmentsRepository {
 
     /**
      * Guards the one-off session seed below. A plain flag would let two concurrent first writes
@@ -86,6 +92,9 @@ class RoomNotesRepository @Inject constructor(
                     // using a generator that never observed the table's existing high-water mark,
                     // which is exactly the rewound-clock hazard the class KDoc describes.
                     sketchDao.highestRowClock()?.let { clock.observe(it.rowHlc()) }
+                    // Same argument, for `attachments`: deleteNote's cascade below mints attachment
+                    // clocks through this same stamp() too.
+                    attachmentDao.highestRowClock()?.let { clock.observe(it.rowHlc()) }
                     seeded = true
                 }
             }
@@ -126,6 +135,16 @@ class RoomNotesRepository @Inject constructor(
             previousSerialized = prior?.fieldHlc ?: "",
             previousRowClock = prior?.rowHlc(),
             allFields = FieldClocks.SKETCH_FIELDS,
+            touched = touched,
+            newClock = stamp.hlc,
+        )
+
+    /** [noteFieldHlc] for the `attachments` table. */
+    private fun attachmentFieldHlc(prior: RowClock?, touched: Set<String>, stamp: SyncStamp): String =
+        FieldClocks.stamp(
+            previousSerialized = prior?.fieldHlc ?: "",
+            previousRowClock = prior?.rowHlc(),
+            allFields = FieldClocks.ATTACHMENT_FIELDS,
             touched = touched,
             newClock = stamp.hlc,
         )
@@ -224,19 +243,21 @@ class RoomNotesRepository @Inject constructor(
     }
 
     /**
-     * Soft-deletes the note, then tombstones its sketches — in the same transaction, as separate
-     * records with their own tombstones, never through `ON DELETE CASCADE`.
+     * Soft-deletes the note, then tombstones its sketches and its attachments — in the same
+     * transaction, as separate records with their own tombstones, never through `ON DELETE
+     * CASCADE`.
      *
      * **Why reconciliation, not cascade.** A cascade would run only on the device that performed
      * this delete. The other device would still hold the note's tombstone but nothing telling it
-     * the note's sketches are gone — and because a dirty sketch pushes independently of its note,
-     * it would push the still-live sketch right back. `SketchEntity`'s KDoc is why the table has no
-     * foreign key at all. What both a sketch-aware and a sketch-unaware build can honour instead is:
-     * a sketch whose note is deleted is *treated* as deleted. This method is that rule enacted by
-     * the device that did the deleting; `RoomSyncStore.applyMerged`'s SKETCH branch enacts the same
-     * rule for a sketch that *arrives* pointing at a note this device already knows is gone.
+     * the note's sketches (or attachments) are gone — and because a dirty child record pushes
+     * independently of its note, it would push the still-live copy right back. `SketchEntity`'s and
+     * `AttachmentEntity`'s KDocs are why neither table has a foreign key at all. What both an
+     * aware and an unaware build can honour instead is: a child record whose note is deleted is
+     * *treated* as deleted. This method is that rule enacted by the device that did the deleting;
+     * `RoomSyncStore.applyMerged`'s SKETCH branch enacts the same rule for a sketch that *arrives*
+     * pointing at a note this device already knows is gone (Task 4's job for attachments).
      *
-     * **Each sketch gets its own HLC, not the note's — but shares the note's `deletedAt`.**
+     * **Each child record gets its own HLC, not the note's — but shares the note's `deletedAt`.**
      * `deleteFolder` shares one whole stamp across many rows because unfiling N notes and trashing
      * the folder is one user gesture the account's history should record as one moment. A sketch's
      * tombstone is that AND something more: each sketch is its own record with its own dirty flag
@@ -273,6 +294,22 @@ class RoomNotesRepository @Inject constructor(
                     hlcCounter = sketchStamp.hlc.counter,
                     hlcNode = sketchStamp.hlc.node,
                     fieldHlc = sketchFieldHlc(sketch.clocks(), TOMBSTONE_FIELDS, sketchStamp),
+                )
+            }
+            // Each attachment gets the NOTE's deletedAt but its OWN clock, minted through the shared
+            // generator. Reusing the note's clock, or minting locally, both end the same way: a later
+            // restoreNote mints below the tombstone, the restore looks right on this device, and the
+            // other device keeps the image deleted forever with nothing anywhere saying why. See
+            // `docs/design/image-attachments.md` §6 and `AttachmentDao`'s KDoc.
+            attachmentDao.activeAttachmentsForNote(id).forEach { attachment ->
+                val attachmentStamp = stamp()
+                attachmentDao.softDeleteAttachment(
+                    uuid = attachment.uuid,
+                    timestamp = stamp.wallMs,
+                    hlcMs = attachmentStamp.hlc.ms,
+                    hlcCounter = attachmentStamp.hlc.counter,
+                    hlcNode = attachmentStamp.hlc.node,
+                    fieldHlc = attachmentFieldHlc(attachment.clocks(), TOMBSTONE_FIELDS, attachmentStamp),
                 )
             }
         }
@@ -322,6 +359,16 @@ class RoomNotesRepository @Inject constructor(
                         fieldHlc = sketchFieldHlc(sketch.clocks(), TOMBSTONE_FIELDS, sketchStamp),
                     )
                 }
+                attachmentDao.attachmentsDeletedAtForNote(id, deletedAt).forEach { attachment ->
+                    val attachmentStamp = stamp()
+                    attachmentDao.restoreAttachment(
+                        uuid = attachment.uuid,
+                        hlcMs = attachmentStamp.hlc.ms,
+                        hlcCounter = attachmentStamp.hlc.counter,
+                        hlcNode = attachmentStamp.hlc.node,
+                        fieldHlc = attachmentFieldHlc(attachment.clocks(), TOMBSTONE_FIELDS, attachmentStamp),
+                    )
+                }
             }
         }
     }
@@ -347,6 +394,11 @@ class RoomNotesRepository @Inject constructor(
             // without this call the sketch would survive, live and dirty, under an id that no note
             // will ever hold again.
             sketchDao.purgeSketchesForNote(id)
+            // Same argument for attachments: AttachmentEntity is deliberately unlinked too (see
+            // AttachmentDao's KDoc), so a blank note discarded with an unsaved photo attached would
+            // otherwise leave the attachment behind, live and dirty, under a noteId nothing will
+            // ever hold again.
+            attachmentDao.purgeAttachmentsForNote(id)
         }
     }
 
@@ -509,20 +561,137 @@ class RoomNotesRepository @Inject constructor(
 
     override suspend fun purgeExpiredTrash(now: Long): Int {
         val threshold = TrashPolicy.purgeThreshold(now)
-        // One transaction so the three deletes are one observable step. They are independent — a
-        // folder's notes were unfiled when it was trashed, and a sketch's tombstone stamp is its
-        // own (see deleteNote), so none of the three tables references another here — but a single
-        // transaction also means Room fires one invalidation instead of three, and the Trash list
-        // re-renders once.
+        // One transaction so the four deletes are one observable step. They are independent — a
+        // folder's notes were unfiled when it was trashed, and a sketch's or attachment's tombstone
+        // stamp is its own (see deleteNote), so none of the four tables references another here —
+        // but a single transaction also means Room fires one invalidation instead of four, and the
+        // Trash list re-renders once.
         //
-        // Sketches MUST be purged on the same pass as notes and folders: a sketch is tombstoned
-        // independently of its note (Task 7's whole point) and so ages out of Trash independently
-        // too. Leaving it out would let a tombstoned sketch outlive the note it was purged with —
-        // a leak that never self-heals, since nothing else ever purges the `sketches` table.
+        // Sketches and attachments MUST be purged on the same pass as notes and folders: each is
+        // tombstoned independently of its note and so ages out of Trash independently too. Leaving
+        // either out would let a tombstoned child record outlive the note it was purged with — a
+        // leak that never self-heals, since nothing else ever purges that table.
         return database.withTransaction {
             noteDao.purgeNotesDeletedBefore(threshold) +
                 folderDao.purgeFoldersDeletedBefore(threshold) +
-                sketchDao.purgeSketchesDeletedBefore(threshold)
+                sketchDao.purgeSketchesDeletedBefore(threshold) +
+                attachmentDao.purgeAttachmentsDeletedBefore(threshold)
+        }
+    }
+
+    // ── Attachments. AttachmentsRepository's own KDoc explains why this lives on a separate ──────
+    // ── interface, the same shape sketches already have with SketchesRepository. ─────────────────
+
+    override fun attachmentsOf(noteId: String): Flow<List<AttachmentPreview>> =
+        attachmentDao.attachmentPreviewsByNoteId(noteId).map { list -> list.map { it.toDomain() } }
+
+    override suspend fun attachment(id: String): AttachmentData? =
+        attachmentDao.attachmentRow(id)?.takeUnless { it.isDeleted }?.toDomain()
+
+    /**
+     * Creates or updates an attachment. Mirrors `RoomSketchesRepository.saveSketch` — one stamp,
+     * one transaction, the row's prior clocks read inside it so [attachmentTouchedFields] can tell
+     * what this write actually changed.
+     *
+     * ## `attachment.meta` is deliberately ignored
+     *
+     * The stored row's `meta` is carried forward and the incoming object's is discarded — this
+     * method has **no** path that writes a `meta` a caller supplied. That looks like a bug and is
+     * the opposite: `meta` is an opaque escape hatch (`AttachmentData.meta`,
+     * `PayloadFields.META`) that no code in this build ever sets, so the only value a caller can
+     * plausibly be holding is one it read out of a row that a *newer* build wrote. UI code builds
+     * an `AttachmentData` out of what an editor has in hand — the same way `upsertNote` ignores
+     * `isFavorite` and the tombstone, and for the same reason — so the first caller that rebuilds
+     * a row without carrying `meta` forward would blank it on a local edit and then push the
+     * blank. Reading it off the row makes that impossible rather than merely discouraged.
+     *
+     * **A future caption feature must not simply start honouring `attachment.meta` here.** It
+     * needs its own write path, so that "this call is deliberately setting `meta`" and "this call
+     * happens to be holding a default-constructed one" stay distinguishable. `meta` is also absent
+     * from [attachmentTouchedFields] and stays absent: it has no clock of its own and merges at
+     * the row clock.
+     */
+    override suspend fun saveAttachment(attachment: AttachmentData) {
+        val stamp = stamp()
+        database.withTransaction {
+            val prior = attachmentDao.attachmentRow(attachment.id)
+            attachmentDao.upsertAttachment(
+                AttachmentEntity(
+                    uuid = attachment.id,
+                    noteId = attachment.noteId,
+                    anchor = attachment.anchor,
+                    sortOrder = attachment.order,
+                    mimeType = attachment.mimeType,
+                    width = attachment.width,
+                    height = attachment.height,
+                    bytes = attachment.bytes,
+                    thumbWidth = attachment.thumbWidth,
+                    thumbHeight = attachment.thumbHeight,
+                    thumbBytes = attachment.thumbBytes,
+                    createdAt = attachment.createdAt,
+                    updatedAt = attachment.updatedAt,
+                    isDeleted = attachment.isDeleted,
+                    deletedAt = attachment.deletedAt,
+                    // The row's own, never the caller's -- see this method's KDoc.
+                    meta = prior?.meta.orEmpty(),
+                    hlcMs = stamp.hlc.ms,
+                    hlcCounter = stamp.hlc.counter,
+                    hlcNode = stamp.hlc.node,
+                    fieldHlc = attachmentFieldHlc(prior?.clocks(), attachmentTouchedFields(prior, attachment), stamp),
+                    dirty = true,
+                    lastSyncedSeq = prior?.lastSyncedSeq ?: 0L,
+                )
+            )
+        }
+    }
+
+    /**
+     * Which of [AttachmentEntity]'s clocked fields this particular save actually changed — see
+     * `savedNoteFields` for why "wrote" and "changed" are not the same question. `mimeType`,
+     * `width`, `height` and `bytes` share [FieldClocks.IMAGE]; `thumbWidth`, `thumbHeight` and
+     * `thumbBytes` share [FieldClocks.THUMB] — see that constant's KDoc for why the image and its
+     * dimensions must move as one field rather than four independent ones.
+     */
+    private fun attachmentTouchedFields(prior: AttachmentEntity?, attachment: AttachmentData): Set<String> {
+        if (prior == null) return FieldClocks.ATTACHMENT_FIELDS
+
+        val touched = mutableSetOf(FieldClocks.UPDATED_AT)
+        if (prior.noteId != attachment.noteId) touched += FieldClocks.NOTE_ID
+        if (prior.anchor != attachment.anchor) touched += FieldClocks.ANCHOR
+        if (prior.sortOrder != attachment.order) touched += FieldClocks.ORDER
+        if (prior.mimeType != attachment.mimeType || prior.width != attachment.width ||
+            prior.height != attachment.height || !prior.bytes.contentEquals(attachment.bytes)
+        ) {
+            touched += FieldClocks.IMAGE
+        }
+        if (prior.thumbWidth != attachment.thumbWidth || prior.thumbHeight != attachment.thumbHeight ||
+            !prior.thumbBytes.contentEquals(attachment.thumbBytes)
+        ) {
+            touched += FieldClocks.THUMB
+        }
+        if (prior.isDeleted != attachment.isDeleted || prior.deletedAt != attachment.deletedAt) {
+            touched += FieldClocks.DELETED
+        }
+        return touched
+    }
+
+    /**
+     * Soft-deletes one attachment by id: its own tombstone, its own fresh clock, `dirty` set so it
+     * is pushed. Mirrors [deleteNote]'s per-sketch/per-attachment cascade branch and
+     * `RoomSketchesRepository.deleteSketch`.
+     */
+    override suspend fun deleteAttachment(id: String) {
+        val stamp = stamp()
+        database.withTransaction {
+            val prior = attachmentDao.rowClock(id)
+            attachmentDao.softDeleteAttachment(
+                uuid = id,
+                timestamp = stamp.wallMs,
+                hlcMs = stamp.hlc.ms,
+                hlcCounter = stamp.hlc.counter,
+                hlcNode = stamp.hlc.node,
+                fieldHlc = attachmentFieldHlc(prior, TOMBSTONE_FIELDS, stamp),
+            )
         }
     }
 

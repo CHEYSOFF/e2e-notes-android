@@ -72,6 +72,14 @@ class RecordingStore(
     /** One line per write, in the order they happened. */
     val writes = mutableListOf<String>()
 
+    /**
+     * The `remoteMeta` of the most recent [applyMerged] per record uuid.
+     *
+     * Captured because [StoredRecord] has nowhere to put it -- `meta` is not a clocked field, so it
+     * never enters a `SyncRecord` -- and it is nonetheless the value a real store writes to the row.
+     */
+    val remoteMeta = mutableMapOf<String, String?>()
+
     var cursor: Long = 0L
         private set
 
@@ -100,6 +108,7 @@ class RecordingStore(
             lastSyncedSeq = write.seq,
             contentBaseline = write.contentBaseline,
         )
+        remoteMeta[write.record.uuid] = write.remoteMeta
         writes += "apply=${write.record.uuid} dirty=${write.dirty} seq=${write.seq}"
         write.conflictCopy?.let { copy ->
             rows[key(RecordType.NOTE, copy.uuid)] =

@@ -1,8 +1,10 @@
 package my.cheysoff.feature_notes
 
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import my.cheysoff.core_domain.model.HeaderSettings
 import my.cheysoff.core_domain.model.NotesSortOrder
+import my.cheysoff.core_domain.sketch.SketchColors
 import my.cheysoff.core_domain.repository.SettingsRepository
 
 /**
@@ -43,5 +45,13 @@ internal class FakeSettingsRepository(
     override suspend fun setNotesSortOrder(order: NotesSortOrder) {
         calls += "setNotesSortOrder(${order.key})"
         notesSortOrder.value = order
+    }
+
+    val recentSketchColorsState = MutableStateFlow<List<Long>>(emptyList())
+    override val recentSketchColors: Flow<List<Long>> get() = recentSketchColorsState
+
+    override suspend fun addRecentSketchColor(argb: Long) {
+        calls += "addRecentSketchColor($argb)"
+        recentSketchColorsState.value = SketchColors.withRecent(recentSketchColorsState.value, argb)
     }
 }

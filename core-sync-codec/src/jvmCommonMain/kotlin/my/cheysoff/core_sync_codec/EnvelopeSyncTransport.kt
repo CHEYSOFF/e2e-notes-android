@@ -53,12 +53,19 @@ import my.cheysoff.core_sync_net.SyncException
  * @param createdAtOf the record's `createdAt`, which `SyncRecord` does not carry and the payload
  *   does. Supplied by the store rather than invented here; see `SyncRecords` for why the column is
  *   in one and not the other.
+ * @param metaOf an attachment's opaque `meta` column, which `SyncRecord` does not carry either and
+ *   for a different reason (`PayloadFields.META`). Deliberately **not defaulted**: a no-op default
+ *   returning `""` is exactly how a caller forgets to wire the real one, and the cost of forgetting
+ *   is that this device replaces whatever a newer build put in `meta` with an empty string on every
+ *   record it pushes -- silently, and on every device the account reaches. `""` is the right answer
+ *   for every record type except `ATTACHMENT`, which is what makes the mistake invisible.
  */
 class EnvelopeSyncTransport(
     private val api: SyncApi,
     private val credentials: DeviceCredentials,
     private val codec: RecordCodec,
     private val createdAtOf: suspend (RecordType, String) -> Long?,
+    private val metaOf: suspend (RecordType, String) -> String,
 ) : SyncTransport {
 
     override suspend fun changesSince(since: Long, limit: Int): ChangePage = translating {
@@ -66,9 +73,10 @@ class EnvelopeSyncTransport(
         ChangePage(
             records = page.records.map { remote ->
                 when (val opened = codec.open(remote.blindedId, remote.envelope)) {
-                    // `createdAt` is read straight off the payload rather than out of the record:
-                    // it is not a clocked field, so `fromPayload` does not carry it. It is the one
-                    // value here that belongs to the record rather than to the merge.
+                    // `createdAt` and `meta` are read straight off the payload rather than out of
+                    // the record: neither is a clocked field, so `fromPayload` carries neither.
+                    // They are the two values here that belong to the record rather than to the
+                    // merge.
                     is OpenResult.Ok -> SyncRecords.fromPayload(opened.payload)
                         ?.let {
                             IncomingRecord.Opened(
@@ -77,6 +85,11 @@ class EnvelopeSyncTransport(
                                 createdAt = opened.payload
                                     .field(PayloadFields.CREATED_AT)
                                     ?.toLongOrNull(),
+                                // Indexed rather than `field(...)`, which requires the
+                                // column to belong to the record's type and throws when it
+                                // does not. Every type but ATTACHMENT has no `meta`, and
+                                // "this record has none" is the answer, not an error.
+                                meta = opened.payload.fields[PayloadFields.META],
                             )
                         }
                     // Authentic bytes this build cannot turn into a record. Reported as UNREADABLE
@@ -110,7 +123,12 @@ class EnvelopeSyncTransport(
                 // one pass cannot do. `updatedAt` is the same fallback the receiving side uses, so
                 // the two agree rather than each inventing something.
                 ?: item.record.valueOf(FieldClocks.UPDATED_AT).parts[0]?.toLongOrNull() ?: 0L
-            val sealed = codec.seal(SyncRecords.toPayload(item.record, createdAt))
+            // `metaOf` rather than `""`: this build never writes a non-empty `meta`, but a newer
+            // one will, and a record round-tripping through an older device must come back with
+            // what it arrived with. See `PayloadFields.META`.
+            val sealed = codec.seal(
+                SyncRecords.toPayload(item.record, createdAt, metaOf(item.type, item.uuid)),
+            )
             identities[sealed.blindedId] = item
             PushItem(blindedId = sealed.blindedId, baseSeq = item.baseSeq, envelope = sealed.envelope)
         }
@@ -125,10 +143,13 @@ class EnvelopeSyncTransport(
 
                     is PushResult.Conflict -> identities[result.blindedId]?.let { sent ->
                         val blocking = result.current
-                        val record = blocking?.let { current ->
-                            (codec.open(current.blindedId, current.envelope) as? OpenResult.Ok)
-                                ?.let { SyncRecords.fromPayload(it.payload) }
+                        // The payload is kept, not just the record it decodes to: `meta` is not a
+                        // clocked field, so it exists only on the payload and is gone by the time
+                        // `fromPayload` has run.
+                        val opened = blocking?.let { current ->
+                            (codec.open(current.blindedId, current.envelope) as? OpenResult.Ok)?.payload
                         }
+                        val record = opened?.let { SyncRecords.fromPayload(it) }
                         // A conflict whose inline version will not open is reported with no record
                         // rather than as a fault: the row simply stays dirty and the next pull
                         // fetches the blocking version the ordinary way, which is slower and
@@ -138,7 +159,14 @@ class EnvelopeSyncTransport(
                             type = sent.type,
                             uuid = sent.uuid,
                             current = record,
-                            currentSeq = if (record == null) 0L else blocking!!.seq,
+                            // A null `record` is the "nothing to merge" state: no version to
+                            // build on, and no `meta` to carry either. When it is non-null so are
+                            // `blocking` and `opened`, which the compiler follows through both
+                            // `?.let` hops -- hence no null handling on either below.
+                            currentSeq = if (record == null) 0L else blocking.seq,
+                            // Indexed rather than `field(...)`, which throws for a column the
+                            // record's type does not own -- every type but ATTACHMENT.
+                            currentMeta = if (record == null) null else opened.fields[PayloadFields.META],
                         )
                     }
                 }
@@ -180,6 +208,15 @@ class EnvelopeSyncTransport(
         is SyncException.Unauthorized -> TransportFault.UNAUTHORIZED
         SyncException.DeviceRevoked -> TransportFault.DEVICE_REVOKED
         is SyncException.CursorAheadOfServer -> TransportFault.CURSOR_AHEAD_OF_SERVER
+        // A 400: the server will refuse these exact bytes again, so retrying is pointless. Every
+        // other `Server` status (a 500, say) is transient in a way a 400 is not, so only this one
+        // status leaves PROTOCOL for REJECTED.
+        is SyncException.Server -> if (e.status == 400) TransportFault.REJECTED else TransportFault.PROTOCOL
+        // 413: the request body exceeded the server's cap. The most literally permanent "these
+        // exact bytes will be refused again" fault there is -- on a batch of one the engine skips
+        // the record instead of halting; on a multi-item batch it still halts, which is correct,
+        // because a 413 there is about the batch as a whole and not attributable to any one item.
+        SyncException.RequestTooLarge -> TransportFault.REJECTED
         else -> TransportFault.PROTOCOL
     }
 }

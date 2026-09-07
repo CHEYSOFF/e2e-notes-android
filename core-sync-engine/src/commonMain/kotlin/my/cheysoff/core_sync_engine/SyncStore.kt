@@ -240,4 +240,16 @@ class MergedWrite(
      * value, it is simply carried.
      */
     val remoteCreatedAt: Long? = null,
+    /**
+     * The opaque `meta` an attachment's incoming payload carried, or null when there was none —
+     * a record type without the column, a payload that omitted it, or a write with no remote at
+     * all (a conflict copy).
+     *
+     * Unlike [remoteCreatedAt] this is **not** only for a first receipt: `meta` is a mutable value
+     * that a later build may edit, so an existing row takes the incoming one when there is one.
+     * It carries no clock of its own (`PayloadFields.META`), so it moves with the row: the store
+     * writes it beside the merged record and falls back to the row's existing value when null,
+     * which is what stops a build that does not understand the contents from erasing them.
+     */
+    val remoteMeta: String? = null,
 )

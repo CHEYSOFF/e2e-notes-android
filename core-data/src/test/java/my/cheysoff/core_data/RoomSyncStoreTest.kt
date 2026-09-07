@@ -70,6 +70,7 @@ class RoomSyncStoreTest {
             noteDao = database.noteDao,
             folderDao = database.folderDao,
             sketchDao = database.sketchDao,
+            attachmentDao = database.attachmentDao,
             syncStateDao = database.syncStateDao,
             accountId = account,
             clockObserver = ClockObserver {},
@@ -677,7 +678,8 @@ class RoomSyncStoreTest {
     fun `a cursor belongs to its account and is not inherited by another`() = runTest {
         store.saveCursor(12L)
         val other = RoomSyncStore(
-            database, database.noteDao, database.folderDao, database.sketchDao, database.syncStateDao,
+            database, database.noteDao, database.folderDao, database.sketchDao,
+            database.attachmentDao, database.syncStateDao,
             accountId = "acct-2",
             clockObserver = ClockObserver {},
         )
@@ -692,7 +694,8 @@ class RoomSyncStoreTest {
         store.recordHalt(HaltReason.SERVER_ROLLED_BACK)
 
         val restarted = RoomSyncStore(
-            database, database.noteDao, database.folderDao, database.sketchDao, database.syncStateDao, account,
+            database, database.noteDao, database.folderDao, database.sketchDao,
+            database.attachmentDao, database.syncStateDao, account,
             clockObserver = ClockObserver {},
         )
         assertEquals(HaltReason.SERVER_ROLLED_BACK, restarted.halt())

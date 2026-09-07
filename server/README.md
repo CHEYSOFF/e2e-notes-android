@@ -65,7 +65,7 @@ server {
     ssl_certificate     /etc/letsencrypt/live/notes.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/notes.example.com/privkey.pem;
 
-    client_max_body_size 8m;   # must exceed MANANA_MAX_REQUEST_BYTES
+    client_max_body_size 12m;  # must exceed MANANA_MAX_REQUEST_BYTES
 
     location / {
         proxy_pass http://127.0.0.1:8080;
@@ -90,8 +90,9 @@ Every value is optional; an unparseable one stops start-up rather than silently 
 | `MANANA_HOST` | `127.0.0.1` | bind address |
 | `MANANA_PORT` | `8080` | bind port |
 | `MANANA_DB` | `sync.db` | SQLite file, or `:memory:` |
-| `MANANA_MAX_REQUEST_BYTES` | `4194304` | hard cap on any request body |
-| `MANANA_MAX_ENVELOPE_BYTES` | `262144` | hard cap on one sealed envelope |
+| `MANANA_MAX_REQUEST_BYTES` | `8388608` | hard cap on any request body |
+| `MANANA_MAX_ENVELOPE_BYTES` | `2097152` | hard cap on one sealed envelope |
+| `MANANA_MAX_CHANGES_BYTES` | `8388608` | envelope bytes one `GET /v1/changes` page may carry |
 | `MANANA_MAX_BATCH_ITEMS` | `64` | items in one `POST /v1/records` |
 | `MANANA_HISTORY_DEPTH` | `10` | versions retained per record |
 | `MANANA_SIGNATURE_WINDOW_MS` | `300000` | how far a signed request's `ts` may be from server time |
@@ -104,6 +105,12 @@ Every value is optional; an unparseable one stops start-up rather than silently 
 | `MANANA_PAIRING_DEPOSIT_PER_MINUTE` | `6` | deposit-only bucket, per IP. An honest pairing uses one |
 | `MANANA_PAIRING_DEPOSIT_BURST` | `6` | deposit-only bucket capacity |
 | `MANANA_DEBUG` | unset | `1` enables `DEBUG` log lines |
+
+> **A ceiling on `MANANA_MAX_CHANGES_BYTES`.** Raising it above roughly 12 MiB would exceed the
+> client's own 16 MiB response cap (`KtorHttpTransport.DEFAULT_MAX_RESPONSE_BYTES`) once base64
+> expansion is applied to what this bounds in raw envelope bytes. Nothing here validates that --
+> an operator who raises this past that point has no other way to find out than a client that
+> starts refusing every page.
 
 ### Backups
 

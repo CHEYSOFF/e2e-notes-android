@@ -103,6 +103,19 @@ object FieldClocks {
     const val STROKES = "strokes"
 
     /**
+     * `attachments.mimeType`/`width`/`height`/`bytes` — one clock for all four.
+     *
+     * `docs/design/image-attachments.md` §6: bytes and their dimensions are one `FieldValue`, for
+     * the same reason `content`/`contentFormat` share [CONTENT] — a field-level merge takes one
+     * side's value or the other's, never a mix, so packing them together makes it physically
+     * impossible to end up with one device's pixels described by another device's dimensions.
+     */
+    const val IMAGE = "image"
+
+    /** `attachments.thumbWidth`/`thumbHeight`/`thumbBytes` — one clock for all three. See [IMAGE]. */
+    const val THUMB = "thumb"
+
+    /**
      * Every independently clocked field of a note, in the order they are serialised.
      *
      * `id` and `createdAt` are absent on purpose. `id` is the identity of the record and cannot
@@ -126,6 +139,16 @@ object FieldClocks {
      * argument `PayloadFields.SKETCH_COLUMNS`'s KDoc restates on the payload side.
      */
     val SKETCH_FIELDS: Set<String> = linkedSetOf(NOTE_ID, ANCHOR, ORDER, STROKES, UPDATED_AT, DELETED)
+
+    /**
+     * Every independently clocked field of an attachment, in the order they are serialised.
+     *
+     * Mirrors [SKETCH_FIELDS] with [STROKES] split into [IMAGE] and [THUMB] — an attachment carries
+     * two independent binary payloads (the full-size image and its thumbnail) where a sketch
+     * carries one. `id` and `createdAt` are absent for the same reason [NOTE_FIELDS] and
+     * [SKETCH_FIELDS] omit them.
+     */
+    val ATTACHMENT_FIELDS: Set<String> = linkedSetOf(NOTE_ID, ANCHOR, ORDER, IMAGE, THUMB, UPDATED_AT, DELETED)
 
     /** Separator between entries. Neither a field key nor a hex node contains one. */
     private const val ENTRY_SEPARATOR = ";"
