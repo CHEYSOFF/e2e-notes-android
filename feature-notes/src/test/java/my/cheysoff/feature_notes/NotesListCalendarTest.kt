@@ -40,6 +40,7 @@ class NotesListCalendarTest {
 
     private val notesRepo = FakeNotesRepository()
     private val settingsRepo = FakeSettingsRepository()
+    private val eventsRepo = FakeEventsRepository()
     private val syncController = FakeSyncController()
 
     private val zone: ZoneId get() = ZoneId.systemDefault()
@@ -57,7 +58,7 @@ class NotesListCalendarTest {
         updatedAt = updatedAt,
     )
 
-    private fun viewModel() = NotesListViewModel(notesRepo, settingsRepo, syncController)
+    private fun viewModel() = NotesListViewModel(notesRepo, settingsRepo, syncController, eventsRepo)
 
     private fun currentNotes(vararg notes: Note) {
         notesRepo.notesFor(settingsRepo.notesSortOrder.value).value = notes.toList()

@@ -25,6 +25,9 @@ import kotlinx.coroutines.launch
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.HeaderSettings
 import my.cheysoff.core_domain.model.Note
+import my.cheysoff.core_domain.model.EventData
+import my.cheysoff.core_domain.repository.EventsRepository
+import my.cheysoff.feature_notes.model.calendar.EventDrafts
 import my.cheysoff.core_domain.model.NotesSortOrder
 import my.cheysoff.core_domain.repository.NotesRepository
 import my.cheysoff.core_domain.repository.SettingsRepository
@@ -84,6 +87,7 @@ class NotesListViewModel @Inject constructor(
     private val notesRepository: NotesRepository,
     private val settingsRepository: SettingsRepository,
     private val syncController: SyncController,
+    private val eventsRepository: EventsRepository,
 ) : ViewModel() {
     private val _state = MutableStateFlow(NotesListScreenState())
     val state = _state.asStateFlow()
@@ -267,9 +271,13 @@ class NotesListViewModel @Inject constructor(
      */
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun observeCalendar() {
-        combine(allPreviewsFlow, calendarView) { previews, view -> previews to view }
+        combine(
+            allPreviewsFlow,
+            calendarView,
+            eventsRepository.getEvents(),
+        ) { previews, view, events -> Triple(previews, view, events) }
             // mapLatest so a burst of month taps drops the intermediate months' work.
-            .mapLatest { (previews, view) ->
+            .mapLatest { (previews, view, events) ->
                 // Read the zone and the date here, not at construction: the ViewModel can outlive
                 // both midnight and a time-zone change.
                 val zone = ZoneId.systemDefault()
@@ -285,6 +293,10 @@ class NotesListViewModel @Inject constructor(
                     counts = byDay.mapValues { (_, notes) -> notes.size },
                     dayNotes = byDay[day].orEmpty(),
                     undated = undatedCount(previews) { it.updatedAt },
+                    // Bucketed through EventDrafts.dayOf rather than groupByDay: an all-day event
+                    // must be read from its stored local date and never converted through a zone.
+                    dayEvents = events.filter { EventDrafts.dayOf(it, zone) == day },
+                    eventDays = events.mapTo(mutableSetOf()) { EventDrafts.dayOf(it, zone) },
                 )
             }
             .flowOn(Dispatchers.Default)
@@ -296,11 +308,17 @@ class NotesListViewModel @Inject constructor(
                         calendarCounts = data.counts,
                         calendarDayNotes = data.dayNotes,
                         calendarUndatedCount = data.undated,
+                        calendarDayEvents = data.dayEvents,
+                        calendarEventDays = data.eventDays,
                     )
                 }
             }
             .launchIn(viewModelScope)
     }
+
+    /** Shown when an event from a later build is edited here. See `EventsRepository.saveEvent`. */
+    private val NEWER_EVENT_MESSAGE =
+        "This event was made in a newer version of the app, so it can't be changed here."
 
     private data class CalendarData(
         val month: YearMonth,
@@ -308,6 +326,8 @@ class NotesListViewModel @Inject constructor(
         val counts: Map<LocalDate, Int>,
         val dayNotes: List<NotePreviewUi>,
         val undated: Int,
+        val dayEvents: List<EventData>,
+        val eventDays: Set<LocalDate>,
     )
 
     /**
@@ -461,6 +481,39 @@ class NotesListViewModel @Inject constructor(
                     month = YearMonth.from(intent.day),
                     day = intent.day,
                 )
+            }
+
+            is NotesListIntent.EventSaved -> viewModelScope.launch {
+                val zone = ZoneId.systemDefault()
+                val now = System.currentTimeMillis()
+                val existing = _state.value.calendarDayEvents.firstOrNull { it.id == intent.id }
+                // Refused rather than attempted. The repository throws for an event carrying a
+                // recurrence or reminders this build cannot express, and letting that reach a
+                // coroutine uncaught would take the process down over a save.
+                if (existing?.isFromNewerBuild == true) {
+                    _state.update { it.copy(error = NEWER_EVENT_MESSAGE) }
+                    return@launch
+                }
+                runCatching {
+                    eventsRepository.saveEvent(
+                        EventDrafts.build(
+                            id = intent.id ?: UUID.randomUUID().toString(),
+                            title = intent.title,
+                            day = intent.day,
+                            startMinutes = intent.startMinutes,
+                            durationMinutes = intent.durationMinutes,
+                            zone = zone,
+                            nowMillis = now,
+                            existing = existing,
+                        )
+                    )
+                }.onFailure { failure ->
+                    _state.update { it.copy(error = failure.message ?: "Couldn't save that event.") }
+                }
+            }
+
+            is NotesListIntent.EventDeleted -> viewModelScope.launch {
+                eventsRepository.deleteEvent(intent.id)
             }
 
             is NotesListIntent.CreateFolder -> {
