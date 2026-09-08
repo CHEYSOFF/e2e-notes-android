@@ -29,6 +29,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import my.cheysoff.feature_notes.ui.attachment.MediaTileSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
@@ -760,13 +763,17 @@ private fun SketchSection(
 
     var pendingDeleteId by remember { mutableStateOf<String?>(null) }
 
-    Column(
+    // A horizontal rail at the same tile height as the photo rail below it, rather than the
+    // full-width vertical stack this used to be. See MediaTileSize for what that mismatch looked
+    // like on a note holding both (#109). LazyRow, matching AttachmentSection, so a note with many
+    // drawings scrolls rather than growing.
+    LazyRow(
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 22.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        displaySketches.forEach { row ->
+        items(displaySketches, key = { it.id }) { row ->
             when (row) {
                 is DisplaySketch.Drawing ->
                     SketchCard(
@@ -808,16 +815,16 @@ private fun SketchSection(
 private fun UndecodableSketchCard(onDeleted: () -> Unit) {
     Box(
         modifier = Modifier
-            .fillMaxWidth()
-            .height(120.dp)
+            .size(MediaTileSize)
             .clip(RoundedCornerShape(14.dp))
             .background(Color(0xFF1C1C22)),
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = "Can't display this drawing",
+            text = "Can't display this",
             color = BodyGrey,
-            style = MaterialTheme.typography.bodySmall,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 6.dp),
         )
         IconButton(onClick = onDeleted, modifier = Modifier.align(Alignment.TopEnd)) {
             Icon(
@@ -831,10 +838,15 @@ private fun UndecodableSketchCard(onDeleted: () -> Unit) {
 
 @Composable
 private fun SketchCard(sketch: Sketch, onTapped: () -> Unit, onDeleted: () -> Unit) {
+    // Height fixed to the shared tile size, width following the drawing's own aspect ratio, so a
+    // landscape canvas still reads as landscape. The ratio is clamped rather than trusted: an
+    // extreme canvas would otherwise produce a tile either as wide as the screen or a few pixels
+    // across, and SketchRenderer maps the strokes into whatever size it is given.
+    val ratio = (sketch.width.toFloat() / sketch.height.toFloat()).coerceIn(0.6f, 2.2f)
     Box(
         modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(sketch.width.toFloat() / sketch.height.toFloat())
+            .height(MediaTileSize)
+            .width(MediaTileSize * ratio)
             .clip(RoundedCornerShape(14.dp))
             .background(Color(0xFF1C1C22))
             .clickable(onClick = onTapped),
