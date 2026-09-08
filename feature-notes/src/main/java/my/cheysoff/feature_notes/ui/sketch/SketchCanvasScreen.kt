@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.automirrored.outlined.Backspace
@@ -117,6 +118,7 @@ fun SketchCanvasScreen(
     onColorMixed: (Long) -> Unit = {},
     onDone: (Sketch) -> Unit,
     onCancel: () -> Unit,
+    onDelete: (() -> Unit)? = null,
 ) {
     var selectedColorArgb by remember { mutableStateOf(TitleGrey.toArgb().toLong()) }
     var showColorPicker by remember { mutableStateOf(false) }
@@ -124,6 +126,7 @@ fun SketchCanvasScreen(
     var eraseMode by remember { mutableStateOf(false) }
     var limitMessage by remember { mutableStateOf<String?>(null) }
     var showCancelConfirm by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
 
     // The canvas cannot be sized -- and so `SketchCaptureState` cannot be built -- until the
     // drawing box has been laid out once. That happens on the very first frame, so nothing is
@@ -193,6 +196,7 @@ fun SketchCanvasScreen(
             onUndo = { capture?.undo(); revision++ },
             onRedo = { capture?.redo(); revision++ },
             onCancel = { requestCancel() },
+            onDelete = onDelete?.let { { showDeleteConfirm = true } },
             onDone = {
                 val state = capture
                 if (state != null && shouldSaveSketchOnDone(state.strokes.isNotEmpty(), initialSketch != null)) {
@@ -286,6 +290,27 @@ fun SketchCanvasScreen(
             },
         )
     }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            containerColor = SurfaceDark,
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Delete this drawing?", color = TitleGrey) },
+            // Same wording as the photo viewer's, because it is the same fact: drawings are not
+            // kept in Trash either, so this really is final.
+            text = { Text("This cannot be undone.", color = BodyGrey) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDeleteConfirm = false
+                    onDelete?.invoke()
+                }) { Text("Delete", color = AccentIndigo) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel", color = BodyGrey) }
+            },
+        )
+    }
+
 }
 
 @Composable
@@ -295,6 +320,7 @@ private fun TopBar(
     onUndo: () -> Unit,
     onRedo: () -> Unit,
     onCancel: () -> Unit,
+    onDelete: (() -> Unit)?,
     onDone: () -> Unit,
 ) {
     Row(
@@ -305,6 +331,18 @@ private fun TopBar(
         TextButton(onClick = onCancel) { Text("Cancel", color = BodyGrey) }
 
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            // Only when there is an existing drawing to delete -- a canvas opened to draw
+            // something new has nothing to remove, and an enabled-looking control that discards
+            // an empty canvas is just Cancel wearing a more alarming icon.
+            if (onDelete != null) {
+                IconButton(onClick = onDelete) {
+                    Icon(
+                        imageVector = Icons.Outlined.DeleteOutline,
+                        contentDescription = "Delete drawing",
+                        tint = BodyGrey,
+                    )
+                }
+            }
             IconButton(onClick = onUndo, enabled = canUndo) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.Undo,

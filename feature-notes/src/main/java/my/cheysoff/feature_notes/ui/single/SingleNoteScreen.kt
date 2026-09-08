@@ -384,6 +384,15 @@ fun SingleNoteScreen(
                 sketchTarget = null
             },
             onCancel = { sketchTarget = null },
+            // Only an existing drawing can be deleted, so a brand-new canvas gets no control at
+            // all. This is where deleting a drawing lives now -- the tiles carry no delete of
+            // their own, matching the photo rail, whose delete has always lived in its viewer.
+            onDelete = (target as? SketchEditTarget.Existing)?.let { existing ->
+                {
+                    onIntent(SingleNoteIntent.SketchDeleted(existing.id))
+                    sketchTarget = null
+                }
+            },
         )
         return
     }
@@ -728,12 +737,11 @@ private sealed interface SketchEditTarget {
  * a private section below the body, an early return when there is nothing to show, one row per
  * item.
  *
- * Each drawing's card is exactly its own aspect ratio (`Modifier.aspectRatio`, fit to the note's
- * width), so [SketchRenderer] never has to letterbox it -- it only would if this box's shape
- * disagreed with the sketch's own, which it cannot. Tapping a card reopens [SketchCanvasScreen] on
- * that drawing (via [onTapped], which is handed the already-decoded [Sketch] this section built to
- * render the card -- a tap can only reach a card that decoded cleanly, so decoding it again there
- * would be wasted work for no benefit).
+ * A horizontal rail of tiles at the shared `MediaTileSize`, the same height as the photo rail
+ * below it: each tile keeps its drawing's own aspect ratio in its width, so [SketchRenderer] never
+ * has to letterbox. Tapping a tile reopens [SketchCanvasScreen] on that drawing (via [onTapped],
+ * which is handed the already-decoded [Sketch] this section built to render the tile -- a tap can
+ * only reach a tile that decoded cleanly, so decoding it again there would be wasted work).
  *
  * A [SketchData] whose `strokes` fails to decode still gets a row -- [DisplaySketch.Undecodable],
  * rendered as [UndecodableSketchCard] -- rather than being silently skipped. The record is still
@@ -741,14 +749,20 @@ private sealed interface SketchEditTarget {
  * sketch Trash), so a phone-only vault must not make one both invisible and undeletable; the
  * desktop has shown this same placeholder from the start (see [sketchesForDisplay]'s own KDoc).
  *
- * The corner button deletes a sketch, but only after confirming: unlike a checklist row (undoable
- * from the top-bar Undo button) or a note (soft-deleted into Trash, restorable), a sketch delete
- * goes straight through `SketchesRepository.deleteSketch` with no history entry and no restore
- * path -- there is no route back from a mistap. `pendingDeleteId` is local, plain composable state
- * rather than anything view-model-owned: confirming just fires the one `SketchDeleted` intent,
- * there is no asynchronous decision for the ViewModel to make first, so there is nothing here worth
- * testing beyond the existing composable-free suite. The dialog deliberately matches
- * [SketchCanvasScreen]'s own discard dialog in shape (title/body/two buttons, same colours) so the
+ * **The tiles carry no delete of their own.** Deleting a drawing lives in [SketchCanvasScreen],
+ * exactly where deleting a photo lives in the viewer rather than on a rail tile -- at this tile
+ * size a corner icon covered most of the drawing it was sitting on, and its touch target competed
+ * with the tap that opens the thing.
+ *
+ * The one exception is [UndecodableSketchCard], which is tappable straight to the confirm dialog:
+ * it cannot be opened in the canvas, so with no affordance at all it would be stuck on the note
+ * forever. Either way the confirm is the same, and it is not optional -- unlike a checklist row
+ * (undoable from the top-bar Undo button) or a note (soft-deleted into Trash, restorable), a
+ * sketch delete goes straight through `SketchesRepository.deleteSketch` with no history entry and
+ * no restore path. `pendingDeleteId` is local, plain composable state rather than anything
+ * view-model-owned: confirming just fires the one `SketchDeleted` intent, so there is nothing here
+ * worth testing beyond the existing composable-free suite. The dialog deliberately matches
+ * [SketchCanvasScreen]'s own dialogs in shape (title/body/two buttons, same colours) so the
  * two read as one idea rather than two different ways this app asks "are you sure".
  */
 @Composable
@@ -817,7 +831,8 @@ private fun UndecodableSketchCard(onDeleted: () -> Unit) {
         modifier = Modifier
             .size(MediaTileSize)
             .clip(RoundedCornerShape(14.dp))
-            .background(Color(0xFF1C1C22)),
+            .background(Color(0xFF1C1C22))
+            .clickable(onClick = onDeleted),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -826,13 +841,6 @@ private fun UndecodableSketchCard(onDeleted: () -> Unit) {
             style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.padding(horizontal = 6.dp),
         )
-        IconButton(onClick = onDeleted, modifier = Modifier.align(Alignment.TopEnd)) {
-            Icon(
-                imageVector = Icons.Outlined.DeleteOutline,
-                contentDescription = "Delete drawing",
-                tint = BodyGrey,
-            )
-        }
     }
 }
 
@@ -853,13 +861,6 @@ private fun SketchCard(sketch: Sketch, onTapped: () -> Unit, onDeleted: () -> Un
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
             SketchRenderer.render(sketch, size).forEach { rendered -> drawSketchStroke(rendered) }
-        }
-        IconButton(onClick = onDeleted, modifier = Modifier.align(Alignment.TopEnd)) {
-            Icon(
-                imageVector = Icons.Outlined.DeleteOutline,
-                contentDescription = "Delete drawing",
-                tint = BodyGrey,
-            )
         }
     }
 }

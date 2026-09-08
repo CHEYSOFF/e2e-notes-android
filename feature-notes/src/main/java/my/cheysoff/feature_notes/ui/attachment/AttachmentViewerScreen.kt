@@ -2,7 +2,10 @@ package my.cheysoff.feature_notes.ui.attachment
 
 import android.graphics.BitmapFactory
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.Arrangement
@@ -37,6 +40,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.IntSize
@@ -277,28 +281,55 @@ private fun AttachmentPage(
             modifier = Modifier
                 .fillMaxSize()
                 .onSizeChanged { containerSize = it }
+                // Hand-rolled rather than `detectTransformGestures`, and that is the whole reason
+                // paging works: that detector consumes every position change once the gesture
+                // passes touch slop, unconditionally. Consumed changes never reach the pager, so
+                // with it in place the image swallowed the swipe and the pager never moved.
+                //
+                // The rule here is "consume only what is actually ours": a pinch (two fingers) is
+                // always ours, a one-finger drag is ours only while zoomed in. At fit, a
+                // one-finger drag is left unconsumed and the pager above picks it up -- which
+                // costs nothing, because `panBounds` clamps the pan to zero on both axes at fit
+                // anyway, so there was never anything for it to do.
                 .pointerInput(attachmentId) {
-                    detectTransformGestures { _, pan, zoom, _ ->
-                        val newScale = (scale * zoom).coerceIn(MinScale, MaxScale)
-                        // Bound against the rendered image rect (panBounds), not the box --
-                        // see that function's own KDoc. `attachment` is guaranteed non-null
-                        // here (it is set in the same LaunchedEffect, just before `bitmap`,
-                        // and this branch only renders once `bitmap` is non-null), but the
-                        // `?: Offset.Zero` fallback keeps this block from ever needing `!!`.
-                        val bounds = attachment?.let {
-                            panBounds(
-                                imageWidth = it.width,
-                                imageHeight = it.height,
-                                boxWidth = containerSize.width.toFloat(),
-                                boxHeight = containerSize.height.toFloat(),
-                                scale = newScale,
-                            )
-                        } ?: Offset.Zero
-                        offset = Offset(
-                            x = (offset.x + pan.x * newScale).coerceIn(-bounds.x, bounds.x),
-                            y = (offset.y + pan.y * newScale).coerceIn(-bounds.y, bounds.y),
-                        )
-                        scale = newScale
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false)
+                        do {
+                            val event = awaitPointerEvent()
+                            if (event.changes.any { it.isConsumed }) break
+
+                            val pressed = event.changes.count { it.pressed }
+                            // Read at gesture time, not captured: `scale` is snapshot state, so
+                            // this is the zoom as it is now rather than as it was when this
+                            // pointerInput was set up.
+                            val ours = pressed > 1 || scale > MinScale
+                            if (ours) {
+                                val zoom = event.calculateZoom()
+                                val pan = event.calculatePan()
+                                val newScale = (scale * zoom).coerceIn(MinScale, MaxScale)
+                                // Bound against the rendered image rect (panBounds), not the box
+                                // -- see that function's own KDoc. `attachment` is guaranteed
+                                // non-null here (it is set in the same LaunchedEffect, just before
+                                // `bitmap`, and this branch only renders once `bitmap` is
+                                // non-null), but the `?: Offset.Zero` fallback keeps this block
+                                // from ever needing `!!`.
+                                val bounds = attachment?.let {
+                                    panBounds(
+                                        imageWidth = it.width,
+                                        imageHeight = it.height,
+                                        boxWidth = containerSize.width.toFloat(),
+                                        boxHeight = containerSize.height.toFloat(),
+                                        scale = newScale,
+                                    )
+                                } ?: Offset.Zero
+                                offset = Offset(
+                                    x = (offset.x + pan.x * newScale).coerceIn(-bounds.x, bounds.x),
+                                    y = (offset.y + pan.y * newScale).coerceIn(-bounds.y, bounds.y),
+                                )
+                                scale = newScale
+                                event.changes.forEach { if (it.positionChanged()) it.consume() }
+                            }
+                        } while (event.changes.any { it.pressed })
                     }
                 },
             contentAlignment = Alignment.Center,
