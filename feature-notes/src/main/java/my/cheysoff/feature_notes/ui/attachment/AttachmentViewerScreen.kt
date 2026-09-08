@@ -13,10 +13,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
@@ -35,6 +39,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -47,6 +52,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import my.cheysoff.core_domain.attachment.sortAttachments
@@ -131,6 +137,14 @@ fun AttachmentViewerScreen(
             state = pagerState,
             modifier = Modifier.fillMaxSize(),
             userScrollEnabled = currentScale == MinScale,
+            // One page composed either side, so the neighbours have already loaded and decoded by
+            // the time a swipe reaches them. Without it every swipe landed on a spinner: a page is
+            // only composed as it scrolls in, and the load is a database read plus a JPEG decode.
+            //
+            // One, not more. Each live page holds a decoded bitmap several megabytes larger than
+            // the 1 MiB it was stored as, so this is three at a time rather than a whole note's
+            // worth -- the reason the cap is here and not raised further.
+            beyondViewportPageCount = 1,
             key = { page -> ordered[page].id },
         ) { page ->
             AttachmentPage(
@@ -153,13 +167,17 @@ fun AttachmentViewerScreen(
             IconButton(onClick = onClose) {
                 Icon(imageVector = Icons.Filled.Close, contentDescription = "Close", tint = TitleGrey)
             }
-            // Only when there is somewhere to page to. On a single photo the count would be a
-            // permanent "1 of 1", which is chrome that tells the reader nothing.
-            if (ordered.size > 1) {
+            // Only once the dot row has stopped being able to show every photo. Below that the
+            // dots already answer "which one, how many" exactly, and a number beside them would be
+            // the same fact twice; past it the dots become a window and the count is the only
+            // precise thing left.
+            if (ordered.size > MaxDots) {
                 Text(
                     text = "${pagerState.currentPage + 1} of ${ordered.size}",
                     color = BodyGrey,
                 )
+            } else {
+                Spacer(Modifier.width(1.dp))
             }
             // Deliberately always enabled, unlike the rest of this screen's dependence on a loaded
             // row: a photo whose bytes will not decode is exactly the one a person most wants to
@@ -172,6 +190,17 @@ fun AttachmentViewerScreen(
                     tint = TitleGrey,
                 )
             }
+        }
+
+        if (ordered.size > 1) {
+            PageDots(
+                count = ordered.size,
+                current = pagerState.currentPage,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .windowInsetsPadding(WindowInsets.navigationBars)
+                    .padding(bottom = 20.dp),
+            )
         }
     }
 
@@ -349,6 +378,74 @@ private fun AttachmentPage(
             )
         }
     }
+}
+
+/**
+ * How many dots the row will draw before it starts sliding instead of growing.
+ *
+ * Seven is about where a glance stops being able to count them, and it is also the point past
+ * which the dots stop being able to say exactly where you are -- which is why it is the same
+ * number that decides whether the top bar shows a count.
+ */
+private const val MaxDots = 7
+
+/**
+ * The row of dots under the photo: which one is showing, and how many there are.
+ *
+ * Past [MaxDots] the row becomes a window that slides with [current] rather than growing without
+ * limit, and the dot at each end where photos continue is drawn smaller -- the standard way of
+ * saying "there is more this way" without a number. That taper is the only thing distinguishing a
+ * window from a complete row, so a full row deliberately never tapers.
+ *
+ * Not interactive. Tapping a dot to jump is a fine idea and a different one; these are a position
+ * indicator, and giving them a touch target here would put one over the bottom of the photo.
+ */
+@Composable
+private fun PageDots(count: Int, current: Int, modifier: Modifier = Modifier) {
+    val window = dotWindow(count, current)
+    val start = window.first
+    val end = window.last + 1
+
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        for (index in start until end) {
+            val selected = index == current
+            val tapered = (index == start && start > 0) || (index == end - 1 && end < count)
+            val size = when {
+                selected -> 8.dp
+                tapered -> 4.dp
+                else -> 6.dp
+            }
+            Box(
+                modifier = Modifier
+                    .size(size)
+                    .clip(CircleShape)
+                    .background(if (selected) TitleGrey else BodyGrey.copy(alpha = 0.55f)),
+            )
+        }
+    }
+}
+
+/**
+ * Which dot indices the row draws for [count] photos with [current] showing, as an inclusive range.
+ *
+ * Centred on [current] where it can be and pinned at either end where it cannot, so the first and
+ * last photo are reachable rather than sitting half off the row. Everything below [MaxDots] returns
+ * the whole range, which is what makes a short row never taper.
+ *
+ * Pulled out of the composable because it is the only part of the dot row that can be got wrong
+ * quietly -- an off-by-one here shows up as a row that never reaches the last photo, or one that
+ * jitters by a dot as you page -- and because it is pure arithmetic, testable without a device for
+ * the same reason `panBounds` is.
+ */
+internal fun dotWindow(count: Int, current: Int): IntRange {
+    if (count <= 0) return IntRange.EMPTY
+    val clamped = current.coerceIn(0, count - 1)
+    val start = (clamped - MaxDots / 2).coerceIn(0, maxOf(0, count - MaxDots))
+    return start until minOf(count, start + MaxDots)
 }
 
 /**
