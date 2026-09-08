@@ -12,13 +12,16 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -149,9 +152,13 @@ fun SearchPalette(
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 18.dp),
                     )
-                    else -> LazyColumn(
+                    // Box so the scrollbar is a sibling of the list rather than a row in it. The
+                    // palette caps at 380dp and a broad query easily overflows that, with the
+                    // keyboard's own highlight the only other clue that there is more below.
+                    else -> Box(modifier = Modifier.heightIn(max = 380.dp)) {
+                    LazyColumn(
                         state = listState,
-                        modifier = Modifier.heightIn(max = 380.dp),
+                        modifier = Modifier.fillMaxWidth(),
                         contentPadding = PaddingValues(6.dp),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
@@ -169,6 +176,12 @@ fun SearchPalette(
                                 onClick = { onOpenHit(hit.row.id) },
                             )
                         }
+                    }
+
+                        VerticalScrollbar(
+                            adapter = rememberScrollbarAdapter(listState),
+                            modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+                        )
                     }
                 }
 
