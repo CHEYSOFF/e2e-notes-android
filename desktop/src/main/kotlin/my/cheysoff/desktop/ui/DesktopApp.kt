@@ -155,6 +155,7 @@ fun MananaWindow(
                 onOpenHighlighted = { model.openHighlightedSearchHit() },
                 attachmentViewerOpen = state.viewingAttachmentId != null,
                 onCloseAttachmentViewer = model::closeAttachmentViewer,
+                onStepAttachmentViewer = model::stepAttachmentViewer,
                 onFlushSave = model::flushPendingSave,
                 onToggleSidebar = { sidebarVisible = !sidebarVisible },
                 onTextScale = { step ->
@@ -210,6 +211,7 @@ private fun handleShortcut(
     onOpenHighlighted: () -> Unit,
     attachmentViewerOpen: Boolean,
     onCloseAttachmentViewer: () -> Unit,
+    onStepAttachmentViewer: (Int) -> Unit,
     onFlushSave: () -> Unit,
     onToggleSidebar: () -> Unit,
     onTextScale: (TextScaleStep) -> Unit,
@@ -231,9 +233,15 @@ private fun handleShortcut(
     // The attachment viewer overlay closes on Escape, the same binding the search palette gets
     // above -- see AttachmentViewer's own KDoc for why this lives here rather than a local key
     // handler on the overlay itself.
-    if (attachmentViewerOpen && event.key == Key.Escape) {
-        onCloseAttachmentViewer()
-        return true
+    if (attachmentViewerOpen) {
+        when (event.key) {
+            Key.Escape -> { onCloseAttachmentViewer(); return true }
+            // The desktop's answer to the phone's swipe. Claimed before the `command` gate below
+            // so they work on their own, and only while the viewer is open, so the arrow keys stay
+            // available to whatever has focus underneath it.
+            Key.DirectionLeft -> { onStepAttachmentViewer(-1); return true }
+            Key.DirectionRight -> { onStepAttachmentViewer(1); return true }
+        }
     }
 
     if (!command) return false

@@ -8,6 +8,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -18,7 +19,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -79,7 +83,15 @@ fun NoteListPane(
             return@Column
         }
 
+        val listState = rememberLazyListState()
+
+        // Sibling of the list, not an item in it. The thumb of a lazy list is an estimate that
+        // resizes as rows of different heights are measured -- accepted deliberately, because a
+        // thumb that shifts a little still answers "how much more is there" and nothing else here
+        // does.
+        Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = 10.dp, end = 10.dp, bottom = 20.dp),
             verticalArrangement = Arrangement.spacedBy(5.dp),
@@ -96,6 +108,12 @@ fun NoteListPane(
                     NoteRow(row, row.id == selectedNoteId, now) { onSelectNote(row.id) }
                 }
             }
+        }
+
+            VerticalScrollbar(
+                adapter = rememberScrollbarAdapter(listState),
+                modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+            )
         }
     }
 }

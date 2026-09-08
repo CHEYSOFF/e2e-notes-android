@@ -1,5 +1,7 @@
 package my.cheysoff.desktop.ui.theme
 
+import androidx.compose.foundation.LocalScrollbarStyle
+import androidx.compose.foundation.defaultScrollbarStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
@@ -178,6 +180,7 @@ fun MananaDesktopTheme(
     CompositionLocalProvider(
         LocalDesktopSpacing provides DesktopSpacing(),
         LocalDesktopRadii provides DesktopRadii(),
+        LocalScrollbarStyle provides DesktopScrollbarStyle,
     ) {
         MaterialTheme(
             colorScheme = DarkColorScheme,
@@ -188,3 +191,22 @@ fun MananaDesktopTheme(
         )
     }
 }
+
+/**
+ * The scrollbar every pane in this window gets.
+ *
+ * Provided once here rather than per call site because the platform default is a **black** thumb
+ * with low alpha, tuned for a light desktop -- on this app's near-black surfaces it is invisible,
+ * which would have shipped three scrollbars that technically exist and cannot be seen.
+ *
+ * Light rather than accent-coloured, and mostly transparent until hovered: a scrollbar is a
+ * position indicator first and a control second, so it should read as a raised edge of the surface
+ * rather than compete with the indigo that means "selected" everywhere else in this window.
+ */
+private val DesktopScrollbarStyle
+    @Composable get() = defaultScrollbarStyle().copy(
+        thickness = 8.dp,
+        hoverDurationMillis = 240,
+        unhoverColor = TitleGrey.copy(alpha = 0.16f),
+        hoverColor = TitleGrey.copy(alpha = 0.40f),
+    )

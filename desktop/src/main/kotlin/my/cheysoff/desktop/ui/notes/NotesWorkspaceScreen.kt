@@ -46,6 +46,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import my.cheysoff.desktop.ui.attachment.AttachmentViewer
+import my.cheysoff.desktop.ui.attachment.orderedForDisplay
 import my.cheysoff.desktop.ui.state.NotesWorkspaceModel
 import my.cheysoff.desktop.ui.state.WorkspaceUiState
 import my.cheysoff.desktop.ui.theme.AccentIndigo
@@ -172,8 +173,14 @@ fun NotesWorkspaceScreen(
         // update to the row is reflected immediately; a stale id (the row vanished from under the
         // viewer) simply renders nothing rather than a stale photo.
         state.attachments.firstOrNull { it.id == state.viewingAttachmentId }?.let { attachment ->
+            // The rail's own order, so the arrows, the dots and the tiles all agree about which
+            // photo comes next -- a second comparator here is exactly the drift sortAttachments'
+            // KDoc warns about.
+            val ordered = remember(state.attachments) { orderedForDisplay(state.attachments) }
             AttachmentViewer(
                 attachment = attachment,
+                ordered = ordered,
+                onStep = model::stepAttachmentViewer,
                 onClose = model::closeAttachmentViewer,
                 onDelete = { id ->
                     model.closeAttachmentViewer()

@@ -23,6 +23,7 @@ import my.cheysoff.core_domain.repository.NotesRepository
 import my.cheysoff.core_domain.sketch.sketchesForDisplay
 import my.cheysoff.desktop.store.DesktopAttachments
 import my.cheysoff.desktop.store.DesktopSketches
+import my.cheysoff.desktop.ui.attachment.orderedForDisplay
 import java.util.UUID
 
 /**
@@ -205,6 +206,23 @@ class NotesWorkspaceModel(
     /** Opens the full-screen viewer on [id]. See [WorkspaceUiState.viewingAttachmentId]. */
     fun openAttachmentViewer(id: String) {
         _state.value = _state.value.copy(viewingAttachmentId = id)
+    }
+
+    /**
+     * Moves the viewer [delta] photos along the rail's own order, or does nothing at either end.
+     *
+     * Deliberately does not wrap. Paging off the last photo back to the first reads as the viewer
+     * having jumped somewhere rather than as having reached the end, and there is no page indicator
+     * on this platform to explain it.
+     */
+    fun stepAttachmentViewer(delta: Int) {
+        val current = _state.value
+        val viewing = current.viewingAttachmentId ?: return
+        val ordered = orderedForDisplay(current.attachments)
+        val index = ordered.indexOfFirst { it.id == viewing }
+        if (index < 0) return
+        val next = ordered.getOrNull(index + delta) ?: return
+        _state.value = current.copy(viewingAttachmentId = next.id)
     }
 
     /** Closes the full-screen viewer, whichever attachment it was showing. */

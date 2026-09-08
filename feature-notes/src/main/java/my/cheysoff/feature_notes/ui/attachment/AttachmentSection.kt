@@ -70,13 +70,22 @@ fun AttachmentSection(
     }
 }
 
-private val AttachmentTileSize = 92.dp
+/**
+ * The height of every piece of media a note shows in a rail -- photographs here, drawings in
+ * `SingleNoteScreen`'s own sketch rail.
+ *
+ * Shared rather than repeated so the two cannot drift apart again. They already had: a drawing
+ * rendered `fillMaxWidth()` in a vertical stack while a photograph was a 92.dp tile, so the same
+ * note showed a scribble roughly four times the width of a photo of the same thing, immediately
+ * below it -- which read as a bug rather than as a decision (#109).
+ */
+internal val MediaTileSize = 96.dp
 
 @Composable
 private fun AttachmentTile(preview: AttachmentPreview, onTapped: () -> Unit) {
     Box(
         modifier = Modifier
-            .size(AttachmentTileSize)
+            .size(MediaTileSize)
             .clip(RoundedCornerShape(14.dp))
             .background(Color(0xFF1C1C22))
             .pointerInput(preview.id) {
