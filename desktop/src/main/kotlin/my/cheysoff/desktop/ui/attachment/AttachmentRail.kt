@@ -141,8 +141,15 @@ private fun AttachmentData.toPreview(): AttachmentPreview = AttachmentPreview(
     meta = meta,
 )
 
-/** [attachments] in the shared display order, without ever building a second copy of [bytes]. */
-private fun orderedForDisplay(attachments: List<AttachmentData>): List<AttachmentData> {
+/**
+ * [attachments] in the shared display order, without ever building a second copy of [bytes].
+ *
+ * `internal` rather than private because the viewer's left/right paging has to step through the
+ * same order the rail draws -- a second comparator here is exactly the drift `sortAttachments`'
+ * own KDoc warns about, and it would show up as arrow keys visiting photos in an order the rail
+ * disagrees with.
+ */
+internal fun orderedForDisplay(attachments: List<AttachmentData>): List<AttachmentData> {
     val byId = attachments.associateBy { it.id }
     return sortAttachments(attachments.map { it.toPreview() }).mapNotNull { byId[it.id] }
 }

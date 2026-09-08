@@ -391,7 +391,8 @@ fun SingleNoteScreen(
     // BackHandler above safe to disable while it's showing.
     viewingAttachmentId?.let { id ->
         AttachmentViewerScreen(
-            attachmentId = id,
+            attachments = state.attachments,
+            initialAttachmentId = id,
             loadAttachment = loadAttachment,
             onClose = { viewingAttachmentId = null },
             onDeleted = { deletedId ->
