@@ -2,6 +2,7 @@ package my.cheysoff.desktop.ui.attachment
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -9,7 +10,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
@@ -22,13 +26,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateSetOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
@@ -102,25 +110,52 @@ private const val ScrollZoomStep = 1.08f
 @Composable
 fun AttachmentViewer(
     attachment: AttachmentData,
+    ordered: List<AttachmentData>,
+    onStep: (Int) -> Unit,
     onClose: () -> Unit,
     onDelete: (String) -> Unit,
 ) {
     var confirmDelete by remember(attachment.id) { mutableStateOf(false) }
-    var bitmap by remember(attachment.id) { mutableStateOf<ImageBitmap?>(null) }
-    var loadFailed by remember(attachment.id) { mutableStateOf(false) }
 
     var scale by remember(attachment.id) { mutableStateOf(MinScale) }
     var offset by remember(attachment.id) { mutableStateOf(Offset.Zero) }
     var containerSize by remember(attachment.id) { mutableStateOf(IntSize.Zero) }
 
-    // Decoded off the composing thread: unlike AttachmentRail's 64 KiB thumbnails, up to 1 MiB of
-    // full-size bytes is not cheap enough to decode inline in `remember` -- mirrors the phone's own
-    // `withContext(Dispatchers.Default)` in AttachmentViewerScreen. A failed decode (corrupt or
-    // truncated bytes) is a message here, never a crash -- see decodeAttachmentImage's own KDoc.
-    LaunchedEffect(attachment.id) {
-        val decoded = withContext(Dispatchers.Default) { decodeAttachmentImage(attachment.bytes) }
-        if (decoded == null) loadFailed = true else bitmap = decoded
+    val index = remember(ordered, attachment.id) { ordered.indexOfFirst { it.id == attachment.id } }
+
+    // Decoded images, keyed by id, kept across a step so going back to the previous photo is
+    // instant. Bounded to the three ids below rather than grown forever: a decoded bitmap is
+    // several megabytes larger than the 1 MiB it was stored as, and a note can hold many.
+    val decoded = remember(ordered) { mutableStateMapOf<String, ImageBitmap>() }
+    val failed = remember(ordered) { mutableStateSetOf<String>() }
+
+    // Current first, then the neighbours -- the same "one either side" the phone's pager composes
+    // ahead, and for the same reason: without it every step lands on a spinner while a megabyte is
+    // decoded. Unlike the phone there is no database read here, because the workspace already
+    // holds every open note's bytes; the decode alone is what this is hiding.
+    //
+    // Decoded off the composing thread, as AttachmentRail's 64 KiB thumbnails need not be. A
+    // failed decode (corrupt or truncated bytes) is a message here, never a crash -- see
+    // decodeAttachmentImage's own KDoc.
+    LaunchedEffect(attachment.id, ordered) {
+        val wanted = listOfNotNull(
+            ordered.getOrNull(index),
+            ordered.getOrNull(index + 1),
+            ordered.getOrNull(index - 1),
+        )
+        // Anything no longer adjacent is released before decoding, so the cache never holds more
+        // than the three this loop is about to want.
+        val keep = wanted.map { it.id }.toSet()
+        decoded.keys.retainAll(keep)
+        for (item in wanted) {
+            if (item.id in decoded || item.id in failed) continue
+            val image = withContext(Dispatchers.Default) { decodeAttachmentImage(item.bytes) }
+            if (image == null) failed += item.id else decoded[item.id] = image
+        }
     }
+
+    val bitmap = decoded[attachment.id]
+    val loadFailed = attachment.id in failed
 
     // The overlay's own root, composed straight into the workspace window -- no second Window,
     // no Popup. See this function's own KDoc for why.
@@ -212,6 +247,33 @@ fun AttachmentViewer(
                     Icon(imageVector = Icons.Filled.Delete, contentDescription = "Delete photo", tint = TitleGrey)
                 }
             }
+
+            // On-screen arrows as well as the key bindings. A keyboard shortcut nobody is told
+            // about is a shortcut nobody uses, and this overlay has no menu to advertise it in --
+            // so the arrows are the discoverable half and Left/Right stay the fast half.
+            // Disabled rather than hidden at either end, so the control does not move about.
+            if (ordered.size > 1) {
+                StepArrow(
+                    icon = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                    description = "Previous photo",
+                    enabled = index > 0,
+                    onClick = { onStep(-1) },
+                    modifier = Modifier.align(Alignment.CenterStart).padding(start = 12.dp),
+                )
+                StepArrow(
+                    icon = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                    description = "Next photo",
+                    enabled = index < ordered.lastIndex,
+                    onClick = { onStep(1) },
+                    modifier = Modifier.align(Alignment.CenterEnd).padding(end = 12.dp),
+                )
+
+                PageDots(
+                    count = ordered.size,
+                    current = index,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 22.dp),
+                )
+            }
         }
 
         if (confirmDelete) {
@@ -231,6 +293,94 @@ fun AttachmentViewer(
                 dismissButton = {
                     TextButton(onClick = { confirmDelete = false }) { Text("Cancel", color = BodyGrey) }
                 },
+            )
+        }
+    }
+}
+
+/**
+ * How many dots the row draws before it slides instead of growing. Matches the phone's own cap so
+ * the same note reads the same way on both, and [dotWindow] is the shared arithmetic behind it.
+ */
+private const val MaxDots = 7
+
+/**
+ * Which dot indices to draw for [count] photos with [current] showing, as an inclusive range.
+ *
+ * Centred on [current] where it can be and pinned at either end where it cannot, so the first and
+ * last photo are reachable rather than sitting half off the row.
+ *
+ * `internal` and pulled out of the composable because it is the only part of the row that can be
+ * wrong quietly -- an off-by-one shows up as a row that never reaches the last photo -- and it is
+ * pure arithmetic, so it is tested without a window.
+ */
+internal fun dotWindow(count: Int, current: Int): IntRange {
+    if (count <= 0) return IntRange.EMPTY
+    val clamped = current.coerceIn(0, count - 1)
+    val start = (clamped - MaxDots / 2).coerceIn(0, maxOf(0, count - MaxDots))
+    return start until minOf(count, start + MaxDots)
+}
+
+/**
+ * The row of dots under the photo: which one is showing, and how many there are.
+ *
+ * Past [MaxDots] it becomes a sliding window, tapering at whichever end still has photos beyond
+ * it. That taper is the only thing distinguishing a window from a complete row, so a short row
+ * deliberately never tapers.
+ */
+@Composable
+private fun PageDots(count: Int, current: Int, modifier: Modifier = Modifier) {
+    val window = dotWindow(count, current)
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        for (index in window) {
+            val selected = index == current
+            val tapered = (index == window.first && window.first > 0) ||
+                (index == window.last && window.last < count - 1)
+            val size = when {
+                selected -> 8.dp
+                tapered -> 4.dp
+                else -> 6.dp
+            }
+            Box(
+                modifier = Modifier
+                    .size(size)
+                    .clip(CircleShape)
+                    .background(if (selected) TitleGrey else BodyGrey.copy(alpha = 0.55f)),
+            )
+        }
+    }
+}
+
+/**
+ * One of the two step arrows, on a disc so it stays visible over a photo of any colour.
+ *
+ * Kept mounted and dimmed at the ends rather than removed, so the control does not jump position
+ * as you page and the pointer stays over the same spot through a run of clicks.
+ */
+@Composable
+private fun StepArrow(
+    icon: ImageVector,
+    description: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .background(SurfaceDark.copy(alpha = if (enabled) 0.72f else 0.32f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        IconButton(onClick = onClick, enabled = enabled) {
+            Icon(
+                imageVector = icon,
+                contentDescription = description,
+                tint = if (enabled) TitleGrey else BodyGrey.copy(alpha = 0.5f),
             )
         }
     }
