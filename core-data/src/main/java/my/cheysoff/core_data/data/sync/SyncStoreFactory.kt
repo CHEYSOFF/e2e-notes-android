@@ -43,6 +43,7 @@ class SyncStoreFactory @Inject constructor(
         folderDao = database.folderDao,
         sketchDao = database.sketchDao,
         attachmentDao = database.attachmentDao,
+        eventDao = database.eventDao,
         syncStateDao = database.syncStateDao,
         accountId = accountId,
         clockObserver = ClockObserver { syncClock.observe(it) },
@@ -60,6 +61,7 @@ class SyncStoreFactory @Inject constructor(
         RecordType.FOLDER -> database.folderDao.folderRow(uuid)?.createdAt
         RecordType.SKETCH -> database.sketchDao.sketchRow(uuid)?.createdAt
         RecordType.ATTACHMENT -> database.attachmentDao.attachmentRow(uuid)?.createdAt
+        RecordType.EVENT -> database.eventDao.eventRow(uuid)?.createdAt
     }
 
     /**
@@ -80,6 +82,9 @@ class SyncStoreFactory @Inject constructor(
     suspend fun metaOf(type: RecordType, uuid: String): String = when (type) {
         RecordType.NOTE, RecordType.FOLDER, RecordType.SKETCH -> ""
         RecordType.ATTACHMENT -> database.attachmentDao.attachmentRow(uuid)?.meta.orEmpty()
+        // Cheap here, unlike the attachment branch above: an event row carries no blob, so reading
+        // the whole row for one string costs nothing worth a projection.
+        RecordType.EVENT -> database.eventDao.eventRow(uuid)?.meta.orEmpty()
     }
 
     /** The pre-first-pull snapshot. See [SyncSnapshot] for when it does anything and why. */

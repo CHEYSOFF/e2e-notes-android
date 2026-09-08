@@ -2,6 +2,7 @@ package my.cheysoff.core_data.data.sync
 
 import my.cheysoff.core_crypto.sync.Base64Url
 import my.cheysoff.core_data.data.local.AttachmentEntity
+import my.cheysoff.core_data.data.local.EventEntity
 import my.cheysoff.core_data.data.local.FolderEntity
 import my.cheysoff.core_data.data.local.NoteEntity
 import my.cheysoff.core_data.data.local.SketchEntity
@@ -121,6 +122,99 @@ internal object RecordRows {
             ),
         ),
     ).normalized()
+
+    /**
+     * An event row as a record.
+     *
+     * The schedule's six columns travel inside one [FieldValue], in `SyncRecords`'
+     * `FIELD_TO_COLUMNS` order -- startAt, endAt, startLocal, endLocal, timeZone, allDay -- so a
+     * merge can never pair one device's start with another's all-day flag. `description` and its
+     * format share a value for the same reason `content` does.
+     *
+     * `meta` is absent here, as it is for an attachment: it has no clock and travels beside the
+     * record. See `PayloadFields.META`.
+     */
+    fun toRecord(event: EventEntity): SyncRecord = SyncRecord(
+        type = RecordType.EVENT,
+        uuid = event.uuid,
+        rowClock = event.rowHlc(),
+        fieldClocks = FieldClocks.parse(event.fieldHlc),
+        fields = mapOf(
+            FieldClocks.TITLE to FieldValue.of(event.title),
+            FieldClocks.SCHEDULE to FieldValue.of(
+                event.startAt.toString(),
+                event.endAt.toString(),
+                event.startLocal,
+                event.endLocal,
+                event.timeZone,
+                SyncValues.of(event.isAllDay),
+            ),
+            FieldClocks.LOCATION to FieldValue.of(event.location),
+            FieldClocks.DESCRIPTION to FieldValue.of(event.description, event.descriptionFormat),
+            FieldClocks.REMINDERS to FieldValue.of(event.reminders),
+            FieldClocks.RECURRENCE to FieldValue.of(event.recurrence),
+            FieldClocks.LINKED_NOTE to FieldValue.of(event.linkedNoteId),
+            FieldClocks.SHARE_TO_GOOGLE to FieldValue.of(SyncValues.of(event.shareToGoogle)),
+            FieldClocks.COLOR to FieldValue.of(event.colorArgb?.toString()),
+            FieldClocks.UPDATED_AT to FieldValue.of(event.updatedAt.toString()),
+            FieldClocks.DELETED to FieldValue.of(
+                SyncValues.of(event.isDeleted), event.deletedAt?.toString(),
+            ),
+        ),
+    ).normalized()
+
+    /**
+     * The event row a merged [record] should become.
+     *
+     * A missing or unparseable `startAt`/`endAt` falls back to 0 here, but cannot reach this
+     * point: `SyncRecords.fromPayload` refuses a payload whose `startAt` or `endAt` is present and
+     * null, precisely so an event never lands on 1 Jan 1970 on every device at once.
+     */
+    fun toEventEntity(
+        record: SyncRecord,
+        createdAt: Long,
+        meta: String,
+        dirty: Boolean,
+        lastSyncedSeq: Long,
+    ): EventEntity {
+        val normalized = record.normalized()
+        val schedule = normalized.valueOf(FieldClocks.SCHEDULE)
+        val description = normalized.valueOf(FieldClocks.DESCRIPTION)
+        val deleted = normalized.valueOf(FieldClocks.DELETED)
+        return EventEntity(
+            uuid = normalized.uuid,
+            title = normalized.valueOf(FieldClocks.TITLE).parts[0].orEmpty(),
+            startAt = schedule.parts[0]?.toLongOrNull() ?: 0L,
+            endAt = schedule.parts[1]?.toLongOrNull() ?: 0L,
+            startLocal = schedule.parts[2].orEmpty(),
+            endLocal = schedule.parts[3].orEmpty(),
+            timeZone = schedule.parts[4].orEmpty(),
+            isAllDay = SyncValues.toBoolean(schedule.parts[5]),
+            location = normalized.valueOf(FieldClocks.LOCATION).parts[0].orEmpty(),
+            description = description.parts[0].orEmpty(),
+            descriptionFormat = description.parts[1].orEmpty(),
+            reminders = normalized.valueOf(FieldClocks.REMINDERS).parts[0].orEmpty(),
+            recurrence = normalized.valueOf(FieldClocks.RECURRENCE).parts[0].orEmpty(),
+            linkedNoteId = normalized.valueOf(FieldClocks.LINKED_NOTE).parts[0],
+            shareToGoogle = SyncValues.toBoolean(
+                normalized.valueOf(FieldClocks.SHARE_TO_GOOGLE).parts[0],
+            ),
+            colorArgb = normalized.valueOf(FieldClocks.COLOR).parts[0]?.toLongOrNull(),
+            createdAt = createdAt,
+            updatedAt = normalized.valueOf(FieldClocks.UPDATED_AT).parts[0]?.toLongOrNull() ?: 0L,
+            isDeleted = SyncValues.toBoolean(deleted.parts[0]),
+            deletedAt = deleted.parts[1]?.toLongOrNull(),
+            hlcMs = normalized.rowClock.ms,
+            hlcCounter = normalized.rowClock.counter,
+            hlcNode = normalized.rowClock.node,
+            fieldHlc = FieldClocks.serialize(
+                RecordType.EVENT.fields.mapNotNull { f -> normalized.fieldClocks[f]?.let { f to it } }.toMap(),
+            ),
+            dirty = dirty,
+            lastSyncedSeq = lastSyncedSeq,
+            meta = meta,
+        )
+    }
 
     /**
      * The row a merged [record] should become.

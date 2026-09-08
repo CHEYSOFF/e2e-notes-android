@@ -224,6 +224,14 @@ class RecordNotesRepository private constructor(
 
                             RecordType.ATTACHMENT -> AttachmentRecords.fromPayload(payload)
                                 ?.let { attachments[it.attachment.id] = it } ?: malformed++
+
+                            // Stored but not shown. This build understands the type well enough to
+                            // keep its envelope -- `RecordSyncStore` writes every record opaquely,
+                            // so nothing is lost and no cursor is skipped -- and has no calendar
+                            // surface to render it on yet. Deliberately not counted as malformed
+                            // (which freezes the cursor) nor as an unknown type (which is a claim
+                            // about the protocol, not about this window).
+                            RecordType.EVENT -> Unit
                         }
                     }
                 }
