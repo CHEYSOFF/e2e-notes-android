@@ -50,12 +50,17 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -72,6 +77,9 @@ import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.core_domain.sketch.DisplaySketch
 import my.cheysoff.desktop.ui.attachment.AttachmentRail
+import my.cheysoff.desktop.ui.attachment.DesktopImportResult
+import my.cheysoff.desktop.ui.attachment.clipboardImage
+import java.awt.Image
 import my.cheysoff.desktop.ui.state.EditorDraft
 import my.cheysoff.desktop.ui.state.SaveStatus
 import my.cheysoff.desktop.ui.theme.AccentIndigo
@@ -114,6 +122,9 @@ fun NoteEditorPane(
     onDeleteSketch: (String) -> Unit,
     attachments: List<AttachmentData>,
     onAttachmentTapped: (AttachmentData) -> Unit,
+    onPasteImage: (Image) -> Unit,
+    pasteFailure: DesktopImportResult?,
+    onDismissPasteFailure: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (draft == null) {
@@ -123,13 +134,19 @@ fun NoteEditorPane(
 
     val accent = folderAccentColor(draft.folderId, folders.firstOrNull { it.id == draft.folderId }?.colorArgb)
         ?: AccentIndigo
-    val richTextState = rememberRichTextState()
+    val richTextState = rememberRichTextState().apply {
+        // Paste is plain text: styling copied out of a web page or a document (colours, font
+        // sizes, odd headings) is never what the note wants, and the toolbar is how a note gets
+        // its formatting. Copying out of the editor is plain text too, for the same reason.
+        config.richClipboardEnabled = false
+    }
     var pendingChecklistFocus by remember { mutableStateOf<String?>(null) }
 
     // Keyed on the note id, so switching notes reloads the body and switching back does not.
     // Within one note the editor owns its text: the model never pushes `content` back down here,
     // which is what stops an autosave echo from resetting the cursor mid-word.
-    LaunchedEffect(draft.id) {
+    // contentRevision moves only when a synced-in body replaced the one being shown.
+    LaunchedEffect(draft.id, draft.contentRevision) {
         if (draft.contentFormat == NoteContentFormat.HTML) richTextState.setHtml(draft.content)
         else richTextState.setText(draft.content)
 
@@ -164,6 +181,15 @@ fun NoteEditorPane(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                // Ctrl+V of an image anywhere in the note attaches it. Checked before the focused
+                // field sees the key; when the clipboard holds text, the event is left alone and the
+                // field pastes as usual (see clipboardImage for which wins when it holds both).
+                .onPreviewKeyEvent { event ->
+                    if (event.type != KeyEventType.KeyDown || !event.isPaste()) return@onPreviewKeyEvent false
+                    val image = clipboardImage() ?: return@onPreviewKeyEvent false
+                    onPasteImage(image)
+                    true
+                }
                 .verticalScroll(scroll)
                 .padding(horizontal = 34.dp),
         ) {
@@ -188,6 +214,21 @@ fun NoteEditorPane(
             Spacer(Modifier.height(6.dp))
 
             FormattingToolbar(richTextState, accent)
+
+            if (pasteFailure != null) {
+                Text(
+                    text = when (pasteFailure) {
+                        DesktopImportResult.TooLarge -> "That image is too large to attach."
+                        else -> "Couldn't read an image from the clipboard."
+                    } + "  ✕",
+                    color = MetaGrey,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier
+                        .pointerHoverIcon(handCursor)
+                        .clickable(onClickLabel = "Dismiss", onClick = onDismissPasteFailure)
+                        .padding(vertical = 4.dp),
+                )
+            }
 
             Spacer(Modifier.height(6.dp))
 
@@ -377,8 +418,33 @@ private fun FormattingToolbar(
             background = Color.Transparent,
             onClick = { state.toggleUnorderedList() },
         )
+        Spacer(Modifier.width(6.dp))
+        ToolbarChip(
+            label = "Clear formatting",
+            active = false,
+            accent = accent,
+            onClick = { state.clearFormatting() },
+        )
     }
 }
+
+/**
+ * Strips every style from the whole note -- bold, italics, colours, sizes, headings, links, list
+ * structure -- and keeps only its text and line breaks. A bullet's "•" stays as a character.
+ *
+ * Whole-note rather than selection: the formatting this exists to remove usually came in with a
+ * paste from elsewhere and is spread through the body in ways a selection would miss. Being a
+ * programmatic replace, it clears undo history, the same as loading a note does.
+ */
+private fun com.mohamedrejeb.richeditor.model.RichTextState.clearFormatting() {
+    val caret = selection.max
+    val plain = toText()
+    setText(plain, TextRange(caret.coerceIn(0, plain.length)))
+}
+
+/** Ctrl+V, and Shift+Insert -- the older paste chord Windows still honours everywhere. */
+private fun KeyEvent.isPaste(): Boolean =
+    (key == Key.V && (isCtrlPressed || isMetaPressed)) || (key == Key.Insert && isShiftPressed)
 
 @Composable
 private fun ToolbarChip(

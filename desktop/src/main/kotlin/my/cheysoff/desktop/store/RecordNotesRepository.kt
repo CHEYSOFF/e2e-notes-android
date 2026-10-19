@@ -376,7 +376,27 @@ class RecordNotesRepository private constructor(
                 createdAt = if (existing.note.createdAt == 0L) now else existing.note.createdAt,
             )
         }
-        snapshot.putNote(existing, updated, stamp, SAVE_NOTE_FIELDS)
+        snapshot.putNote(existing, updated, stamp, savedNoteFields(existing?.note, updated))
+    }
+
+    /**
+     * Which fields this save actually CHANGED -- the port of `RoomNotesRepository.savedNoteFields`.
+     *
+     * Stamping all of [SAVE_NOTE_FIELDS] on every save gives an unchanged field a new clock, so
+     * ticking one checklist box re-asserted the title and body too -- and if the phone had edited
+     * the body meanwhile, this device's older copy won the merge and reverted it on both devices.
+     * Only a field whose value moved gets a clock; the rest keep the one they had.
+     */
+    private fun savedNoteFields(prior: Note?, note: Note): Set<String> {
+        if (prior == null) return SAVE_NOTE_FIELDS
+        val touched = mutableSetOf(FieldClocks.UPDATED_AT)
+        if (prior.title != note.title) touched += FieldClocks.TITLE
+        // One value with one clock, exactly as on the phone.
+        if (prior.content != note.content || prior.contentFormat != note.contentFormat) touched += FieldClocks.CONTENT
+        if (prior.checklist != note.checklist) touched += FieldClocks.CHECKLIST
+        if (prior.isPinned != note.isPinned) touched += FieldClocks.PINNED
+        if (prior.folderId != note.folderId) touched += FieldClocks.FOLDER
+        return touched
     }
 
     /**
@@ -595,8 +615,8 @@ class RecordNotesRepository private constructor(
     /**
      * Soft-deletes one attachment: its own tombstone, its own fresh clock, and nothing else --
      * the exact mirror of [deleteSketch] and of the phone's
-     * `AttachmentsRepository.deleteAttachment`. This is the desktop's only attachment write; see
-     * [DesktopAttachments] for why there is no `saveAttachment` to mirror it.
+     * `AttachmentsRepository.deleteAttachment`. [saveAttachment] (a pasted image) is the
+     * desktop's only other attachment write.
      *
      * A no-op, minting no clock, when [id] is unknown or already trashed -- the same idempotence
      * guard [deleteNote] documents, for the same reason: a second delete must not re-stamp
@@ -611,6 +631,29 @@ class RecordNotesRepository private constructor(
             existing.attachment.copy(isDeleted = true, deletedAt = now),
             hlc.next(now),
             TOMBSTONE_FIELDS,
+        )
+    }
+
+    /**
+     * Stores a new attachment pasted on this computer. Every clocked field is stamped, as for any
+     * row this device creates, and `meta` is `""` because this build never sets it (see
+     * `AttachmentData.meta`). A second save of an id that already exists is ignored rather than
+     * treated as an edit -- nothing on the desktop edits an attachment.
+     */
+    override suspend fun saveAttachment(attachment: AttachmentData): Unit = write { snapshot ->
+        if (snapshot.attachments.containsKey(attachment.id)) return@write snapshot
+        val now = clock()
+        snapshot.putAttachment(
+            existing = null,
+            attachment = attachment.copy(
+                createdAt = now,
+                updatedAt = now,
+                isDeleted = false,
+                deletedAt = null,
+                meta = "",
+            ),
+            stamp = hlc.next(now),
+            touched = FieldClocks.ATTACHMENT_FIELDS,
         )
     }
 
@@ -718,16 +761,15 @@ class RecordNotesRepository private constructor(
     }
 
     /**
-     * Re-clocks, re-seals and stores an attachment. The exact mirror of [putSketch] -- same shape,
-     * same reasoning, same reason [existing] is never null (the only caller is [deleteAttachment],
-     * which has already confirmed the row exists).
+     * Re-clocks, re-seals and stores an attachment. The mirror of [putSketch] -- same shape, same
+     * reasoning -- except that [existing] is null when [saveAttachment] is creating the row.
      *
      * `meta` rides inside [attachment] and is therefore preserved by construction: this method
      * copies whatever the row held, and [AttachmentRecords] carries it through the payload
      * verbatim. That is what a build which does not understand the column is required to do.
      */
     private fun Snapshot.putAttachment(
-        existing: AttachmentRow,
+        existing: AttachmentRow?,
         attachment: AttachmentData,
         stamp: Hlc,
         touched: Set<String>,
@@ -737,15 +779,15 @@ class RecordNotesRepository private constructor(
             rowClock = stamp,
             clocks = FieldClocks.parse(
                 FieldClocks.stamp(
-                    previousSerialized = FieldClocks.serialize(existing.clocks),
-                    previousRowClock = existing.rowClock,
+                    previousSerialized = FieldClocks.serialize(existing?.clocks.orEmpty()),
+                    previousRowClock = existing?.rowClock,
                     allFields = FieldClocks.ATTACHMENT_FIELDS,
                     touched = touched,
                     newClock = stamp,
                 ),
             ),
-            dirty = existing.dirty,
-            lastSyncedSeq = existing.lastSyncedSeq,
+            dirty = existing?.dirty ?: true,
+            lastSyncedSeq = existing?.lastSyncedSeq ?: 0L,
         )
         val sealed = codec.seal(
             AttachmentRecords.toPayload(row, createdAt = attachment.createdAt),

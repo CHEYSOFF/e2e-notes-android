@@ -117,6 +117,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mohamedrejeb.richeditor.model.HeadingStyle
 import com.mohamedrejeb.richeditor.model.RichTextState
+import androidx.compose.ui.text.TextRange
 import com.mohamedrejeb.richeditor.model.rememberRichTextState
 import com.mohamedrejeb.richeditor.ui.BasicRichTextEditor
 import java.util.UUID
@@ -343,6 +344,10 @@ fun SingleNoteScreen(
     LaunchedEffect(state.isLoaded, state.contentRevision) {
         if (state.isLoaded) {
             richTextState.config.listIndent = 18
+            // Paste is plain text: styling copied out of a web page or another app (colours, font
+            // sizes, stray headings) is never what the note wants -- the toolbar is how a note gets
+            // its formatting. The desktop editor makes the same choice.
+            richTextState.config.richClipboardEnabled = false
             // The editor is about to be replaced wholesale from state, so a pending "not yet
             // forwarded" mark belongs to content that no longer exists. Clearing it stops a later
             // flush from handing this programmatic seed back as if it were the user's own edit.
@@ -1109,10 +1114,18 @@ private fun FormattingToolbar(
 
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         if (showStyles) {
-            StylePopover(accent = accent, active = activeHeading) { level ->
-                richTextState.setHeadingStyle(level)
-                showStyles = false
-            }
+            StylePopover(
+                accent = accent,
+                active = activeHeading,
+                onSelect = { level ->
+                    richTextState.setHeadingStyle(level)
+                    showStyles = false
+                },
+                onClearFormatting = {
+                    richTextState.clearFormatting()
+                    showStyles = false
+                },
+            )
             Spacer(Modifier.height(10.dp))
         }
         Row(
@@ -1175,7 +1188,12 @@ private fun ToolIcon(icon: ImageVector, desc: String, tint: Color, onClick: () -
 }
 
 @Composable
-private fun StylePopover(accent: Color, active: HeadingStyle, onSelect: (HeadingStyle) -> Unit) {
+private fun StylePopover(
+    accent: Color,
+    active: HeadingStyle,
+    onSelect: (HeadingStyle) -> Unit,
+    onClearFormatting: () -> Unit,
+) {
     Column(
         modifier = Modifier
             .shadow(12.dp, RoundedCornerShape(16.dp))
@@ -1202,7 +1220,33 @@ private fun StylePopover(accent: Color, active: HeadingStyle, onSelect: (Heading
                     .padding(horizontal = 12.dp, vertical = 10.dp),
             )
         }
+        HorizontalDivider(color = Color(0xFF24242C), modifier = Modifier.padding(vertical = 4.dp))
+        Text(
+            text = "Clear formatting",
+            color = TitleGrey,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .clickable(onClick = onClearFormatting)
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+        )
     }
+}
+
+/**
+ * Strips every style from the whole note -- bold, italics, colours, sizes, headings, links, list
+ * structure -- and keeps only its text and line breaks. A bullet's "•" stays as a character.
+ *
+ * Whole-note rather than selection: the formatting this exists to remove usually arrived with a
+ * paste from elsewhere and is spread through the body in ways a selection would miss. Being a
+ * programmatic replace, it clears undo history, the same as loading the note does. The desktop
+ * editor has the same function.
+ */
+private fun RichTextState.clearFormatting() {
+    val caret = selection.max
+    val plain = toText()
+    setText(plain, TextRange(caret.coerceIn(0, plain.length)))
 }
 
 /** Editor accent = the folder's chosen color (or the hash fallback), or default indigo when it has no folder. */

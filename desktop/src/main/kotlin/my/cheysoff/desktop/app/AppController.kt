@@ -684,8 +684,15 @@ class AppController(
         val service = syncService ?: return
         // Checked and set with no suspension in between, so two calls landing on this dispatcher
         // cannot both get past it.
-        if (syncState is DesktopSyncState.Syncing) return
+        if (syncState is DesktopSyncState.Syncing) {
+            // Not dropped: an edit saved while a pass is running is not in that pass's push, and
+            // returning here left it waiting for the next periodic tick -- a minute or more before
+            // the phone saw it. One follow-up pass covers any number of requests made meanwhile.
+            passRequestedDuringPass = true
+            return
+        }
         syncState = DesktopSyncState.Syncing
+        passRequestedDuringPass = false
         run {
             syncState = try {
                 when (
@@ -720,7 +727,12 @@ class AppController(
                 DesktopSyncState.Failed(e.message ?: e::class.java.simpleName)
             }
         }
+        // Only after a pass that went through: a halt or a failure would just fail again.
+        if (passRequestedDuringPass && syncState is DesktopSyncState.Done) runPass(clearHalt = false)
     }
+
+    /** Set when [runPass] is asked for while one is in flight; see the guard there. */
+    private var passRequestedDuringPass = false
 
     /**
      * Runs [block] off the UI thread with [busy] set.

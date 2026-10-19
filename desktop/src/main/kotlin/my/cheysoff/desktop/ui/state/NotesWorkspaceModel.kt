@@ -1,6 +1,8 @@
 package my.cheysoff.desktop.ui.state
 
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -13,7 +15,10 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import my.cheysoff.core_domain.model.AttachmentData
+import my.cheysoff.core_domain.sketch.NoteBlocks
+import my.cheysoff.desktop.ui.attachment.DesktopImportResult
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.model.NoteContentFormat
@@ -59,6 +64,8 @@ class NotesWorkspaceModel(
      */
     private val autosaveDelayMillis: Long = 600L,
     private val sortOrder: NotesSortOrder = NotesSortOrder.DEFAULT,
+    /** Where a pasted image is decoded and re-encoded; injected so a test can keep it on its scheduler. */
+    private val encodeDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) {
     private val _state = MutableStateFlow(WorkspaceUiState())
     val state: StateFlow<WorkspaceUiState> = _state.asStateFlow()
@@ -68,6 +75,9 @@ class NotesWorkspaceModel(
     private var latestFolders: List<Folder> = emptyList()
 
     private var autosaveJob: Job? = null
+
+    /** The stored row the open draft was last reconciled with. See [mergeIncoming]. */
+    private var editorBaseline: Note? = null
 
     init {
         scope.launch {
@@ -117,7 +127,9 @@ class NotesWorkspaceModel(
         flushPendingSave()
         // A viewer left open on the outgoing note's photo must not silently persist over the
         // incoming note -- see WorkspaceUiState.viewingAttachmentId's own KDoc.
-        _state.value = recompute(_state.value.copy(selectedNoteId = noteId, viewingAttachmentId = null))
+        _state.value = recompute(
+            _state.value.copy(selectedNoteId = noteId, viewingAttachmentId = null, pasteFailure = null),
+        )
     }
 
     /**
@@ -152,6 +164,9 @@ class NotesWorkspaceModel(
         val id = _state.value.selectedNoteId ?: return
         autosaveJob?.cancel()
         val draft = _state.value.editor
+        // A pasted photo or a sketch is content too, even with no text beside it. Read before the
+        // selection is cleared, which empties both lists.
+        val hasMedia = _state.value.attachments.isNotEmpty() || _state.value.sketches.isNotEmpty()
         latestNotes = latestNotes.filterNot { it.id == id }
         _state.value = recompute(
             _state.value.copy(selectedNoteId = null, saveStatus = SaveStatus.Idle, viewingAttachmentId = null),
@@ -159,7 +174,7 @@ class NotesWorkspaceModel(
         scope.launch {
             // A note that was created and left blank must never reach Trash — it would be a row
             // the user has to clean up for having pressed Ctrl+N by accident.
-            if (draft != null && draft.isBlank()) repository.purgeNote(id) else repository.deleteNote(id)
+            if (draft != null && draft.isBlank() && !hasMedia) repository.purgeNote(id) else repository.deleteNote(id)
         }
     }
 
@@ -201,6 +216,45 @@ class NotesWorkspaceModel(
         val port = attachments ?: return
         _state.value = _state.value.copy(attachments = _state.value.attachments.filterNot { it.id == id })
         scope.launch { port.deleteAttachment(id) }
+    }
+
+    /**
+     * Attaches a pasted image to the open note, at the end of its body -- the same placement the
+     * phone gives a picked photo: anchored at the note's current block count, next in order there.
+     *
+     * [encode] is the slow half (decode, downscale, JPEG) and is expected to have run off the UI
+     * thread already; this only stamps identity and placement and writes. Shown in the rail
+     * immediately, the same optimism [deleteAttachment] applies in the other direction.
+     */
+    fun pasteImage(encode: () -> DesktopImportResult): Job? {
+        val port = attachments ?: return null
+        val noteId = _state.value.selectedNoteId ?: return null
+        return scope.launch {
+            val result = withContext(encodeDispatcher) { encode() }
+            if (result !is DesktopImportResult.Imported) {
+                _state.value = _state.value.copy(pasteFailure = result)
+                return@launch
+            }
+            val draft = _state.value.editor?.takeIf { it.id == noteId }
+            val anchor = if (draft == null) 0 else NoteBlocks.count(draft.content, draft.contentFormat)
+            val existing = _state.value.attachments
+            val attachment = result.attachment.copy(
+                id = newId(),
+                noteId = noteId,
+                anchor = anchor,
+                order = (existing.filter { it.anchor == anchor }.maxOfOrNull { it.order } ?: -1) + 1,
+                createdAt = now(),
+                updatedAt = now(),
+            )
+            if (_state.value.selectedNoteId == noteId) {
+                _state.value = _state.value.copy(attachments = existing + attachment, pasteFailure = null)
+            }
+            port.saveAttachment(attachment)
+        }
+    }
+
+    fun dismissPasteFailure() {
+        _state.value = _state.value.copy(pasteFailure = null)
     }
 
     /** Opens the full-screen viewer on [id]. See [WorkspaceUiState.viewingAttachmentId]. */
@@ -351,7 +405,10 @@ class NotesWorkspaceModel(
         _state.value = _state.value.copy(saveStatus = SaveStatus.Pending)
         autosaveJob = scope.launch {
             delay(autosaveDelayMillis)
-            persist(draft)
+            // The draft as it is NOW, not as it was when the debounce started: a sync landing
+            // inside the window may have merged a remote change into it, and saving the captured
+            // copy would write the older value straight back over that change.
+            persist(_state.value.editor?.takeIf { it.id == draft.id } ?: draft)
         }
     }
 
@@ -415,11 +472,17 @@ class NotesWorkspaceModel(
         val rows = currentRows()
         val content = buildListContent(rows, base.selectedFolderId)
         val selected = resolveSelection(content, base.selectedNoteId)
+        val stored = selected?.let { id -> latestNotes.firstOrNull { it.id == id } }
         val editor = when {
             selected == null -> null
-            selected == base.editor?.id -> base.editor
-            else -> latestNotes.firstOrNull { it.id == selected }?.toDraft()
+            selected == base.editor?.id -> base.editor.let { draft ->
+                val baseline = editorBaseline
+                if (stored == null || baseline == null || baseline.id != draft.id) draft
+                else mergeIncoming(draft, baseline, stored)
+            }
+            else -> stored?.toDraft()
         }
+        editorBaseline = if (editor == null) null else stored ?: editorBaseline
         val search =
             if (base.search.isOpen) base.search.copy(hits = searchRows(rows, base.search.query))
             else base.search
@@ -433,6 +496,38 @@ class NotesWorkspaceModel(
             loaded = loaded,
         )
     }
+}
+
+/**
+ * The open [draft] after the stored row became [incoming], given the row it was last reconciled
+ * with ([baseline]) -- the desktop twin of the phone's `mergeIncomingNote`.
+ *
+ * Per field: if the draft still holds the baseline value, the user has not touched it since, so
+ * the stored value is taken (a change synced in from the phone, or the echo of our own save, which
+ * is equal anyway). If the user has changed it, their edit stands and will be saved over it.
+ * `content` and `contentFormat` move as one value, as everywhere else.
+ */
+internal fun mergeIncoming(draft: EditorDraft, baseline: Note, incoming: Note): EditorDraft {
+    val bodyUntouched = draft.content == baseline.content && draft.contentFormat == baseline.contentFormat
+    val bodyReplaced = bodyUntouched &&
+        (incoming.content != draft.content || incoming.contentFormat != draft.contentFormat)
+    val checklistUntouched = draft.checklist.serializeChecklist() == baseline.checklist
+    return draft.copy(
+        title = if (draft.title == baseline.title) incoming.title else draft.title,
+        content = if (bodyUntouched) incoming.content else draft.content,
+        contentFormat = if (bodyUntouched) incoming.contentFormat else draft.contentFormat,
+        checklist = when {
+            !checklistUntouched -> draft.checklist
+            // Our own echo: keep the items (and their ids, which focus is keyed on) as they are.
+            incoming.checklist == draft.checklist.serializeChecklist() -> draft.checklist
+            else -> parseChecklist(incoming.checklist)
+        },
+        isPinned = if (draft.isPinned == baseline.isPinned) incoming.isPinned else draft.isPinned,
+        isFavorite = if (draft.isFavorite == baseline.isFavorite) incoming.isFavorite else draft.isFavorite,
+        folderId = if (draft.folderId == baseline.folderId) incoming.folderId else draft.folderId,
+        updatedAt = maxOf(draft.updatedAt, incoming.updatedAt),
+        contentRevision = if (bodyReplaced) draft.contentRevision + 1 else draft.contentRevision,
+    )
 }
 
 private fun Note.toDraft() = EditorDraft(

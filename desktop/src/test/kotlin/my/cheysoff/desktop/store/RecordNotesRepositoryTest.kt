@@ -635,6 +635,26 @@ class RecordNotesRepositoryTest {
         assertNull(reload().getFolders().first().single().colorArgb)
     }
 
+
+    @Test
+    fun `a pasted attachment is stored, survives a reload, and is queued for sync`() = runTest {
+        repository.saveNote(note("n"))
+        val pasted = my.cheysoff.core_domain.model.AttachmentData(
+            id = "img", noteId = "n", anchor = 1, order = 0, mimeType = "image/jpeg",
+            width = 4, height = 3, bytes = byteArrayOf(1, 2, 3),
+            thumbWidth = 4, thumbHeight = 3, thumbBytes = byteArrayOf(4),
+            createdAt = 0L, updatedAt = 0L,
+        )
+
+        repository.saveAttachment(pasted)
+
+        val loaded = reload().getAttachmentsForNote("n").first().single()
+        assertEquals("img", loaded.id)
+        assertEquals(1, loaded.anchor)
+        assertEquals(now, loaded.createdAt)
+        assertTrue(loaded.bytes.contentEquals(byteArrayOf(1, 2, 3)))
+        assertTrue("both rows wait to be pushed", store.readAll().all { it.dirty })
+    }
     /** Reads the stored record for a domain id back out, so a test can assert on its clocks. */
     private fun openOnly(id: String): RecordPayload {
         val opened = store.readAll().mapNotNull { row ->

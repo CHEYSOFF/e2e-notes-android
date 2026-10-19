@@ -46,6 +46,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import my.cheysoff.desktop.ui.attachment.AttachmentViewer
+import my.cheysoff.desktop.ui.attachment.DesktopImageImporter
 import my.cheysoff.desktop.ui.attachment.orderedForDisplay
 import my.cheysoff.desktop.ui.state.NotesWorkspaceModel
 import my.cheysoff.desktop.ui.state.WorkspaceUiState
@@ -151,6 +152,9 @@ fun NotesWorkspaceScreen(
                         onDeleteSketch = model::deleteSketch,
                         attachments = state.attachments,
                         onAttachmentTapped = { model.openAttachmentViewer(it.id) },
+                        onPasteImage = { image -> model.pasteImage { DesktopImageImporter.import(image) } },
+                        pasteFailure = state.pasteFailure,
+                        onDismissPasteFailure = model::dismissPasteFailure,
                         modifier = Modifier.weight(1f),
                     )
                 }

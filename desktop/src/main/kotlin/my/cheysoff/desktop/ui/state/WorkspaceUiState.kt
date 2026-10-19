@@ -6,6 +6,7 @@ import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.core_domain.sketch.DisplaySketch
 import my.cheysoff.core_domain.sketch.sketchesForDisplay
+import my.cheysoff.desktop.ui.attachment.DesktopImportResult
 
 /** Everything the two panes draw, in one snapshot. */
 @Immutable
@@ -43,6 +44,11 @@ data class WorkspaceUiState(
      */
     val viewingAttachmentId: String? = null,
     /**
+     * Why the last Ctrl+V of an image attached nothing ([DesktopImportResult.TooLarge] or
+     * [DesktopImportResult.NotAnImage]), shown under the editor until dismissed or the next paste.
+     */
+    val pasteFailure: DesktopImportResult? = null,
+    /**
      * False until the repository has emitted once. Distinguishes "no notes yet" from "not asked
      * yet" — without it the empty state flashes on every launch before the first emission lands.
      */
@@ -52,10 +58,12 @@ data class WorkspaceUiState(
 /**
  * The note the editor pane is editing, held apart from the repository's copy.
  *
- * This is the authoritative version while the pane is open: a repository emission for the same id
- * does NOT overwrite it. The alternative — treating the database as the source of truth for a note
- * being typed into — is the clobbering bug the Android editor had to be fixed for, where the
- * autosave's own echo arrived a keystroke late and reset the cursor.
+ * A repository emission for the same id does NOT simply overwrite it -- treating the database as
+ * the source of truth for a note being typed into is the clobbering bug the Android editor had to
+ * be fixed for, where the autosave's own echo arrived a keystroke late and reset the cursor.
+ * Instead it is merged field by field against a baseline (see `NotesWorkspaceModel.mergeIncoming`):
+ * a field the user has not touched takes the stored value, which is how a change synced in from
+ * the phone reaches a note that is open here.
  */
 @Immutable
 data class EditorDraft(
@@ -69,6 +77,11 @@ data class EditorDraft(
     val folderId: String?,
     val createdAt: Long,
     val updatedAt: Long,
+    /**
+     * Moves when [content] is replaced from outside the editor (a synced-in body). The rich-text
+     * editor owns its text and only re-reads [content] when the note id or this changes.
+     */
+    val contentRevision: Int = 0,
 )
 
 @Immutable

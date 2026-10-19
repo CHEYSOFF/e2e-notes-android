@@ -137,6 +137,12 @@ internal fun mergeIncomingNote(
     }
 
     val checklistUntouched = current.checklist.serializeChecklist() == baseline.checklist
+    // A body adopted from the row that differs from what the editor shows is a REMOTE change (the
+    // echo of our own write is equal to current). The rich-text editor owns its text and only
+    // re-reads state when contentRevision moves, so without the bump an open note keeps showing the
+    // old body -- and its next edit would write that stale body back over the incoming one.
+    val bodyReplaced = current.content == baseline.content &&
+        (incoming.content != current.content || incoming.contentFormat != current.contentFormat)
     return NoteMergeResult(
         state = current.copy(
             title = if (current.title == baseline.title) incoming.title else current.title,
@@ -168,6 +174,7 @@ internal fun mergeIncomingNote(
             // line honest after a save.
             updatedAt = incoming.updatedAt,
             isLoaded = true,
+            contentRevision = if (bodyReplaced) current.contentRevision + 1 else current.contentRevision,
         ),
         // Whatever the merge decided to *show*, the row we were just handed is what the DB *holds*,
         // so that is the new reference point. (Combined with the write path recording every value
