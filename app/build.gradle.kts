@@ -70,6 +70,8 @@ dependencies {
     // blob the server stores. `:app` is where the two meet the HTTP client and the account keys.
     implementation(project(":core-sync-engine"))
     implementation(project(":core-sync-codec"))
+    // BlockMerge, handed to the sync engine so BLOCKS bodies merge block by block.
+    implementation(project(":core-blocks"))
 
     implementation(libs.androidx.core.ktx)
     // The sync server address is a preference, stored the same way every other preference in this

@@ -19,7 +19,7 @@ import my.cheysoff.core_domain.sync.Hlc
 
 /**
  * The v1 JSON form of a [BlockDocument]:
- * `{"v":1,"blocks":[{"id","t","text","spans":[[start,end,"b"]],"done","ref","pos","c","pc"}],"gone":[{"id","c"}]}`.
+ * `{"v":1,"blocks":[{"id","t","text","spans":[[start,end,"b"]],"done","ref","pos","c","pc"}],"gone":[{"id","c","pos"?,"pc"?}]}`.
  *
  * Encoding is canonical -- keys in schema order, spans sorted by (start, end, style), tombstones by
  * id, blocks by (pos, id); span ties by InlineStyle declaration order -- because the merge breaks clock ties by comparing encoded JSON, and
@@ -43,6 +43,13 @@ object BlockCodec {
                 add(buildJsonObject {
                     put("id", t.id)
                     put("c", t.clock.toString())
+                    // Omitted when unknown, so a plain tombstone encodes exactly as it did before
+                    // tombstones carried a position. Both must be blank: a `pos` under a ZERO clock
+                    // (an unstamped block that died in a merge) would otherwise not round-trip.
+                    if (t.posClock != Hlc.ZERO || t.pos.isNotEmpty()) {
+                        put("pos", t.pos)
+                        put("pc", t.posClock.toString())
+                    }
                 })
             }
         })
@@ -85,6 +92,8 @@ object BlockCodec {
                 Tombstone(
                     id = o.getValue("id").jsonPrimitive.content,
                     clock = Hlc.parse(o.getValue("c").jsonPrimitive.content) ?: return null,
+                    pos = o["pos"]?.jsonPrimitive?.content ?: "",
+                    posClock = clockOf(o["pc"]) ?: return null,
                 )
             }
             BlockDocument(blocks, gone)

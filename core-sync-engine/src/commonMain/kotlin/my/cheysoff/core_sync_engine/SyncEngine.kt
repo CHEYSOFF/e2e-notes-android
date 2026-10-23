@@ -1,6 +1,7 @@
 package my.cheysoff.core_sync_engine
 
 import kotlinx.coroutines.sync.Mutex
+import my.cheysoff.core_domain.sync.ContentMerger
 import my.cheysoff.core_domain.sync.Hlc
 import my.cheysoff.core_domain.sync.Merge
 import my.cheysoff.core_domain.sync.MergeResult
@@ -60,6 +61,9 @@ import my.cheysoff.core_domain.sync.SyncRecord
  * @param maxRounds how many pull/push rounds one [runPass] will do. A round happens only when the
  *   push merged something, so the cap is a guard against a pathological peer rather than a normal
  *   limit; §3 puts it at 3.
+ * @param contentMerger handed to `Merge.merge` for note bodies (BLOCKS bodies merge block by
+ *   block). A parameter rather than a dependency because the merger lives in a module this one
+ *   must not depend on. The default keeps plain last-writer-wins.
  */
 class SyncEngine(
     private val store: SyncStore,
@@ -69,6 +73,7 @@ class SyncEngine(
     private val batchLimit: Int = DEFAULT_BATCH_LIMIT,
     private val pageLimit: Int = DEFAULT_PAGE_LIMIT,
     private val maxRounds: Int = DEFAULT_MAX_ROUNDS,
+    private val contentMerger: ContentMerger = ContentMerger.NONE,
 ) {
 
     init {
@@ -517,7 +522,7 @@ class SyncEngine(
         remoteMeta: String?,
     ): Phase {
         val stored = store.load(remote.type, remote.uuid)
-        val result = Merge.merge(stored?.asLocalRecord(), remote)
+        val result = Merge.merge(stored?.asLocalRecord(), remote, contentMerger)
 
         // Fold every clock this device is shown into the generator, and do it before any early
         // return. A generator that has not seen an incoming clock can mint the next local write

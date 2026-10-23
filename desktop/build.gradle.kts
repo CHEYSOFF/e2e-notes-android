@@ -60,6 +60,8 @@ dependencies {
     implementation(project(":core-sync-codec"))
     implementation(project(":core-sync-engine"))
     implementation(project(":core-sync-net"))
+    // BlockMerge, handed to the sync engine so BLOCKS bodies merge block by block.
+    implementation(project(":core-blocks"))
 
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)

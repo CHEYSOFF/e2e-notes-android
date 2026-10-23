@@ -58,8 +58,14 @@ object BlockStamping {
             }
         }
 
-        val deleted = priorById.keys.filter { it !in editedIds }.map { Tombstone(it, clock) }
-        val carried = prior?.gone.orEmpty().filter { it.id !in editedIds }
+        // A deleted block's tombstone records where it was, so a merge that revives it elsewhere
+        // keeps its newest move (see Tombstone).
+        val deleted = priorById.values.filter { it.id !in editedIds }
+            .map { Tombstone(it.id, clock, it.pos, it.posClock) }
+        val deletedIds = deleted.map { it.id }.toSet()
+        // A merged prior can hold a tombstone next to a live block; deleting that block replaces
+        // the old tombstone rather than adding a second one for the same id.
+        val carried = prior?.gone.orEmpty().filter { it.id !in editedIds && it.id !in deletedIds }
         // Sorted by id: BlockDocument.equals compares tombstones as an ordered list.
         return BlockDocument(result, (carried + deleted).sortedBy { it.id })
     }

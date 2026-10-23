@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import my.cheysoff.core_blocks.BlockMerge
 import my.cheysoff.core_crypto.SecureUnlockManager
 import my.cheysoff.core_crypto.sync.AccountKeys
 import my.cheysoff.core_crypto.sync.AccountRootKey
@@ -176,6 +177,8 @@ class DefaultSyncController @Inject constructor(
                 // already accepted, and a row whose clock went backwards loses to its own older
                 // version on the next sync -- silently.
                 clock = ClockObserver { syncClock.observe(it) },
+                // Two devices' edits to one BLOCKS body merge per block instead of one winning.
+                contentMerger = BlockMerge,
             )
 
             // After the store is open and before the engine reads the halt, which is the only

@@ -35,6 +35,27 @@ class BlockCodecTest {
     }
 
     @Test
+    fun `a tombstone keeps the dead block's position through a round trip`() {
+        val doc = BlockDocument(
+            emptyList(),
+            listOf(
+                Tombstone("dead", hlc(300L), pos = "m4", posClock = hlc(400L, 2, "n2")),
+                Tombstone("plain", hlc(5)),
+                Tombstone("unclocked", hlc(6), pos = "k"),
+            ),
+        )
+
+        assertEquals(doc, BlockCodec.decode(BlockCodec.encode(doc)))
+    }
+
+    @Test
+    fun `a tombstone without a position encodes exactly as before`() {
+        val encoded = BlockCodec.encode(BlockDocument(emptyList(), listOf(Tombstone("a", hlc(1)))))
+
+        assertEquals("""{"v":1,"blocks":[],"gone":[{"id":"a","c":"${hlc(1)}"}]}""", encoded)
+    }
+
+    @Test
     fun `encoding is canonical`() {
         val spansA = listOf(StyleSpan(0, 1, InlineStyle.BOLD), StyleSpan(0, 1, InlineStyle.ITALIC), StyleSpan(2, 3, InlineStyle.BOLD))
         val goneA = listOf(Tombstone("a", hlc(1)), Tombstone("b", hlc(2)))

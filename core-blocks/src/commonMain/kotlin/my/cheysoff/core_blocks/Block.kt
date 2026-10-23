@@ -55,8 +55,18 @@ data class Block(
     val posClock: Hlc = Hlc.ZERO,
 )
 
-/** A deleted block's id and the clock of the delete; a block is live only while its content clock is newer. */
-data class Tombstone(val id: String, val clock: Hlc)
+/**
+ * A deleted block's id and the clock of the delete. A block is live only while its content clock
+ * is newer.
+ *
+ * [pos]/[posClock] are the dead block's newest known position. They are kept because a move can be
+ * newer than the delete (moves stamp only the position clock), and a later text edit elsewhere can
+ * revive the block. Without them, whether the revived block keeps that move would depend on the
+ * order the documents met, and the merge would not converge. [Hlc.ZERO] means "no position known":
+ * a tombstone next to a live block (the block holds the position) or one written before this field
+ * existed.
+ */
+data class Tombstone(val id: String, val clock: Hlc, val pos: String = "", val posClock: Hlc = Hlc.ZERO)
 
 /**
  * A note body: live blocks plus tombstones for blocks deleted somewhere.

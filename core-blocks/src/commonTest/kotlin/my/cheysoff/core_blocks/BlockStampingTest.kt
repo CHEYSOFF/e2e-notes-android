@@ -90,7 +90,20 @@ class BlockStampingTest {
         val doc = BlockStamping.stamp(prior, edited, t1)
 
         assertEquals(listOf("a", "pic:r1", "d"), doc.blocks.map { it.id })
-        assertEquals(listOf(Tombstone("c", t1)), doc.gone)
+        // The tombstone carries the block's last position so a merge that later revives it
+        // elsewhere still knows the newest move (see BlockMerge).
+        assertEquals(listOf(Tombstone("c", t1, pos = "c", posClock = t0)), doc.gone)
+    }
+
+    @Test
+    fun `deleting a block that also holds a tombstone leaves exactly one`() {
+        // A merged document keeps the tombstone of a block that was revived, next to the block.
+        val prior = BlockDocument(listOf(para("a", "one", "a"), para("c", "three", "c")), listOf(Tombstone("c", hlc(50))))
+        val edited = prior.blocks.filter { it.id != "c" }
+
+        val doc = BlockStamping.stamp(prior, edited, t1)
+
+        assertEquals(listOf(Tombstone("c", t1, pos = "c", posClock = t0)), doc.gone)
     }
 
     @Test
