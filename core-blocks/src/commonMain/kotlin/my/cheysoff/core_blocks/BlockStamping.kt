@@ -14,11 +14,15 @@ object BlockStamping {
 
     /**
      * @param prior the last saved document, or null for a note's first BLOCKS save.
-     * @param edited the editor's blocks in visible order. Their `clock`, `posClock` and `pos` are
-     *   ignored; only identity and content matter.
+     * @param editedBlocks the editor's blocks in visible order. Their `clock`, `posClock` and `pos` are
+     *   ignored; only identity and content matter. Duplicate ids are repaired, see below.
      * @param clock the save's clock, stamped on everything that changed.
      */
-    fun stamp(prior: BlockDocument?, edited: List<Block>, clock: Hlc): BlockDocument {
+    fun stamp(prior: BlockDocument?, editedBlocks: List<Block>, clock: Hlc): BlockDocument {
+        // A throwing save would lose the user's typing, so a duplicated id is repaired rather than
+        // rejected: the first occurrence keeps it, later ones become new blocks.
+        val seen = HashSet<String>()
+        val edited = editedBlocks.map { if (seen.add(it.id)) it else it.copy(id = BlockIds.random()) }
         val priorById = prior?.blocks.orEmpty().associateBy { it.id }
         val editedIds = edited.map { it.id }.toSet()
 
@@ -43,17 +47,15 @@ object BlockStamping {
                 finalPos[i] = old!!.pos
             }
             val contentChanged = old == null || !sameContent(old, b)
-            result += Block(
-                id = b.id,
-                type = b.type,
-                text = b.text,
-                spans = b.spans,
-                done = b.done,
-                ref = b.ref,
-                pos = finalPos[i]!!,
-                clock = if (contentChanged) clock else old.clock,
-                posClock = if (moved) clock else old!!.posClock,
-            )
+            result += if (contentChanged) {
+                Block(
+                    id = b.id, type = b.type, text = b.text, spans = b.spans, done = b.done, ref = b.ref,
+                    pos = finalPos[i]!!, clock = clock, posClock = if (moved) clock else old?.posClock ?: clock,
+                )
+            } else {
+                // Start from the prior block so an unchanged one is identical, span order included.
+                old.copy(pos = finalPos[i]!!, posClock = if (moved) clock else old.posClock)
+            }
         }
 
         val deleted = priorById.keys.filter { it !in editedIds }.map { Tombstone(it, clock) }
@@ -74,7 +76,7 @@ object BlockStamping {
      * leave no room to insert between them, so one of them must move.
      */
     private fun longestStablePositions(edited: List<Block>, priorById: Map<String, Block>): Set<Int> {
-        val candidates = edited.indices.filter { priorById[edited[it].id]?.pos?.isNotEmpty() == true }
+        val candidates = edited.indices.filter { priorById[edited[it].id]?.pos?.let(FractionalIndex::isValid) == true }
         fun posAt(c: Int) = priorById.getValue(edited[candidates[c]].id).pos
         // Patience sorting: tails[k] is the candidate ending the best run of length k + 1.
         val tails = ArrayList<Int>()

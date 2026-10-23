@@ -136,4 +136,76 @@ class BlockStampingTest {
         val prior = prior()
         assertEquals(prior, BlockStamping.stamp(prior, prior.blocks, t1))
     }
+
+    @Test
+    fun `malformed prior positions get fresh valid ones in order`() {
+        val prior = BlockDocument(
+            listOf(para("a", "one", ""), para("b", "two", "b"), para("c", "three", "a0"), para("d", "four", "d")),
+        )
+        val edited = prior.blocks
+
+        val doc = BlockStamping.stamp(prior, edited, t1)
+
+        assertEquals(edited.map { it.id }, doc.blocks.map { it.id })
+        assertTrue(doc.blocks.all { FractionalIndex.isValid(it.pos) })
+        val positions = doc.blocks.map { it.pos }
+        assertEquals(positions.sorted(), positions)
+        assertEquals(4, positions.toSet().size)
+        for (b in doc.blocks) {
+            assertEquals(t0, b.clock, "content untouched: ${b.id}")
+            val malformed = b.id == "a" || b.id == "c"
+            assertEquals(if (malformed) t1 else t0, b.posClock, b.id)
+        }
+    }
+
+    @Test
+    fun `duplicate ids keep the first and rename later ones`() {
+        val edited = listOf(
+            Block("x", BlockType.PARAGRAPH, "first"),
+            Block("x", BlockType.PARAGRAPH, "second"),
+        )
+
+        val doc = BlockStamping.stamp(null, edited, t1)
+
+        assertEquals(2, doc.blocks.map { it.id }.toSet().size)
+        assertEquals(listOf("first", "second"), doc.blocks.map { it.text })
+        assertEquals("x", doc.blocks[0].id)
+    }
+
+    @Test
+    fun `moving a block to the front gives it a position before the others`() {
+        val prior = prior()
+        val byId = prior.blocks.associateBy { it.id }
+        val edited = listOf("d", "a", "pic:r1", "c").map { byId.getValue(it) }
+
+        val doc = BlockStamping.stamp(prior, edited, t1)
+
+        assertEquals(listOf("d", "a", "pic:r1", "c"), doc.blocks.map { it.id })
+        assertTrue(doc.blocks[0].pos < "a")
+        assertEquals(t1, doc.blocks[0].posClock)
+        for (b in doc.blocks.drop(1)) assertEquals(byId.getValue(b.id), b)
+    }
+
+    @Test
+    fun `several blocks moving at once end up ordered and the rest are untouched`() {
+        val prior = BlockDocument(listOf("a", "b", "c", "d", "e", "f").map { para(it, it, it) })
+        val byId = prior.blocks.associateBy { it.id }
+        // Reverse the first three; d, e, f keep their order and so keep their positions.
+        val order = listOf("c", "b", "a", "d", "e", "f")
+
+        val doc = BlockStamping.stamp(prior, order.map { byId.getValue(it) }, t1)
+
+        assertEquals(order, doc.blocks.map { it.id })
+        for (id in listOf("d", "e", "f")) assertEquals(byId.getValue(id), doc.blocks.first { it.id == id })
+        assertEquals(2, doc.blocks.count { it.posClock == t1 })
+        assertTrue(doc.blocks.all { it.clock == t0 })
+    }
+
+    @Test
+    fun `an unchanged block keeps its prior spans verbatim`() {
+        val spans = listOf(StyleSpan(0, 1, InlineStyle.BOLD), StyleSpan(1, 2, InlineStyle.ITALIC))
+        val prior = BlockDocument(listOf(para("a", "xy", "a").copy(spans = spans)))
+        val doc = BlockStamping.stamp(prior, listOf(prior.blocks[0].copy(spans = spans.reversed())), t1)
+        assertEquals(spans, doc.blocks[0].spans)
+    }
 }

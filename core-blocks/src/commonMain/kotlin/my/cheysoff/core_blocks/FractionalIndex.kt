@@ -26,15 +26,20 @@ object FractionalIndex {
      */
     fun between(before: String?, after: String?): String {
         val a = before.orEmpty()
-        require(isCanonical(a)) { "Not a valid fractional index: '$a'" }
+        require(a.isEmpty() || isValid(a)) { "Not a valid fractional index: '$a'" }
         if (after != null) {
-            require(after.isNotEmpty() && isCanonical(after)) { "Not a valid fractional index: '$after'" }
+            require(isValid(after)) { "Not a valid fractional index: '$after'" }
             require(a < after) { "before ('$a') must sort before after ('$after')" }
         }
         return midpoint(a, after)
     }
 
-    private fun isCanonical(key: String) = key.all { it in DIGITS } && !key.endsWith('0')
+    /**
+     * Whether [key] is a usable position: non-empty, only digits, no trailing '0'. Stamping uses
+     * it to spot positions that arrived in a synced body (the codec does not validate them) so one
+     * malformed peer value cannot make every later save of the note throw.
+     */
+    internal fun isValid(key: String) = key.isNotEmpty() && key.all { it in DIGITS } && !key.endsWith('0')
 
     private fun digit(c: Char) = DIGITS.indexOf(c)
 
