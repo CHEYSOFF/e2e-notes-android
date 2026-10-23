@@ -1,5 +1,6 @@
 package my.cheysoff.desktop.ui.state
 
+import my.cheysoff.core_blocks.LegacyChecklist
 import java.util.UUID
 
 /**
@@ -28,13 +29,8 @@ fun List<DesktopChecklistItem>.serializeChecklist(): String =
 
 /** Inverse of [serializeChecklist]. Assigns each parsed item a fresh ephemeral id. */
 fun parseChecklist(raw: String): List<DesktopChecklistItem> =
-    if (raw.isEmpty()) emptyList()
-    else raw.split("\n").map { line ->
-        DesktopChecklistItem(
-            id = UUID.randomUUID().toString(),
-            isDone = line.firstOrNull() == '1',
-            text = line.drop(1),
-        )
+    LegacyChecklist.parse(raw).map { (text, done) ->
+        DesktopChecklistItem(id = UUID.randomUUID().toString(), text = text, isDone = done)
     }
 
 /** (done, total) straight off the serialized blob, without allocating items — for list previews. */

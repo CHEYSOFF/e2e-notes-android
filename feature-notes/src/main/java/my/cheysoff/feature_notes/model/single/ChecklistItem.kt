@@ -1,6 +1,7 @@
 package my.cheysoff.feature_notes.model.single
 
 import androidx.compose.runtime.Immutable
+import my.cheysoff.core_blocks.LegacyChecklist
 import java.util.UUID
 
 /**
@@ -35,13 +36,8 @@ fun List<ChecklistItem>.serializeChecklist(): String =
 
 /** Inverse of [serializeChecklist]. Assigns each parsed item a fresh ephemeral id. */
 fun parseChecklist(raw: String): List<ChecklistItem> =
-    if (raw.isEmpty()) emptyList()
-    else raw.split("\n").map { line ->
-        ChecklistItem(
-            id = UUID.randomUUID().toString(),
-            isDone = line.firstOrNull() == '1',
-            text = line.drop(1),
-        )
+    LegacyChecklist.parse(raw).map { (text, done) ->
+        ChecklistItem(id = UUID.randomUUID().toString(), text = text, isDone = done)
     }
 
 /**

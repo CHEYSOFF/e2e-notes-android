@@ -42,6 +42,7 @@ android {
 dependencies {
     implementation(project(":core-ui"))
     implementation(project(":core-domain"))
+    implementation(project(":core-blocks"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
