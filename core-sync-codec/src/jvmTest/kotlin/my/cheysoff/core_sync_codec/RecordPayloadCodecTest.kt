@@ -135,7 +135,8 @@ class RecordPayloadCodecTest {
      */
     @Test
     fun `a newer content-serializer version is refused`() {
-        val text = encoded().replaceFirst("\"serializer\":1", "\"serializer\":2")
+        // 3, not 2: serializer 2 now means BLOCKS (see BlocksSerializerVersionTest).
+        val text = encoded().replaceFirst("\"serializer\":1", "\"serializer\":3")
         assertTrue(decode(text) is PayloadResult.UnsupportedVersion)
     }
 

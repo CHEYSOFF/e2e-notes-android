@@ -114,6 +114,20 @@ object RecordPayloadCodec {
      */
     const val SERIALIZER_VERSION = 1
 
+    /**
+     * Serializer version of a note whose `contentFormat` is `blocks`.
+     *
+     * A build that predates BLOCKS accepts only [SERIALIZER_VERSION], so it answers
+     * [PayloadResult.UnsupportedVersion] and halts instead of reading block JSON as HTML and
+     * re-saving it mangled. That refusal is the whole mechanism; nothing else tells an old build
+     * the body is not one it can render. Every other record, soft-deleted blocks notes aside,
+     * keeps [SERIALIZER_VERSION], so its bytes do not change.
+     */
+    const val BLOCKS_SERIALIZER_VERSION = 2
+
+    /** The `contentFormat` column value of a BLOCKS note (`NoteContentFormat.BLOCKS.storageValue`). */
+    private const val BLOCKS_FORMAT = "blocks"
+
     private const val KEY_VERSION = "v"
     private const val KEY_REC_TYPE = "recType"
     private const val KEY_UUID = "uuid"
@@ -170,7 +184,7 @@ object RecordPayloadCodec {
             // where they disagree -- so the redundancy is a consistency check instead of a second
             // source of truth.
             put(KEY_DELETED, JsonPrimitive(isDeleted(payload)))
-            put(KEY_SERIALIZER, JsonPrimitive(SERIALIZER_VERSION))
+            put(KEY_SERIALIZER, JsonPrimitive(serializerFor(payload)))
         }
         return json.encodeToString(JsonObject.serializer(), obj).encodeToByteArray()
     }
@@ -195,7 +209,9 @@ object RecordPayloadCodec {
 
         val version = root.getValue(KEY_VERSION).jsonPrimitive.int
         val serializer = root.getValue(KEY_SERIALIZER).jsonPrimitive.int
-        if (version != PAYLOAD_VERSION || serializer != SERIALIZER_VERSION) {
+        if (version != PAYLOAD_VERSION ||
+            (serializer != SERIALIZER_VERSION && serializer != BLOCKS_SERIALIZER_VERSION)
+        ) {
             return PayloadResult.UnsupportedVersion(version, serializer)
         }
 
@@ -232,11 +248,25 @@ object RecordPayloadCodec {
         }
 
         val payload = RecordPayload(recType, uuid, rowClock, fields, clocks)
+        // The serializer must agree with the format it describes. A mismatch is a bug on the
+        // writing device, not a newer build, so it is damage rather than an unsupported version.
+        if (serializer != serializerFor(payload)) {
+            return PayloadResult.Malformed("serializer $serializer disagrees with the record's contentFormat")
+        }
         if (root.getValue(KEY_DELETED).jsonPrimitive.boolean != isDeleted(payload)) {
             return PayloadResult.Malformed("'del' disagrees with the isDeleted column")
         }
         return PayloadResult.Ok(payload)
     }
+
+    private fun serializerFor(payload: RecordPayload): Int =
+        if (payload.recType == RecordType.NOTE &&
+            payload.fields[PayloadFields.CONTENT_FORMAT] == BLOCKS_FORMAT
+        ) {
+            BLOCKS_SERIALIZER_VERSION
+        } else {
+            SERIALIZER_VERSION
+        }
 
     private fun isDeleted(payload: RecordPayload): Boolean =
         payload.field(PayloadFields.IS_DELETED) == SyncValues.TRUE
