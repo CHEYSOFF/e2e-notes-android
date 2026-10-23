@@ -26,7 +26,7 @@ package my.cheysoff.core_domain.sync
  * [ConflictCopies.idFor]. The property required is determinism across devices, which MD5 has, and
  * RFC 4122 specifies MD5 for version-3 UUIDs, so matching it is what "a v3 UUID" means.
  */
-internal object NameUuid {
+object NameUuid {
 
     /** The RFC 4122 version-3 UUID of [name], formatted 8-4-4-4-12. */
     fun v3(name: ByteArray): String {

@@ -164,6 +164,7 @@ jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
 jna-platform = { group = "net.java.dev.jna", name = "jna-platform", version.ref = "jna" }
 richeditor-compose-desktop = { group = "com.mohamedrejeb.richeditor", name = "richeditor-compose-desktop", version.ref = "richeditorDesktop" }
 ksoup-entities = { group = "com.mohamedrejeb.ksoup", name = "ksoup-entities-jvm", version = "0.6.0" }
+ksoup-entities-common = { group = "com.mohamedrejeb.ksoup", name = "ksoup-entities", version = "0.6.0" }
 compose-material-icons-core = { group = "org.jetbrains.compose.material", name = "material-icons-core-desktop", version = "1.7.3" }
 
 [plugins]

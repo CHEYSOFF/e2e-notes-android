@@ -46,6 +46,10 @@ object NoteBlocks {
     fun count(content: String, format: NoteContentFormat): Int = when (format) {
         NoteContentFormat.PLAIN -> countPlainBlocks(content)
         NoteContentFormat.HTML -> countHtmlBlocks(content)
+        // Anchors are not used for BLOCKS notes: a picture or drawing is a block of the document
+        // itself, so nothing positions it by index. core-domain cannot read the block JSON anyway
+        // (it must not depend on core-blocks), and 0 clamps any stale legacy anchor to the top.
+        NoteContentFormat.BLOCKS -> 0
     }
 
     /** Coerces [anchor] into `0..blockCount`, so a stale or corrupt anchor still points somewhere. */

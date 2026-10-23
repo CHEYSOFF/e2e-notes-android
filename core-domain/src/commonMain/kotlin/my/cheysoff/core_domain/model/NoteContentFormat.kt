@@ -14,7 +14,16 @@ enum class NoteContentFormat(val storageValue: String) {
     PLAIN("plain"),
 
     /** Rich-text HTML as produced by the editor's `toHtml()`. */
-    HTML("html");
+    HTML("html"),
+
+    /**
+     * A JSON block document (`core-blocks`): one entry per paragraph, list item, picture or
+     * drawing, each with its own id and clocks so two devices editing different blocks merge
+     * instead of one overwriting the other. The body is opaque to this module -- only
+     * `core-blocks` can read it -- which is why [my.cheysoff.core_domain.sketch.NoteBlocks] has no
+     * anchors to count for it.
+     */
+    BLOCKS("blocks");
 
     companion object {
         /**
