@@ -177,7 +177,41 @@ class LegacyImportTest {
     fun `malformed html does not throw and keeps text`() {
         assertEquals(listOf(p("a < b")), shape(html("<p>a < b")))
         assertEquals(listOf(p("bare text")), shape(html("bare text")))
-        assertEquals(listOf(p("x")), shape(html("<p>x</p")))
+        assertEquals(listOf(p("x</p")), shape(html("<p>x</p")))
+    }
+
+    @Test
+    fun `unterminated tags keep all their text`() {
+        assertEquals(listOf(p("a <b then")), shape(html("<p>a <b then</p>")))
+        assertEquals(listOf(p("x<y")), shape(html("x<y")))
+        assertEquals(listOf(p("x<y z")), shape(html("<p>x<y z")))
+        assertEquals(listOf(p("a <!-- b")), shape(html("<p>a <!-- b</p>")))
+    }
+
+    @Test
+    fun `top-level br splits without an empty paragraph`() {
+        assertEquals(listOf(p("text"), p("more")), shape(html("text<br>more")))
+        assertEquals(listOf(p("text"), p("more")), shape(html("text<br/>more")))
+        assertEquals(listOf(p("a"), p("b")), shape(html("<p>a<br />b</p>")))
+    }
+
+    @Test
+    fun `uppercase tags and attributes are understood`() {
+        val bold = listOf(StyleSpan(0, 1, InlineStyle.BOLD))
+        assertEquals(listOf(p("x", bold)), shape(html("<P><B>x</B></P>")))
+        assertEquals(listOf(p("x", bold)), shape(html("<p class=\"a\"><b id=1>x</b></p>")))
+        assertEquals(listOf(Triple(BlockType.H1, "t", emptyList<StyleSpan>())), shape(html("<h1 id=\"x\">t</h1>")))
+    }
+
+    @Test
+    fun `nested list keeps both items as bullets`() {
+        assertEquals(
+            listOf(
+                Triple(BlockType.BULLET, "a", emptyList<StyleSpan>()),
+                Triple(BlockType.BULLET, "b", emptyList()),
+            ),
+            shape(html("<ul><li>a<ul><li>b</li></ul></li></ul>")),
+        )
     }
 
     @Test

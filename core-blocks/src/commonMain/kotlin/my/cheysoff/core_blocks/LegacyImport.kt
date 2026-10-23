@@ -91,12 +91,20 @@ object LegacyImport {
                 }
                 if (html.startsWith("<!--", lt)) {
                     val end = html.indexOf("-->", lt + 4)
-                    if (end < 0) break
-                    i = end + 3
-                    continue
+                    if (end >= 0) {
+                        i = end + 3
+                        continue
+                    }
                 }
                 val close = html.indexOf('>', lt + 1)
-                if (close < 0) break // A truncated tag is markup, not text; nothing after it is readable.
+                val nextLt = html.indexOf('<', lt + 1)
+                if (close < 0 || (nextLt in 0 until close)) {
+                    // No '>' before the next '<' (or at all): this is not a tag, so the '<' is text.
+                    // Dropping it and what follows would lose words ("x<y", "<b then").
+                    text("<")
+                    i = lt + 1
+                    continue
+                }
                 tag(html.substring(lt + 1, close).trim())
                 i = close + 1
             }
@@ -182,7 +190,7 @@ object LegacyImport {
         }
 
         private fun lineBreak() {
-            if (!blockOpen) flushImplicit() // A br between blocks is an empty line of its own.
+            // Outside a block this ends the implicit paragraph, or is an empty line of its own.
             emit(force = true)
             emitted++
         }

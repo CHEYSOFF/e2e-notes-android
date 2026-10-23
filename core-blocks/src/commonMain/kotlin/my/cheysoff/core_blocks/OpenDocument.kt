@@ -1,9 +1,12 @@
 package my.cheysoff.core_blocks
 
+import my.cheysoff.core_domain.attachment.sortAttachments
 import my.cheysoff.core_domain.model.AttachmentData
+import my.cheysoff.core_domain.model.AttachmentPreview
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.core_domain.model.SketchData
+import my.cheysoff.core_domain.sketch.sortSketches
 import my.cheysoff.core_domain.sync.NameUuid
 
 /**
@@ -68,17 +71,27 @@ object OpenDocument {
         return BlockDocument(blocks, gone)
     }
 
-    private class Pending(val id: String, val picture: Boolean, val anchor: Int, val order: Int)
+    private class Pending(val id: String, val picture: Boolean)
 
     /**
-     * The note's live pictures and sketches in today's order: by anchor, then order, then pictures
-     * before sketches, then id. The last two only make ties deterministic; without them two devices
-     * could append equal-anchor records in different orders and disagree about positions.
+     * The note's live drawings, then its live pictures, each in the order the apps show them today:
+     * by [sortSketches] and [sortAttachments] (anchor, then id). Both functions are reused rather
+     * than re-derived, because `order` is reserved and is populated (max + 1), so putting it in the
+     * key would visibly reorder existing notes. Drawings come first because both the phone and the
+     * desktop render the sketch section above the attachment section.
      */
-    private fun pending(noteId: String, attachments: List<AttachmentData>, sketches: List<SketchData>): List<Pending> =
-        (attachments.filter { it.noteId == noteId && !it.isDeleted }.map { Pending(it.id, true, it.anchor, it.order) } +
-            sketches.filter { it.noteId == noteId && !it.isDeleted }.map { Pending(it.id, false, it.anchor, it.order) })
-            .sortedWith(compareBy({ it.anchor }, { it.order }, { !it.picture }, { it.id }))
+    private fun pending(noteId: String, attachments: List<AttachmentData>, sketches: List<SketchData>): List<Pending> {
+        val drawings = sortSketches(sketches.filter { it.noteId == noteId && !it.isDeleted })
+        val live = attachments.filter { it.noteId == noteId && !it.isDeleted }
+        val pictures = sortAttachments(live.map { it.toPreview() })
+        return drawings.map { Pending(it.id, false) } + pictures.map { Pending(it.id, true) }
+    }
+
+    private fun AttachmentData.toPreview() = AttachmentPreview(
+        id = id, noteId = noteId, anchor = anchor, order = order, mimeType = mimeType,
+        width = width, height = height, thumbWidth = thumbWidth, thumbHeight = thumbHeight,
+        thumbBytes = thumbBytes, createdAt = createdAt, updatedAt = updatedAt,
+    )
 
     /** A position after every block so far; blocks are not sorted yet while being assembled. */
     private fun nextPos(blocks: List<Block>): String =

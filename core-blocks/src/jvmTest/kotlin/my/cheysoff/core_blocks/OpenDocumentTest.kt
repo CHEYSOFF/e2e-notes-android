@@ -53,9 +53,9 @@ class OpenDocumentTest {
     fun `unreferenced picture appears at the end`() {
         val doc = body(para("a", "hello", "V"))
         val out = OpenDocument.assemble(blocksNote(doc), listOf(picture("p1")), listOf(sketch("s1", anchor = 1)))
-        assertEquals(listOf("a", BlockIds.forPicture("p1"), BlockIds.forDrawing("s1")), out.blocks.map { it.id })
-        assertEquals(listOf(BlockType.PARAGRAPH, BlockType.PICTURE, BlockType.DRAWING), out.blocks.map { it.type })
-        assertEquals(listOf(null, "p1", "s1"), out.blocks.map { it.ref })
+        assertEquals(listOf("a", BlockIds.forDrawing("s1"), BlockIds.forPicture("p1")), out.blocks.map { it.id })
+        assertEquals(listOf(BlockType.PARAGRAPH, BlockType.DRAWING, BlockType.PICTURE), out.blocks.map { it.type })
+        assertEquals(listOf(null, "s1", "p1"), out.blocks.map { it.ref })
         assertTrue(out.blocks.drop(1).all { it.clock == Hlc.ZERO })
     }
 
@@ -65,6 +65,29 @@ class OpenDocumentTest {
             blocksNote(body()), listOf(picture("late", anchor = 3), picture("early", anchor = 1)), emptyList(),
         )
         assertEquals(listOf(BlockIds.forPicture("early"), BlockIds.forPicture("late")), out.blocks.map { it.id })
+    }
+
+    @Test
+    fun `same-anchor pictures follow id order not the reserved order field`() {
+        val out = OpenDocument.assemble(
+            blocksNote(body()),
+            listOf(picture("a", order = 2), picture("b", order = 1)),
+            emptyList(),
+        )
+        assertEquals(listOf(BlockIds.forPicture("a"), BlockIds.forPicture("b")), out.blocks.map { it.id })
+    }
+
+    @Test
+    fun `drawings come before pictures as the apps render them`() {
+        val out = OpenDocument.assemble(
+            blocksNote(body()),
+            listOf(picture("p1", anchor = 0)),
+            listOf(sketch("s2", anchor = 5), sketch("s1", anchor = 5, order = 9)),
+        )
+        assertEquals(
+            listOf(BlockIds.forDrawing("s1"), BlockIds.forDrawing("s2"), BlockIds.forPicture("p1")),
+            out.blocks.map { it.id },
+        )
     }
 
     @Test
