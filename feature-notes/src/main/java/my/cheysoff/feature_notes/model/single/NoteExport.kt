@@ -1,5 +1,8 @@
 package my.cheysoff.feature_notes.model.single
 
+import my.cheysoff.core_blocks.BlockText
+import my.cheysoff.core_domain.model.NoteContentFormat
+
 /**
  * How a done / not-done checklist row is written when a note leaves the app as text. Plain ASCII
  * brackets rather than ballot-box characters, because the destination is arbitrary — an SMS field,
@@ -41,6 +44,31 @@ fun buildNoteShareText(
     if (rows.isNotEmpty()) blocks += rows
 
     return blocks.joinToString(BLOCK_SEPARATOR)
+}
+
+/**
+ * [buildNoteShareText] for a stored body whose format may be BLOCKS.
+ *
+ * A BLOCKS body is JSON, so it is read through [BlockText] instead of being handed over raw; any
+ * other format is passed through unchanged, because for those the editor supplies the body text
+ * itself (see the first overload). A leftover legacy checklist is still exported, but a row the
+ * blocks already show as a check line is dropped so an item that was converted into the body but
+ * not yet cleared from the field does not appear twice.
+ */
+fun buildNoteShareText(
+    title: String,
+    content: String,
+    format: NoteContentFormat,
+    checklist: List<ChecklistItem>,
+): String {
+    val blocksBody = BlockText.bodyPlain(content, format)
+        ?: return buildNoteShareText(title, content, checklist)
+    val bodyLines = blocksBody.lines().toSet()
+    val leftover = checklist.filter {
+        val text = it.text.trim()
+        "☐ $text" !in bodyLines && "☑ $text" !in bodyLines
+    }
+    return buildNoteShareText(title, blocksBody, leftover)
 }
 
 /**

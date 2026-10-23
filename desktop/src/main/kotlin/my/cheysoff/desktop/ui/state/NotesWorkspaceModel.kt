@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import my.cheysoff.core_blocks.BlockText
 import my.cheysoff.core_domain.model.AttachmentData
 import my.cheysoff.core_domain.sketch.NoteBlocks
 import my.cheysoff.desktop.ui.attachment.DesktopImportResult
@@ -559,5 +560,5 @@ internal fun EditorDraft.toNote(updatedAt: Long) = Note(
 /** A draft with nothing in any of the three fields the user can type into. */
 internal fun EditorDraft.isBlank(): Boolean =
     title.isBlank() &&
-        htmlToPlainText(content).isBlank() &&
+        (BlockText.bodyIsBlank(content, contentFormat) ?: htmlToPlainText(content).isBlank()) &&
         checklist.all { it.text.isBlank() }

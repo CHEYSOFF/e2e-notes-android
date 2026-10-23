@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import my.cheysoff.core_blocks.BlockText
 import my.cheysoff.core_domain.attachment.sortAttachments
 import my.cheysoff.core_domain.model.AttachmentData
 import my.cheysoff.core_domain.model.AttachmentPreview
@@ -234,7 +235,7 @@ internal fun mergeChecklist(current: List<ChecklistItem>, incoming: String): Lis
  */
 internal fun isDiscardableOnOpen(openedForNewNote: Boolean, note: Note): Boolean =
     openedForNewNote &&
-            note.title.isBlank() && note.content.isBlank() && note.checklist.isBlank()
+            note.title.isBlank() && bodyIsBlank(note.content, note.contentFormat) && note.checklist.isBlank()
 
 /**
  * Suffix a duplicate's title carries. Plain and un-numbered on purpose: choosing "(copy 2)" would
@@ -701,7 +702,7 @@ class SingleNoteViewModel @Inject constructor(
                         // hard delete below would leave that row live in the database under a note
                         // id that no longer exists.
                         id != null && createdBlankNote && current.title.isBlank() &&
-                                current.content.isBlank() && current.checklist.isEmpty() &&
+                                bodyIsBlank(current.content, current.contentFormat) && current.checklist.isEmpty() &&
                                 current.sketches.isEmpty() && current.attachments.isEmpty() -> {
                             saveJob?.cancel()
                             // purgeNote, NOT deleteNote: this is a discard, not a deletion the user
@@ -1021,3 +1022,10 @@ class SingleNoteViewModel @Inject constructor(
                 checklist.serializeChecklist() != persisted.checklist
     }
 }
+
+/**
+ * Whether a stored body is empty. A BLOCKS body is JSON and never a blank string, so it is asked of
+ * the blocks; the other formats keep the plain `isBlank` they always had.
+ */
+private fun bodyIsBlank(content: String, format: NoteContentFormat): Boolean =
+    BlockText.bodyIsBlank(content, format) ?: content.isBlank()

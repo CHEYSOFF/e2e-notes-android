@@ -1,6 +1,7 @@
 package my.cheysoff.desktop.ui.state
 
 import com.mohamedrejeb.ksoup.entities.KsoupEntities
+import my.cheysoff.core_blocks.BlockText
 import my.cheysoff.core_domain.model.NoteContentFormat
 
 /**
@@ -31,9 +32,13 @@ fun htmlToPlainText(html: String): String {
     return KsoupEntities.decodeHtml(stripped).trim()
 }
 
-/** [htmlToPlainText] for HTML rows; a verbatim trim for PLAIN ones, matching `Note.toUi()`. */
+/**
+ * [htmlToPlainText] for HTML rows; a verbatim trim for PLAIN ones, matching `Note.toUi()`; the
+ * blocks reading from [BlockText] for BLOCKS ones.
+ */
 fun noteBodyAsPlainText(content: String, format: NoteContentFormat): String =
-    if (format == NoteContentFormat.HTML) htmlToPlainText(content) else content.trim()
+    BlockText.bodyPlain(content, format)
+        ?: if (format == NoteContentFormat.HTML) htmlToPlainText(content) else content.trim()
 
 /**
  * Tags whose closing (or self-closing) form ends a line of rendered text. Everything else — <b>,

@@ -143,3 +143,34 @@ class WorkspaceContentTest {
         assertNull(resolveSelection(NoteListContent(), current = "anything"))
     }
 }
+
+class BlocksBodyRowTest {
+    private val body = my.cheysoff.core_blocks.BlockCodec.encode(
+        my.cheysoff.core_blocks.BlockDocument(
+            listOf(
+                my.cheysoff.core_blocks.Block(
+                    id = "a", type = my.cheysoff.core_blocks.BlockType.BULLET, text = "buy tickets", pos = "a",
+                ),
+            ),
+        ),
+    )
+
+    @Test
+    fun `a BLOCKS note shows readable text in the row snippet and is found by search`() {
+        val row = Note(id = "n", title = "T", content = body, contentFormat = NoteContentFormat.BLOCKS).toRow()
+        assertEquals("• buy tickets", row.snippet)
+        assertEquals(listOf("n"), searchRows(listOf(row), "tickets").map { it.row.id })
+    }
+
+    @Test
+    fun `a BLOCKS note with an empty body is blank`() {
+        val empty = my.cheysoff.core_blocks.BlockCodec.encode(my.cheysoff.core_blocks.BlockDocument(emptyList()))
+        assertTrue(
+            EditorDraft(
+                id = "n", title = "", content = empty, contentFormat = NoteContentFormat.BLOCKS,
+                checklist = emptyList(), isPinned = false, isFavorite = false, folderId = null,
+                createdAt = 0L, updatedAt = 0L,
+            ).isBlank(),
+        )
+    }
+}
