@@ -16,15 +16,15 @@ import my.cheysoff.core_blocks.BlockType
  * else.
  */
 object Markers {
-    const val CHECK_OPEN = ''
-    const val CHECK_DONE = ''
-    const val BULLET = ''
-    const val NUMBER = ''
-    const val PICTURE = ''
-    const val DRAWING = ''
-    const val H1 = ''
-    const val H2 = ''
-    const val H3 = ''
+    const val CHECK_OPEN = '\uE000'
+    const val CHECK_DONE = '\uE001'
+    const val BULLET = '\uE002'
+    const val NUMBER = '\uE003'
+    const val PICTURE = '\uE004'
+    const val DRAWING = '\uE005'
+    const val H1 = '\uE011'
+    const val H2 = '\uE012'
+    const val H3 = '\uE013'
 
     /** The marker that starts a line of [type]; `null` for a paragraph, which has none. */
     fun of(type: BlockType, done: Boolean): Char? = when (type) {
@@ -63,7 +63,7 @@ object Markers {
         }
     }
 
-    fun isPrivateUse(c: Char): Boolean = c in ''..''
+    fun isPrivateUse(c: Char): Boolean = c in '\uE000'..'\uF8FF'
 
     /** Whether [type] is shown as a whole line drawn over a single marker. */
     internal fun isPictureType(type: BlockType) = type == BlockType.PICTURE || type == BlockType.DRAWING

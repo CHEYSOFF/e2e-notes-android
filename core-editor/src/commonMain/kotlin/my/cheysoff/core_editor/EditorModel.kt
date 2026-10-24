@@ -3,6 +3,9 @@ package my.cheysoff.core_editor
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.text.input.TextFieldBuffer
 import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontStyle
@@ -14,6 +17,7 @@ import my.cheysoff.core_blocks.BlockIds
 import my.cheysoff.core_blocks.BlockType
 import my.cheysoff.core_blocks.InlineStyle
 import my.cheysoff.core_blocks.StyleSpan
+import my.cheysoff.core_domain.sync.NameUuid
 
 /**
  * A [BlockDocument] projected into one text field, one line per block, with every line's block id
@@ -26,44 +30,47 @@ import my.cheysoff.core_blocks.StyleSpan
  * [edit], which does that). An edit made straight through [state] leaves [ids] out of step with the
  * lines; [blocks] then fails loudly instead of saving blocks under the wrong ids.
  *
+ * Main thread only. [ids] and the picture table are snapshot state, so they are observable and
+ * roll back with a discarded snapshot together with the text, but nothing here is synchronised.
+ *
  * What loading does to content, on purpose:
  * - Private-use characters (U+E000-U+F8FF) are stripped from block text. They are this editor's
  *   [Markers], so a legacy note that happens to contain one would otherwise read back with a fake
  *   checkbox or picture. Such a note is visibly altered by one invisible-ish glyph; accepted.
  * - A `\n` inside block text (a corrupt-body fallback, or legacy text) splits the block into
  *   several lines rather than being dropped. The first line keeps the block's id and type; the rest
- *   are paragraphs with fresh ids. Spans are re-based onto each line.
+ *   are paragraphs. Spans are re-based onto each line.
  * - Spans are clamped to the text, widened so they never split a surrogate pair, and empty ones
  *   dropped. Decoding does not validate spans, so this is where bad ones stop.
- * - An id seen twice keeps only its first line: a second text block gets a fresh id, a second
+ * - An id seen twice keeps only its first line: a second text block gets a new id, a second
  *   picture of the same record is dropped (it is the same picture). Duplicate ids would otherwise
  *   be silently renamed when the doc is stamped on save, desyncing editor and document.
- * - An empty document becomes one empty paragraph with a fresh id, so there is a line to type in.
+ * - An empty document becomes one empty paragraph, so there is a line to type in.
+ *
+ * Every id minted on load is name-based ([NameUuid.v3]), not random: two devices opening the same
+ * body must produce the same blocks, or each would save its own copy of the split lines and the
+ * merge would show both.
  */
 class EditorModel(initial: BlockDocument) {
 
     val state = TextFieldState()
 
     /** The block id of each line of [state], in order. Never holds the same id twice. */
-    var ids: List<String> = emptyList()
+    var ids: List<String> by mutableStateOf(emptyList())
         private set
 
     /** Picture and drawing lines currently shown: block id to record id. */
     val refs: Map<String, String>
-        get() = ids.mapNotNull { id -> pictures[id]?.ref?.let { id to it } }.toMap()
+        get() = pictures.mapNotNull { (id, info) -> info.ref?.let { id to it } }.toMap()
 
-    /**
-     * Every picture/drawing id this model has known, shown or not. Kept after a picture leaves the
-     * text so that pasting it back (or undoing its delete) restores the same block and record.
-     */
-    private val pictures = HashMap<String, PictureInfo>()
+    /** The picture/drawing lines currently shown, by block id. A line id is a picture iff it is here. */
+    private var pictures: Map<String, PictureInfo> by mutableStateOf(emptyMap())
 
-    /**
-     * Picture ids that left the text, the next to be reused first. A marker line that appears
-     * through an edit takes the first entry of its type: that is how a cut-and-pasted picture
-     * keeps its id, because the field only sees an anonymous marker char arriving.
-     */
-    private val detached = ArrayDeque<String>()
+    /** Ids for the text lines the next edit creates, in order; see [stageText]. */
+    private val stagedText = ArrayDeque<String>()
+
+    /** Ids for the picture/drawing markers the next edit inserts; see [stagePicture]. */
+    private val stagedPictures = ArrayDeque<Pair<String, PictureInfo>>()
 
     /** The blocks as loaded, so [blocks] can return unchanged ones untouched, `pos` and clocks included. */
     private val loaded = HashMap<String, Block>()
@@ -74,18 +81,19 @@ class EditorModel(initial: BlockDocument) {
 
     /**
      * Replaces the text, styles and ids with [doc]. For the initial open only: it throws away the
-     * cursor and undo history and forgets detached pictures. Live remote changes are applied as
-     * targeted edits instead.
+     * cursor and undo history. Live remote changes are applied as targeted edits instead.
      */
     @OptIn(ExperimentalFoundationApi::class) // undoState: cleared so the built-in undo cannot step back past the load
     fun load(doc: BlockDocument) {
-        pictures.clear()
-        detached.clear()
+        stagedText.clear()
+        stagedPictures.clear()
         loaded.clear()
         val lineIds = mutableListOf<String>()
+        val shown = LinkedHashMap<String, PictureInfo>()
         val text = StringBuilder()
         val styles = mutableListOf<PlacedStyle>()
         val seen = HashSet<String>()
+        val dupCount = HashMap<String, Int>()
         fun startLine() {
             if (lineIds.isNotEmpty()) text.append('\n')
         }
@@ -95,22 +103,28 @@ class EditorModel(initial: BlockDocument) {
                 startLine()
                 text.append(Markers.of(b.type, false)!!)
                 lineIds += b.id
-                pictures[b.id] = PictureInfo(b.type, b.ref)
+                shown[b.id] = PictureInfo(b.type, b.ref)
                 loaded[b.id] = b
                 continue
             }
+            val blockId = if (seen.add(b.id)) {
+                b.id.also { loaded[it] = b }
+            } else {
+                val n = (dupCount[b.id] ?: 0) + 1
+                dupCount[b.id] = n
+                nameId("${b.id}/dup/$n").also { seen += it }
+            }
             splitText(b.text, b.spans).forEachIndexed { i, piece ->
-                val first = i == 0
-                val id = if (first && seen.add(b.id)) b.id.also { loaded[it] = b } else BlockIds.random()
+                val id = if (i == 0) blockId else nameId("$blockId/line/$i").also { seen += it }
                 startLine()
-                if (first) Markers.of(b.type, b.done)?.let { text.append(it) }
+                if (i == 0) Markers.of(b.type, b.done)?.let { text.append(it) }
                 val base = text.length
                 text.append(piece.text)
                 placeStyles(piece.spans, base, styles)
                 lineIds += id
             }
         }
-        if (lineIds.isEmpty()) lineIds += BlockIds.random()
+        if (lineIds.isEmpty()) lineIds += nameId("empty-document")
         state.edit {
             getSpanStyles(TextRange(0, length)).forEach { removeStyle(it) }
             getParagraphStyles(TextRange(0, length)).forEach { removeStyle(it) }
@@ -119,6 +133,7 @@ class EditorModel(initial: BlockDocument) {
             selection = TextRange(0)
         }
         state.undoState.clearHistory()
+        pictures = shown
         ids = lineIds
     }
 
@@ -129,6 +144,10 @@ class EditorModel(initial: BlockDocument) {
      * visible does not look like an edit. Spans always come back in [normalizeSpans] form, so a
      * loaded block with out-of-range or unordered spans comes back repaired (and counts as changed
      * once).
+     *
+     * A lone marker line that is not a known picture (a stray marker char left alone by an edit)
+     * reads as an empty paragraph: there is no record to show, and inventing a picture without one
+     * would save a broken block.
      */
     fun blocks(): List<Block> {
         val text = state.text
@@ -136,12 +155,14 @@ class EditorModel(initial: BlockDocument) {
         check(lines.size == ids.size) {
             "EditorModel out of sync: ${lines.size} lines, ${ids.size} ids. Was the field edited without onEdited?"
         }
+        val shown = pictures
         return lines.mapIndexed { i, line ->
             val id = ids[i]
             val lineText = text.subSequence(line.start, line.end)
             val (type, done) = Markers.typeOf(lineText)
-            val read = if (Markers.isPictureType(type)) {
-                Block(id, type, ref = pictures[id]?.ref)
+            val picture = shown[id]
+            val read = if (picture != null && Markers.isPictureType(type)) {
+                Block(id, picture.type, ref = picture.ref)
             } else {
                 val (plain, index) = stripPrivateUse(lineText)
                 val spans = state.textStyles.getSpanStyles(TextRange(line.start, line.end)).flatMap { r ->
@@ -149,7 +170,8 @@ class EditorModel(initial: BlockDocument) {
                     val b = r.end.coerceIn(line.start, line.end) - line.start
                     if (a >= b) emptyList() else stylesOf(r.item).map { StyleSpan(index[a], index[b], it) }
                 }
-                Block(id, type, plain, normalizeSpans(plain, spans), done)
+                val textType = if (Markers.isPictureType(type)) BlockType.PARAGRAPH else type
+                Block(id, textType, plain, normalizeSpans(plain, spans), done)
             }
             carryOver(read)
         }
@@ -165,7 +187,9 @@ class EditorModel(initial: BlockDocument) {
     /**
      * Makes a programmatic edit and keeps [ids] in step. `TextFieldState.edit` does not run the
      * field's InputTransformation (ruling R3), so editor commands and remote apply edit through
-     * here rather than through [state] directly.
+     * here rather than through [state] directly. Stage ids for the lines the edit creates with
+     * [stageText] / [stagePicture] first. If the ids cannot be derived (an unstaged marker), the
+     * edit is reverted and the exception rethrown, so text and ids never disagree.
      */
     fun edit(block: TextFieldBuffer.() -> Unit) = state.edit {
         block()
@@ -173,17 +197,60 @@ class EditorModel(initial: BlockDocument) {
     }
 
     /**
+     * The next edit's newly created text lines take [id], in staging order, instead of a fresh
+     * random id. For undo re-inserting a deleted block (Task 11) and remote apply inserting a
+     * remote block (Task 12). A created line is one that inherits no old line's id: a line
+     * inserted whole, or the second half of a split.
+     *
+     * Staging lasts for one edit: whatever that edit does not use is dropped, so a stale id can
+     * never land on a line the user creates later.
+     *
+     * @throws IllegalArgumentException if [id] is already shown or already staged.
+     */
+    fun stageText(id: String) {
+        requireFree(id)
+        stagedText.addLast(id)
+    }
+
+    /**
+     * The next edit's inserted marker of [type] takes [id] and shows record [ref]. The field
+     * cannot carry which record a marker char stands for, so whoever inserts one (the
+     * insert-picture command, internal paste, undo, remote apply) stages it first. Staged ids are
+     * used before ids of pictures removed in the same edit, and last one edit, like [stageText].
+     *
+     * @throws IllegalArgumentException if [type] is not a picture type, or [id] is already shown
+     *   or already staged.
+     */
+    fun stagePicture(id: String, type: BlockType, ref: String) {
+        require(Markers.isPictureType(type)) { "not a picture type: $type" }
+        requireFree(id)
+        stagedPictures.addLast(id to PictureInfo(type, ref))
+    }
+
+    private fun requireFree(id: String) {
+        require(id !in ids) { "block $id is already shown" }
+        require(id !in stagedText && stagedPictures.none { it.first == id }) { "block $id is already staged" }
+    }
+
+    /**
      * Re-derives [ids] after [buffer]'s changes, from its original text, its change list and its
      * current text. Call it at the end of the field's InputTransformation, after any rule has
-     * adjusted the buffer, and from nothing else that [edit] already covers.
+     * adjusted the buffer; [edit] calls it for programmatic edits.
      *
      * - Lines outside every changed range keep their ids.
-     * - Within a changed range, the first resulting text line keeps the id of the first text line
-     *   the change touched; further lines get fresh ids. So typing keeps an id, Enter keeps it on
-     *   the first half, and joining two lines keeps the first one's.
+     * - Within a changed range, an old text line's id follows its text: it goes to the new line
+     *   holding its first unchanged non-marker character, or, if none survives, to the first new
+     *   text line not already taken. So typing keeps an id, Enter keeps it on the first half,
+     *   Enter at the very start keeps it on the text (not on the new empty line above), joining
+     *   keeps the first line's, and an IME replacement across a line break keeps both.
+     * - Remaining new text lines take [stageText] ids, then fresh random ids.
      * - A picture/drawing line whose marker char is untouched keeps its id wherever the text
-     *   around it moves it. A marker that is deleted parks its id; a marker that is inserted takes
-     *   the most recently parked id of its type (see [stagePicture] for a new one).
+     *   around it moves it. An inserted marker takes a staged id of its type, else the id of a
+     *   picture of its type removed in this same edit (a move). Never one of the other type.
+     *
+     * @throws IllegalStateException for an inserted marker with neither: inventing a picture with
+     *   no record would save a broken block. Unreachable from user input, since paste strips
+     *   markers. The buffer is reverted before throwing.
      *
      * Adapted from the planned `onEdited(changes, before)`: the original text is needed to know
      * where the old lines were, and the buffer carries it alongside the changes, so it is passed
@@ -191,52 +258,50 @@ class EditorModel(initial: BlockDocument) {
      */
     @OptIn(ExperimentalFoundationApi::class) // TextFieldBuffer.changes
     fun onEdited(buffer: TextFieldBuffer) {
-        val list = buffer.changes
-        if (list.changeCount == 0) return
-        val changes = (0 until list.changeCount).map {
-            val o = list.getOriginalRange(it)
-            val r = list.getRange(it)
-            Change(o.min, o.max, r.min, r.max)
-        }.sortedBy { it.oStart }
-        rederive(buffer.originalText, buffer.asCharSequence(), changes)
+        try {
+            val list = buffer.changes
+            if (list.changeCount == 0) return
+            val changes = (0 until list.changeCount).map {
+                val o = list.getOriginalRange(it)
+                val r = list.getRange(it)
+                Change(o.min, o.max, r.min, r.max)
+            }.sortedBy { it.oStart }
+            val (newIds, newPictures) = try {
+                rederive(buffer.originalText, buffer.asCharSequence(), changes)
+            } catch (e: IllegalStateException) {
+                buffer.revertAllChanges()
+                throw e
+            }
+            pictures = newPictures
+            ids = newIds
+        } finally {
+            stagedText.clear()
+            stagedPictures.clear()
+        }
     }
 
-    /**
-     * Gives the next marker line of [type] that an edit inserts the id [id] and record [ref].
-     * The insert-picture command calls this just before inserting the marker, since the field
-     * itself cannot carry which record a marker char stands for.
-     */
-    fun stagePicture(id: String, type: BlockType, ref: String?) {
-        require(Markers.isPictureType(type)) { "not a picture type: $type" }
-        require(id !in ids) { "picture $id is already shown" }
-        detached.remove(id)
-        detached.addFirst(id)
-        pictures[id] = PictureInfo(type, ref)
-    }
-
-    private fun rederive(old: CharSequence, new: CharSequence, changes: List<Change>) {
+    private fun rederive(
+        old: CharSequence,
+        new: CharSequence,
+        changes: List<Change>,
+    ): Pair<List<String>, Map<String, PictureInfo>> {
         val oldLines = lineRanges(old)
         check(oldLines.size == ids.size) {
             "EditorModel out of sync before an edit: ${oldLines.size} lines, ${ids.size} ids"
         }
         val newLines = lineRanges(new)
-        // The last line starting at or before offset.
-        fun lineOf(offset: Int): Int {
-            var lo = 0
-            var hi = oldLines.size - 1
-            while (lo < hi) {
-                val mid = (lo + hi + 1) / 2
-                if (oldLines[mid].start <= offset) lo = mid else hi = mid - 1
-            }
-            return lo
-        }
+        val shown = pictures
+        fun inOld(x: Int) = changes.any { it.oStart <= x && x < it.oEnd }
+        fun inserted(x: Int) = changes.any { it.nStart <= x && x < it.nEnd }
+        fun toNew(x: Int) = x + changes.filter { it.oEnd <= x }.sumOf { it.delta }
+        fun isPictureLine(k: Int) = shown[ids[k]] != null && pictureTypeOf(old, oldLines[k]) != null
 
         // Group changes into runs of old lines they touch. A change [a, b) touches the lines
         // holding a and b, so deleting a line break touches both lines it joined.
         val regions = mutableListOf<Region>()
         for (c in changes) {
-            val first = lineOf(c.oStart)
-            val last = lineOf(c.oEnd)
+            val first = lineOf(oldLines, c.oStart)
+            val last = lineOf(oldLines, c.oEnd)
             val prev = regions.lastOrNull()
             if (prev != null && first <= prev.last) {
                 prev.last = maxOf(prev.last, last)
@@ -246,71 +311,101 @@ class EditorModel(initial: BlockDocument) {
             }
         }
 
-        // Pictures in touched lines: is their marker char deleted, or does it survive (and where)?
-        val leaving = mutableListOf<Pair<Int, String>>() // old line, id
-        val survivors = LinkedHashMap<Int, Pair<Int, String>>() // new offset -> old line, id
-        for (r in regions) for (k in r.first..r.last) {
-            val id = ids[k]
-            if (pictures[id] == null || pictureTypeOf(old, oldLines[k]) == null) continue
-            val at = oldLines[k].start
-            if (changes.any { it.oStart <= at && at < it.oEnd }) {
-                leaving += k to id
-            } else {
-                survivors[at + changes.filter { it.oEnd <= at }.sumOf { it.delta }] = k to id
-            }
-        }
-
-        val out = ArrayList<String>(newLines.size)
-        val pending = mutableListOf<Pair<Int, BlockType>>() // index in out, marker type
+        val out = arrayOfNulls<String>(newLines.size)
+        val newPictures = LinkedHashMap<String, PictureInfo>()
+        val removed = mutableListOf<String>() // pictures leaving in this edit, in document order
+        val pending = mutableListOf<Pair<Int, BlockType>>() // new line, type of its inserted marker
         var oldLine = 0
+        var newLine = 0
         var shift = 0
+        fun keep(k: Int) {
+            out[newLine] = ids[k]
+            shown[ids[k]]?.let { newPictures[ids[k]] = it }
+            newLine++
+        }
         for (r in regions) {
-            while (oldLine < r.first) out += ids[oldLine++]
-            val end = oldLines[r.last].end + shift + r.delta
-            var textId: String? = (r.first..r.last).map { ids[it] }.firstOrNull { pictures[it] == null }
-            while (true) {
-                val line = newLines[out.size]
-                val pictureType = pictureTypeOf(new, line)
-                if (pictureType != null) {
-                    val survivor = survivors.remove(line.start)
-                    if (survivor != null) {
-                        out += survivor.second
-                    } else {
-                        pending += out.size to pictureType
-                        out += ""
-                    }
+            while (oldLine < r.first) keep(oldLine++)
+            val nf = newLine
+            val nl = lineOf(newLines, oldLines[r.last].end + shift + r.delta)
+            val region = nf..nl
+
+            // Pictures: an untouched marker keeps its id if it is still alone on a line.
+            for (k in r.first..r.last) {
+                if (!isPictureLine(k)) continue
+                val at = oldLines[k].start
+                val j = if (inOld(at)) -1 else lineOf(newLines, toNew(at))
+                if (j >= 0 && pictureTypeOf(new, newLines[j]) != null) {
+                    out[j] = ids[k]
+                    newPictures[ids[k]] = shown.getValue(ids[k])
                 } else {
-                    out += textId ?: BlockIds.random()
-                    textId = null
+                    removed += ids[k]
                 }
-                if (line.end >= end) break
             }
+            for (j in region) {
+                if (out[j] != null) continue
+                val type = pictureTypeOf(new, newLines[j]) ?: continue
+                if (inserted(newLines[j].start)) pending += j to type
+            }
+            val isPending = pending.map { it.first }.toSet()
+            fun free(j: Int) = out[j] == null && j !in isPending
+
+            // Text: the id follows the line's first surviving non-marker char.
+            val orphans = mutableListOf<Int>()
+            for (k in r.first..r.last) {
+                if (isPictureLine(k)) continue
+                val line = oldLines[k]
+                val x = (line.start until line.end).firstOrNull { !Markers.isPrivateUse(old[it]) && !inOld(it) }
+                if (x == null) {
+                    orphans += k
+                    continue
+                }
+                val j = lineOf(newLines, toNew(x))
+                if (free(j)) out[j] = ids[k] // else: joined into a line that already has an id
+            }
+            for (k in orphans) region.firstOrNull { free(it) }?.let { out[it] = ids[k] }
+            for (j in region) if (free(j)) out[j] = stagedText.removeFirstOrNull() ?: BlockIds.random()
+
+            newLine = nl + 1
             oldLine = r.last + 1
             shift += r.delta
         }
-        while (oldLine < ids.size) out += ids[oldLine++]
-        check(out.size == newLines.size) { "id re-derivation produced ${out.size} ids for ${newLines.size} lines" }
+        while (oldLine < ids.size) keep(oldLine++)
+        check(newLine == newLines.size) { "id re-derivation covered $newLine of ${newLines.size} lines" }
 
-        // A surviving marker that is no longer alone on its line has left as a picture too.
-        leaving += survivors.values
-        detached.addAll(0, leaving.sortedBy { it.first }.map { it.second })
-        for ((index, type) in pending) {
-            val reused = detached.firstOrNull { pictures[it]?.type == type }
-            out[index] = if (reused != null) {
-                detached.remove(reused)
-                reused
-            } else {
-                // A marker nobody staged: keep it a picture so nothing is lost, with no record.
-                BlockIds.random().also { pictures[it] = PictureInfo(type, null) }
+        for ((j, type) in pending) {
+            val staged = stagedPictures.firstOrNull { it.second.type == type }
+            if (staged != null) {
+                stagedPictures.remove(staged)
+                out[j] = staged.first
+                newPictures[staged.first] = staged.second
+                continue
             }
+            val moved = removed.firstOrNull { shown.getValue(it).type == type }
+                ?: throw IllegalStateException(
+                    "a ${type.wire} marker was inserted with no staged id; stage it with stagePicture first",
+                )
+            removed.remove(moved)
+            out[j] = moved
+            newPictures[moved] = shown.getValue(moved)
         }
 
-        // Belt and braces: the rules above cannot produce a duplicate, but one would desync the
-        // editor from the saved doc, so never let it through.
-        val seen = HashSet<String>()
-        for (i in out.indices) if (!seen.add(out[i])) out[i] = BlockIds.random()
-        ids = out
+        val result = out.map { it!! }
+        check(result.size == result.toSet().size) { "duplicate block ids after an edit: $result" }
+        return result to newPictures
     }
+}
+
+private fun nameId(name: String) = NameUuid.v3(name.encodeToByteArray())
+
+/** The index of the last line of [lines] starting at or before [offset]. */
+private fun lineOf(lines: List<Line>, offset: Int): Int {
+    var lo = 0
+    var hi = lines.size - 1
+    while (lo < hi) {
+        val mid = (lo + hi + 1) / 2
+        if (lines[mid].start <= offset) lo = mid else hi = mid - 1
+    }
+    return lo
 }
 
 private class PictureInfo(val type: BlockType, val ref: String?)

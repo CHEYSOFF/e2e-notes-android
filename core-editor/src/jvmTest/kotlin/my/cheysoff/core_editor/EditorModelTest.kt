@@ -2,6 +2,7 @@ package my.cheysoff.core_editor
 
 import androidx.compose.foundation.text.input.delete
 import androidx.compose.foundation.text.input.insert
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontWeight
 import my.cheysoff.core_blocks.Block
@@ -9,10 +10,12 @@ import my.cheysoff.core_blocks.BlockDocument
 import my.cheysoff.core_blocks.BlockType
 import my.cheysoff.core_blocks.InlineStyle
 import my.cheysoff.core_blocks.StyleSpan
+import my.cheysoff.core_domain.sync.NameUuid
 import kotlin.random.Random
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
@@ -62,8 +65,8 @@ class EditorModelTest {
         val model = EditorModel(original)
 
         assertEquals(
-            "Title\nplain bold under-strike\nbullet\nnumber\ntodo\ndone\n" +
-                "\n\n",
+            "\uE011Title\nplain bold under-strike\n\uE002bullet\n\uE003number\n\uE000todo\n\uE001done\n" +
+                "\uE004\n\uE005\n\uE013",
             model.text(),
         )
         assertEquals(original.visible().map { it.id }, model.ids)
@@ -108,12 +111,14 @@ class EditorModelTest {
     @Test
     fun `a picture keeps its id when cut and pasted elsewhere`() {
         val model = EditorModel(doc(p("a", "one"), pic("r1"), p("b", "two")))
-        assertEquals("one\n\ntwo", model.text())
+        assertEquals("one\n\uE004\ntwo", model.text())
         // Cut: the picture line and the break before it.
         model.edit { delete(3, 5) }
         assertEquals(listOf("a", "b"), model.ids)
-        // Paste at the end, as a separate edit.
-        model.edit { insert(length, "\n") }
+        // Paste at the end, as a separate edit. Cross-edit identity is the clipboard's job: it
+        // remembers what it cut and stages it.
+        model.stagePicture("pic:r1", BlockType.PICTURE, "r1")
+        model.edit { insert(length, "\n\uE004") }
         assertEquals(listOf("a", "b", "pic:r1"), model.ids)
         val last = model.blocks().last()
         assertEquals(BlockType.PICTURE, last.type)
@@ -162,7 +167,7 @@ class EditorModelTest {
     @Test
     fun `private-use characters in block text are stripped on load`() {
         val model = EditorModel(
-            doc(p("a", "xyz", StyleSpan(2, 5, InlineStyle.BOLD)), p("b", "next")),
+            doc(p("a", "x\uE004y\uF8FFz", StyleSpan(2, 5, InlineStyle.BOLD)), p("b", "next")),
         )
         assertEquals("xyz\nnext", model.text())
         assertEquals(listOf("a", "b"), model.ids)
@@ -181,7 +186,7 @@ class EditorModelTest {
                 p("z", "end"),
             ),
         )
-        assertEquals("ab\ncd\n\nend", model.text())
+        assertEquals("\uE001ab\ncd\n\nend", model.text())
         assertEquals("c", model.ids[0])
         assertEquals("z", model.ids[3])
         model.assertConsistent()
@@ -222,10 +227,169 @@ class EditorModelTest {
             ),
         )
         model.assertConsistent()
-        assertEquals("one\ntwo\n", model.text(), "a picture shown twice is one record, kept once")
+        assertEquals("one\ntwo\n\uE004", model.text(), "a picture shown twice is one record, kept once")
         assertEquals("a", model.ids[0])
+        assertEquals(NameUuid.v3("a/dup/1".encodeToByteArray()), model.ids[1])
         assertEquals("pic:r1", model.ids[2])
     }
+
+    @Test
+    fun `ids minted on load are name-based so two devices agree`() {
+        val d = doc(p("x", "one\ntwo\nthree"))
+        val a = EditorModel(d)
+        val b = EditorModel(d)
+        assertEquals(a.ids, b.ids)
+        assertEquals(
+            listOf("x", NameUuid.v3("x/line/1".encodeToByteArray()), NameUuid.v3("x/line/2".encodeToByteArray())),
+            a.ids,
+        )
+        assertEquals(listOf(NameUuid.v3("empty-document".encodeToByteArray())), EditorModel(BlockDocument(emptyList())).ids)
+    }
+
+    // --- Ids follow the text (fix round 1, ruling 1) -----------------------------------------
+
+    @Test
+    fun `Enter at the start of a paragraph keeps the id on the text`() {
+        val model = EditorModel(doc(p("a", "hello"), p("b", "world")))
+        model.edit { insert(6, "\n") }
+        assertEquals("hello\n\nworld", model.text())
+        assertEquals("a", model.ids[0])
+        assertEquals("b", model.ids[2])
+        assertFalse(model.ids[1] in setOf("a", "b"))
+    }
+
+    @Test
+    fun `Enter at the start of a checklist item keeps the id on the item`() {
+        val model = EditorModel(doc(Block("c", BlockType.CHECK, "todo")))
+        model.edit { insert(0, "\n") }
+        assertEquals("\n\uE000todo", model.text())
+        assertEquals("c", model.ids[1])
+        assertEquals(BlockType.CHECK, model.blocks()[1].type)
+    }
+
+    @Test
+    fun `an IME replacement across a line break keeps both ids`() {
+        val model = EditorModel(doc(p("a", "hello"), p("b", "world")))
+        model.edit { replace(3, 9, "LO\nWOR") }
+        assertEquals("helLO\nWORld", model.text())
+        assertEquals(listOf("a", "b"), model.ids)
+    }
+
+    @Test
+    fun `replacing a whole line's text keeps its id`() {
+        val model = EditorModel(doc(p("a", "hello"), p("b", "world")))
+        model.edit { replace(0, 5, "bye") }
+        assertEquals(listOf("a", "b"), model.ids)
+    }
+
+    @Test
+    fun `deleting a whole line hands nothing of it to the next`() {
+        val model = EditorModel(doc(p("a", "hello"), p("b", "world")))
+        model.edit { delete(0, 6) }
+        assertEquals(listOf("b"), model.ids)
+    }
+
+    // --- Pictures: staged ids win (ruling 2) -------------------------------------------------
+
+    @Test
+    fun `a staged id wins over a picture removed in the same edit`() {
+        val model = EditorModel(doc(p("a", "one"), pic("r1")))
+        model.stagePicture("pic:r2", BlockType.PICTURE, "r2")
+        model.edit { replace(4, 5, "\uE004") } // delete pic:r1's marker, insert a new one
+        assertEquals(listOf("a", "pic:r2"), model.ids)
+        assertEquals("r2", model.blocks()[1].ref)
+        assertEquals(mapOf("pic:r2" to "r2"), model.refs)
+    }
+
+    @Test
+    fun `a drawing never takes a picture id`() {
+        val model = EditorModel(doc(p("a", "one"), pic("r1")))
+        // Picture removed and a drawing marker inserted in one edit: not a move.
+        assertFailsWith<IllegalStateException> { model.edit { replace(4, 5, "\uE005") } }
+        model.stagePicture("pic:r2", BlockType.PICTURE, "r2")
+        model.stagePicture("drw:r3", BlockType.DRAWING, "r3")
+        model.edit { insert(length, "\n\uE005\n\uE004") }
+        assertEquals(listOf("a", "pic:r1", "drw:r3", "pic:r2"), model.ids)
+        assertEquals(
+            listOf(BlockType.PARAGRAPH, BlockType.PICTURE, BlockType.DRAWING, BlockType.PICTURE),
+            model.blocks().map { it.type },
+        )
+    }
+
+    @Test
+    fun `an unstaged marker insert throws and leaves text and ids alone`() {
+        val model = EditorModel(doc(p("a", "one")))
+        assertFailsWith<IllegalStateException> { model.edit { insert(length, "\n\uE004") } }
+        assertEquals("one", model.text())
+        assertEquals(listOf("a"), model.ids)
+        // A staged id lasts one edit only.
+        model.stagePicture("pic:r1", BlockType.PICTURE, "r1")
+        model.edit { insert(0, "x") }
+        assertFailsWith<IllegalStateException> { model.edit { insert(length, "\n\uE004") } }
+    }
+
+    @Test
+    fun `a picture cut and pasted without staging does not come back`() {
+        val model = EditorModel(doc(p("a", "one"), pic("r1"), p("b", "two")))
+        model.edit { delete(3, 5) }
+        assertFailsWith<IllegalStateException> { model.edit { insert(length, "\n\uE004") } }
+        assertTrue(model.refs.isEmpty())
+    }
+
+    // --- Chosen ids for inserted text lines (ruling 3) ---------------------------------------
+
+    @Test
+    fun `a programmatic insert of a text line with a chosen id keeps that id`() {
+        val model = EditorModel(doc(p("a", "one"), p("c", "three")))
+        model.stageText("b")
+        model.edit { insert(3, "\ntwo") }
+        assertEquals(listOf("a", "b", "c"), model.ids)
+        assertEquals(listOf("a" to "one", "b" to "two", "c" to "three"), model.blocks().map { it.id to it.text })
+        // Inserted before a line, the chosen id still goes to the new line, not the old one.
+        model.stageText("z")
+        model.edit { insert(0, "zero\n") }
+        assertEquals(listOf("z", "a", "b", "c"), model.ids)
+        assertFailsWith<IllegalArgumentException> { model.stageText("a") }
+    }
+
+    // --- Reading back (fix round 1, item 6) --------------------------------------------------
+
+    @Test
+    fun `a style spanning several lines is read back per line`() {
+        val model = EditorModel(doc(p("a", "ab"), Block("b", BlockType.BULLET, "cd"), p("c", "ef")))
+        model.edit { addStyle(SpanStyle(fontWeight = FontWeight.Bold), 1, 8) } // "b\n<bullet>cd\ne"
+        assertEquals(
+            listOf(
+                listOf(StyleSpan(1, 2, InlineStyle.BOLD)),
+                listOf(StyleSpan(0, 2, InlineStyle.BOLD)),
+                listOf(StyleSpan(0, 1, InlineStyle.BOLD)),
+            ),
+            model.blocks().map { it.spans },
+        )
+    }
+
+    @Test
+    fun `typing next to a marker never puts a private-use char in block text`() {
+        val model = EditorModel(doc(Block("c", BlockType.CHECK, "todo"), pic("r1")))
+        model.edit { insert(0, "x") } // before the checkbox marker
+        model.edit { insert(length, "y") } // after the picture marker
+        val blocks = model.blocks()
+        blocks.forEach { b -> assertTrue(b.text.none(Markers::isPrivateUse), "private-use char in ${b.text}") }
+        assertEquals(listOf("xtodo", "y"), blocks.map { it.text })
+        assertTrue(model.refs.isEmpty(), "a marker no longer alone is no longer a picture")
+    }
+
+    @Test
+    fun `ids are snapshot state and roll back with a discarded snapshot`() {
+        val model = EditorModel(doc(p("a", "hello")))
+        val snapshot = Snapshot.takeMutableSnapshot()
+        snapshot.enter { model.edit { insert(2, "\n") } }
+        assertEquals(listOf("a"), model.ids, "not visible outside the snapshot before apply")
+        snapshot.dispose()
+        assertEquals(listOf("a"), model.ids)
+        assertEquals("hello", model.text())
+    }
+
 
     // --- Picture edges and programmatic inserts ----------------------------------------------
 
@@ -233,7 +397,7 @@ class EditorModelTest {
     fun `Enter at the start of a picture line leaves the id on the picture`() {
         val model = EditorModel(doc(p("a", "one"), pic("r1")))
         model.edit { insert(4, "\n") }
-        assertEquals("one\n\n", model.text())
+        assertEquals("one\n\n\uE004", model.text())
         assertEquals("a", model.ids[0])
         assertEquals("pic:r1", model.ids[2])
         assertNotEquals("pic:r1", model.ids[1])
@@ -246,9 +410,9 @@ class EditorModelTest {
         // Remove "\n<pic>" after "one", put "<pic>\n" before "three".
         model.edit {
             delete(3, 5)
-            insert(8, "\n")
+            insert(8, "\uE004\n")
         }
-        assertEquals("one\ntwo\n\nthree", model.text())
+        assertEquals("one\ntwo\n\uE004\nthree", model.text())
         assertEquals(listOf("a", "b", "pic:r1", "c"), model.ids)
     }
 
@@ -256,7 +420,8 @@ class EditorModelTest {
     fun `a staged picture gives a new marker line its id and record`() {
         val model = EditorModel(doc(p("a", "one")))
         model.stagePicture("pic:r9", BlockType.PICTURE, "r9")
-        model.edit { insert(length, "\n") }
+        assertFailsWith<IllegalArgumentException> { model.stagePicture("a", BlockType.PICTURE, "r0") }
+        model.edit { insert(length, "\n\uE004") }
         assertEquals(listOf("a", "pic:r9"), model.ids)
         assertEquals("r9", model.blocks()[1].ref)
     }
@@ -288,7 +453,7 @@ class EditorModelTest {
             model.assertConsistent()
             val text = model.text().split('\n')
             model.ids.forEachIndexed { i, id ->
-                if (id.startsWith("pic:")) assertEquals("", text[i], "picture id on a non-picture line")
+                if (id.startsWith("pic:")) assertEquals("\uE004", text[i], "picture id on a non-picture line")
             }
         }
     }
