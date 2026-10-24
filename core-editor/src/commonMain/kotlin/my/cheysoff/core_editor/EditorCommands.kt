@@ -17,6 +17,9 @@ import my.cheysoff.core_blocks.StyleSpan
  * gives an unstaged new text line a fresh id, which is what a new block should have. Staging is
  * for lines that must come back under a chosen id. Picture markers are always staged, since the
  * field cannot say which record a marker stands for.
+ *
+ * Each command is a local change, so it is recorded in the model's [BlockHistory], if it has one,
+ * as one entry ([localEdit]). A command that changes nothing records nothing.
  */
 object EditorCommands {
 
@@ -47,7 +50,7 @@ object EditorCommands {
      */
     fun setType(model: EditorModel, type: BlockType) {
         require(!Markers.isPictureType(type)) { "setType cannot make a $type; use insertPicture" }
-        model.edit {
+        localEdit(model) {
             val text = asCharSequence()
             val lines = lineRanges(text)
             val sel = selection
@@ -55,7 +58,7 @@ object EditorCommands {
             var last = lineOf(lines, sel.max)
             if (last > first && lines[last].start == sel.max) last--
             val targets = (first..last).filter { pictureTypeOf(text, lines[it]) == null }
-            if (targets.isEmpty()) return@edit
+            if (targets.isEmpty()) return@localEdit
             val newType =
                 if (targets.all { lineType(text, lines[it]) == type }) BlockType.PARAGRAPH else type
             var start = sel.start
@@ -86,7 +89,7 @@ object EditorCommands {
             Markers.CHECK_DONE -> Markers.CHECK_OPEN
             else -> return
         }
-        model.edit {
+        localEdit(model) {
             val sel = selection
             replace(at, at + 1, flipped.toString())
             selection = sel
@@ -114,7 +117,7 @@ object EditorCommands {
         require(blockId.startsWith(prefix) && blockId.length > prefix.length) { "$blockId is not a $kind block id" }
         val marker = Markers.of(kind, done = false)!!
         model.stagePicture(blockId, kind, blockId.removePrefix(prefix))
-        model.edit {
+        localEdit(model) {
             val sel = selection
             var at = sel.min
             if (!sel.collapsed) {
@@ -160,7 +163,7 @@ object EditorCommands {
         if (toGap == from || toGap == from + 1) return
         val line = lines[from]
         val marker = text[line.start]
-        model.edit {
+        localEdit(model) {
             if (from < lines.lastIndex) replace(line.start, line.end + 1, "") else replace(line.start - 1, line.end, "")
             val rest = lineRanges(asCharSequence())
             val target = if (toGap > from) toGap - 1 else toGap
@@ -190,7 +193,7 @@ object EditorCommands {
     ) {
         val sel = model.state.selection
         if (sel.collapsed) return
-        model.edit {
+        localEdit(model) {
             val text = asCharSequence()
             val lines = lineRanges(text)
             val parts = lines.map { textPart(text, it) }
@@ -199,7 +202,7 @@ object EditorCommands {
                 val b = minOf(p.last + 1, sel.max)
                 if (a < b) a until b else null
             }
-            if (pieces.isEmpty()) return@edit
+            if (pieces.isEmpty()) return@localEdit
             val placed = getSpanStyles(TextRange(0, length))
                 .map { Triple(it, stylesOf(it.spanStyle), it.textRange) }
                 .filter { it.second.isNotEmpty() }
@@ -222,6 +225,17 @@ object EditorCommands {
             }
             out.forEach { addStyle(it.style, it.start, it.end) }
         }
+    }
+
+    /**
+     * [EditorModel.edit], recorded in [model]'s history (if any) as one local change. Every
+     * command edits through here, so a toolbar press is exactly one undo step.
+     */
+    private fun localEdit(model: EditorModel, block: TextFieldBuffer.() -> Unit) {
+        val history = model.history
+        val before = if (history != null) model.blocks() else null
+        model.edit(block)
+        if (history != null && before != null) history.recordLocal(before, model.blocks())
     }
 
     /**

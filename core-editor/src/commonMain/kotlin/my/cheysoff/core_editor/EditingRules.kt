@@ -46,12 +46,20 @@ import androidx.compose.ui.text.TextRange
  * Deleting an item's own marker (Backspace with the caret right after the checkbox) needs no rule.
  * The line is simply a paragraph from then on, and [EditorModel.onEdited] keeps its id on the text.
  *
- * Finally [EditorModel.onEdited] runs, last, so the ids see the text as the rules left it.
+ * Finally [EditorModel.onEdited] runs, last, so the ids see the text as the rules left it. Then,
+ * if the model has a [BlockHistory], the edit is recorded there with the blocks before and after
+ * it; this transformation is the only place a user edit can be seen whole. The field's own undo
+ * history is cleared first thing, so it never holds more than the edit being made (see
+ * [BlockHistory] for why it must not be used).
  */
 @OptIn(ExperimentalFoundationApi::class) // TextFieldBuffer.changes
 class EditingRules(private val model: EditorModel) : InputTransformation {
 
     override fun TextFieldBuffer.transformInput() {
+        model.state.undoState.clearHistory()
+        val history = model.history
+        // The field's state still holds the text before this edit while the transformation runs.
+        val before = if (history != null) model.blocks() else null
         val caret = Caret(selection)
         stripPrivateUse(caret)
         edits().singleOrNull()?.let { if (!enter(it, caret)) joinAtPicture(it, caret) }
@@ -59,6 +67,9 @@ class EditingRules(private val model: EditorModel) : InputTransformation {
         dropStrayMarkers(caret)
         selection = caret.range
         model.onEdited(this, fromUser = true)
+        if (history != null && before != null && changes.changeCount > 0) {
+            history.recordLocal(before, model.blocksOf(this))
+        }
     }
 
     private fun TextFieldBuffer.stripPrivateUse(caret: Caret) {

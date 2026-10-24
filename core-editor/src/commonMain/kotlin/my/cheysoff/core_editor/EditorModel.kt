@@ -75,6 +75,14 @@ class EditorModel(initial: BlockDocument) {
     /** The blocks as loaded, so [blocks] can return unchanged ones untouched, `pos` and clocks included. */
     private val loaded = HashMap<String, Block>()
 
+    /**
+     * The undo history attached to this model, if any. [EditingRules] and [EditorCommands] find it
+     * here to report each local change, so a command or a field set up without passing the
+     * history along cannot silently skip recording. [EditorModel.edit] itself never records: remote
+     * apply and undo/redo edit through it too, and neither may become an undo entry.
+     */
+    internal var history: BlockHistory? = null
+
     init {
         load(initial)
     }
@@ -85,6 +93,7 @@ class EditorModel(initial: BlockDocument) {
      */
     @OptIn(ExperimentalFoundationApi::class) // undoState: cleared so the built-in undo cannot step back past the load
     fun load(doc: BlockDocument) {
+        history?.clear()
         stagedText.clear()
         stagedPictures.clear()
         loaded.clear()
@@ -149,8 +158,20 @@ class EditorModel(initial: BlockDocument) {
      * reads as an empty paragraph: there is no record to show, and inventing a picture without one
      * would save a broken block.
      */
-    fun blocks(): List<Block> {
-        val text = state.text
+    fun blocks(): List<Block> = read(state.text) { range ->
+        state.textStyles.getSpanStyles(range).map { PlacedStyle(it.item, it.start, it.end) }
+    }
+
+    /**
+     * [blocks] as [buffer] holds them, for the moment between [onEdited] and the commit of a user
+     * edit, when [ids] already describe the buffer but [state] still shows the old text. The undo
+     * history needs the "after" of an edit right there, inside the InputTransformation.
+     */
+    internal fun blocksOf(buffer: TextFieldBuffer): List<Block> = read(buffer.asCharSequence()) { range ->
+        with(buffer) { getSpanStyles(range).map { PlacedStyle(it.spanStyle, it.textRange.min, it.textRange.max) } }
+    }
+
+    private fun read(text: CharSequence, spanStyles: (TextRange) -> List<PlacedStyle>): List<Block> {
         val lines = lineRanges(text)
         check(lines.size == ids.size) {
             "EditorModel out of sync: ${lines.size} lines, ${ids.size} ids. Was the field edited without onEdited?"
@@ -165,10 +186,10 @@ class EditorModel(initial: BlockDocument) {
                 Block(id, picture.type, ref = picture.ref)
             } else {
                 val (plain, index) = stripPrivateUse(lineText)
-                val spans = state.textStyles.getSpanStyles(TextRange(line.start, line.end)).flatMap { r ->
+                val spans = spanStyles(TextRange(line.start, line.end)).flatMap { r ->
                     val a = r.start.coerceIn(line.start, line.end) - line.start
                     val b = r.end.coerceIn(line.start, line.end) - line.start
-                    if (a >= b) emptyList() else stylesOf(r.item).map { StyleSpan(index[a], index[b], it) }
+                    if (a >= b) emptyList() else stylesOf(r.style).map { StyleSpan(index[a], index[b], it) }
                 }
                 val textType = if (Markers.isPictureType(type)) BlockType.PARAGRAPH else type
                 Block(id, textType, plain, normalizeSpans(plain, spans), done)
@@ -191,10 +212,17 @@ class EditorModel(initial: BlockDocument) {
      * [stageText] / [stagePicture] first, exactly as many as the edit creates: a marker with no
      * id, or a staged id left unused, means the caller's idea of the edit and the edit differ, and
      * throws [IllegalStateException] after reverting the edit, so text and ids never disagree.
+     *
+     * The field's own undo history is cleared afterwards. `TextFieldState.edit` records a platform
+     * undo entry, and replaying one would change the text without [onEdited] (see [BlockHistory]).
      */
-    fun edit(block: TextFieldBuffer.() -> Unit) = state.edit {
-        block()
-        onEdited(this, fromUser = false)
+    @OptIn(ExperimentalFoundationApi::class) // undoState
+    fun edit(block: TextFieldBuffer.() -> Unit) {
+        state.edit {
+            block()
+            onEdited(this, fromUser = false)
+        }
+        state.undoState.clearHistory()
     }
 
     /**
