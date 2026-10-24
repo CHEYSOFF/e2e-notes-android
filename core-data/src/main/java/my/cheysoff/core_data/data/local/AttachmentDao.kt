@@ -159,6 +159,15 @@ interface AttachmentDao {
     suspend fun activeAttachmentsForNote(noteId: String): List<AttachmentClockRow>
 
     /**
+     * Every attachment under [noteId], live AND trashed, with its tombstone flag and clocks --
+     * what `RoomNotesRepository.saveNote` reconciles a BLOCKS body against. Trashed ones are
+     * included because a block that references one again (Undo) must bring it back. A projection,
+     * not [AttachmentEntity], for the reason [activeAttachmentsForNote] gives.
+     */
+    @Query("SELECT uuid, isDeleted, hlcMs, hlcCounter, hlcNode, fieldHlc FROM attachments WHERE noteId = :noteId")
+    suspend fun attachmentStatesForNote(noteId: String): List<AttachmentStateRow>
+
+    /**
      * Sends one attachment to Trash. Mirrors `NoteDao.softDeleteNote` exactly, `isDeleted = 0`
      * guard included: a second delete of an already-trashed attachment must not re-stamp
      * `deletedAt` or mint a clock for a write that changed nothing.

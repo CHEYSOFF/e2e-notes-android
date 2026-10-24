@@ -1,10 +1,14 @@
 package my.cheysoff.core_data.data
 
+import android.util.Log
 import androidx.room.withTransaction
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import my.cheysoff.core_blocks.BlockDocument
+import my.cheysoff.core_blocks.BlocksSave
+import my.cheysoff.core_blocks.PictureLifecycle
 import my.cheysoff.core_data.data.local.AttachmentDao
 import my.cheysoff.core_data.data.local.AttachmentEntity
 import my.cheysoff.core_data.data.local.FolderDao
@@ -21,6 +25,7 @@ import my.cheysoff.core_domain.model.AttachmentData
 import my.cheysoff.core_domain.model.AttachmentPreview
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.Note
+import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.core_domain.model.NotesSortOrder
 import my.cheysoff.core_domain.model.TrashPolicy
 import my.cheysoff.core_domain.repository.AttachmentsRepository
@@ -165,6 +170,13 @@ class RoomNotesRepository @Inject constructor(
         return noteDao.getNoteById(id).map { it?.toDomain() }
     }
 
+    /**
+     * A BLOCKS note's body is stamped per block against the stored one with this save's clock, its
+     * checklist field is cleared, and its pictures and drawings follow the saved blocks -- see
+     * [blocksBody] and [reconcilePictures]. All of it is one transaction. The desktop's
+     * `RecordNotesRepository.saveNote` does the same, through the same `BlocksSave` and
+     * `PictureLifecycle`, so the two devices store the same body for the same save.
+     */
     override suspend fun saveNote(note: Note) {
         val stamp = stamp()
         // The upsert itself is still one statement and still preserves/initializes createdAt; the
@@ -172,20 +184,98 @@ class RoomNotesRepository @Inject constructor(
         // be able to see a different row than the write updates.
         database.withTransaction {
             val prior = noteDao.noteRow(note.id)
+            val body = if (note.contentFormat == NoteContentFormat.BLOCKS) blocksBody(prior, note, stamp) else null
+            val stored = body?.note ?: note
             noteDao.upsertNote(
-                id = note.id,
-                title = note.title,
-                content = note.content,
-                contentFormat = note.contentFormat.storageValue,
-                checklist = note.checklist,
-                isPinned = note.isPinned,
-                folderId = note.folderId,
+                id = stored.id,
+                title = stored.title,
+                content = stored.content,
+                // A kept body keeps its stored format string verbatim, not a round trip through the
+                // enum, which would turn a format this build does not know into PLAIN.
+                contentFormat = body?.keptFormat ?: stored.contentFormat.storageValue,
+                checklist = stored.checklist,
+                isPinned = stored.isPinned,
+                folderId = stored.folderId,
                 timestamp = stamp.wallMs,
                 hlcMs = stamp.hlc.ms,
                 hlcCounter = stamp.hlc.counter,
                 hlcNode = stamp.hlc.node,
-                fieldHlc = noteFieldHlc(prior?.clocks(), savedNoteFields(prior, note), stamp),
+                fieldHlc = noteFieldHlc(prior?.clocks(), savedNoteFields(prior, stored, body?.keptFormat), stamp),
             )
+            body?.saved?.let { reconcilePictures(note.id, it, stamp) }
+        }
+    }
+
+    /**
+     * What a BLOCKS save stores, decided by `BlocksSave` (shared with the desktop so both decide
+     * alike): the stamped body and an empty checklist, whose items `OpenDocument` already put into
+     * the body. [BlocksBody.saved] is null when the stored body is kept instead -- it is a BLOCKS
+     * body this build cannot read -- and then the checklist is kept too, since nothing else holds
+     * its items, and no picture is reconciled against a document that was not written.
+     */
+    private fun blocksBody(prior: NoteEntity?, note: Note, stamp: SyncStamp): BlocksBody =
+        when (val out = BlocksSave.prepare(
+            priorFormat = prior?.let { NoteContentFormat.fromStorage(it.contentFormat) },
+            priorContent = prior?.content.orEmpty(),
+            incoming = note.content,
+            clock = stamp.hlc,
+        )) {
+            is BlocksSave.Write -> BlocksBody(note.copy(content = out.content, checklist = ""), out.doc, keptFormat = null)
+            is BlocksSave.Keep -> {
+                // Keep is only ever returned when a row exists; see BlocksSave.prepare.
+                val kept = prior!!
+                Log.w(TAG, "Not overwriting the body of note ${note.id}: ${out.reason}")
+                BlocksBody(note.copy(content = kept.content, checklist = kept.checklist), null, kept.contentFormat)
+            }
+        }
+
+    /** [blocksBody]'s answer. [keptFormat] is the stored format string when the body is kept. */
+    private class BlocksBody(val note: Note, val saved: BlockDocument?, val keptFormat: String?)
+
+    /**
+     * Soft-deletes the note's pictures and drawings that [saved] no longer shows, and undeletes the
+     * ones it shows again -- `PictureLifecycle` decides which. Inside [saveNote]'s transaction, so
+     * the body and the records it refers to can never be seen out of step.
+     *
+     * Through the same statements [deleteAttachment], `RoomSketchesRepository.deleteSketch` and
+     * [restoreNote] use, each record with its own clock from the shared generator, for the reason
+     * [deleteNote] gives: a borrowed clock lets a later restore mint below the tombstone. The
+     * tombstones share the note save's `deletedAt`, as [deleteNote]'s do -- one gesture, one
+     * instant. Walked in id order so a save is the same sequence of writes every time.
+     */
+    private suspend fun reconcilePictures(noteId: String, saved: BlockDocument, stamp: SyncStamp) {
+        val attachments = attachmentDao.attachmentStatesForNote(noteId).sortedBy { it.uuid }
+        val sketches = sketchDao.sketchesForNote(noteId).sortedBy { it.uuid }
+        val changes = PictureLifecycle.reconcileStates(
+            saved,
+            pictures = attachments.map { PictureLifecycle.RecordState(it.uuid, it.isDeleted) },
+            drawings = sketches.map { PictureLifecycle.RecordState(it.uuid, it.isDeleted) },
+        )
+        for (attachment in attachments) {
+            val own = when (attachment.uuid) {
+                in changes.delete, in changes.undelete -> stamp()
+                else -> continue
+            }
+            val fieldHlc = attachmentFieldHlc(attachment.clocks(), TOMBSTONE_FIELDS, own)
+            if (attachment.uuid in changes.delete) {
+                attachmentDao.softDeleteAttachment(
+                    attachment.uuid, stamp.wallMs, own.hlc.ms, own.hlc.counter, own.hlc.node, fieldHlc,
+                )
+            } else {
+                attachmentDao.restoreAttachment(attachment.uuid, own.hlc.ms, own.hlc.counter, own.hlc.node, fieldHlc)
+            }
+        }
+        for (sketch in sketches) {
+            val own = when (sketch.uuid) {
+                in changes.delete, in changes.undelete -> stamp()
+                else -> continue
+            }
+            val fieldHlc = sketchFieldHlc(sketch.clocks(), TOMBSTONE_FIELDS, own)
+            if (sketch.uuid in changes.delete) {
+                sketchDao.softDeleteSketch(sketch.uuid, stamp.wallMs, own.hlc.ms, own.hlc.counter, own.hlc.node, fieldHlc)
+            } else {
+                sketchDao.restoreSketch(sketch.uuid, own.hlc.ms, own.hlc.counter, own.hlc.node, fieldHlc)
+            }
         }
     }
 
@@ -221,8 +311,11 @@ class RoomNotesRepository @Inject constructor(
      *
      * `updatedAt` is always in the result. The statement sets it to now unconditionally, and unlike
      * the other five that genuinely is a new value every time.
+     *
+     * [storedFormat] is the format string actually being written when it is not
+     * `note.contentFormat`'s -- a kept BLOCKS body, see [blocksBody].
      */
-    private fun savedNoteFields(prior: NoteEntity?, note: Note): Set<String> {
+    private fun savedNoteFields(prior: NoteEntity?, note: Note, storedFormat: String? = null): Set<String> {
         // A row that does not exist yet has every field at this write's clock, which
         // `FieldClocks.stamp` spells as the empty string whatever it is told; naming them all here
         // keeps the two answers from having to agree by accident.
@@ -233,7 +326,9 @@ class RoomNotesRepository @Inject constructor(
         // `content` and `contentFormat` are one value with one clock, so either changing is the
         // value changing. Comparing them separately would be the first step towards clocking them
         // separately, which both `FieldClocks` and `NoteDao.upsertNote` call silent corruption.
-        if (prior.content != note.content || prior.contentFormat != note.contentFormat.storageValue) {
+        if (prior.content != note.content ||
+            prior.contentFormat != (storedFormat ?: note.contentFormat.storageValue)
+        ) {
             touched += FieldClocks.CONTENT
         }
         if (prior.checklist != note.checklist) touched += FieldClocks.CHECKLIST
@@ -696,6 +791,8 @@ class RoomNotesRepository @Inject constructor(
     }
 
     private companion object {
+        const val TAG = "RoomNotesRepository"
+
         /**
          * The fields `upsertNote` writes.
          *

@@ -275,3 +275,22 @@ data class AttachmentClockRow(
     /** Just the clock columns — see `NoteEntity.clocks`. */
     fun clocks(): RowClock = RowClock(hlcMs, hlcCounter, hlcNode, fieldHlc)
 }
+
+/**
+ * [AttachmentClockRow] plus the tombstone flag: what `RoomNotesRepository.saveNote` reads for
+ * every attachment of a BLOCKS note, live or trashed, to decide which to soft-delete or undelete
+ * (`PictureLifecycle`). A projection for the same reason as [AttachmentClockRow]: the editor
+ * autosaves, and reading every photograph's bytes on each save to learn one boolean would be the
+ * cost of the whole save.
+ */
+data class AttachmentStateRow(
+    val uuid: String,
+    val isDeleted: Boolean,
+    val hlcMs: Long,
+    val hlcCounter: Int,
+    val hlcNode: String,
+    val fieldHlc: String,
+) {
+    /** Just the clock columns — see `NoteEntity.clocks`. */
+    fun clocks(): RowClock = RowClock(hlcMs, hlcCounter, hlcNode, fieldHlc)
+}

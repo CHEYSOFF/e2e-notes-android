@@ -16,9 +16,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import my.cheysoff.core_blocks.BlockDocument
+import my.cheysoff.core_blocks.BlocksSave
+import my.cheysoff.core_blocks.PictureLifecycle
 import my.cheysoff.core_domain.model.AttachmentData
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.Note
+import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.core_domain.model.NotesSortOrder
 import my.cheysoff.core_domain.model.SketchData
 import my.cheysoff.core_domain.model.TrashPolicy
@@ -351,13 +355,20 @@ class RecordNotesRepository private constructor(
      * the phone's statement ignores them, and for the reason its KDoc gives: callers build a [Note]
      * out of what the editor is holding, so those fields arrive at their defaults and would wipe
      * the stored values. `createdAt` is preserved unless it is the legacy 0 sentinel.
+     *
+     * A BLOCKS note's body is stamped per block against the stored one, its checklist field is
+     * cleared, and its pictures and drawings follow the saved blocks -- see [blocksBody] and
+     * [reconcilePictures]. The phone's `RoomNotesRepository.saveNote` does the same, through the
+     * same `BlocksSave` and `PictureLifecycle`.
      */
     override suspend fun saveNote(note: Note): Unit = write { snapshot ->
         val now = clock()
         val stamp = hlc.next(now)
         val existing = snapshot.notes[note.id]
+        val body = if (note.contentFormat == NoteContentFormat.BLOCKS) blocksBody(existing?.note, note, stamp) else null
+        val incoming = body?.note ?: note
         val updated = if (existing == null) {
-            note.copy(
+            incoming.copy(
                 createdAt = now,
                 updatedAt = now,
                 isFavorite = false,
@@ -366,17 +377,74 @@ class RecordNotesRepository private constructor(
             )
         } else {
             existing.note.copy(
-                title = note.title,
-                content = note.content,
-                contentFormat = note.contentFormat,
-                checklist = note.checklist,
-                isPinned = note.isPinned,
-                folderId = note.folderId,
+                title = incoming.title,
+                content = incoming.content,
+                contentFormat = incoming.contentFormat,
+                checklist = incoming.checklist,
+                isPinned = incoming.isPinned,
+                folderId = incoming.folderId,
                 updatedAt = now,
                 createdAt = if (existing.note.createdAt == 0L) now else existing.note.createdAt,
             )
         }
-        snapshot.putNote(existing, updated, stamp, savedNoteFields(existing?.note, updated))
+        val next = snapshot.putNote(existing, updated, stamp, savedNoteFields(existing?.note, updated))
+        body?.saved?.let { next.reconcilePictures(note.id, it, now) } ?: next
+    }
+
+    /**
+     * What a BLOCKS save stores -- the port of `RoomNotesRepository.blocksBody`, deciding through
+     * the same shared `BlocksSave`: the stamped body and an empty checklist, whose items
+     * `OpenDocument` already put into the body. [BlocksBody.saved] is null when the stored body is
+     * kept because it is a BLOCKS body this build cannot read; the checklist is kept with it, since
+     * nothing else holds its items, and no picture is reconciled against a document not written.
+     */
+    private fun blocksBody(prior: Note?, note: Note, stamp: Hlc): BlocksBody =
+        when (val out = BlocksSave.prepare(prior?.contentFormat, prior?.content.orEmpty(), note.content, stamp)) {
+            is BlocksSave.Write -> BlocksBody(note.copy(content = out.content, checklist = ""), out.doc)
+            is BlocksSave.Keep -> {
+                // Keep is only ever returned when a note exists; see BlocksSave.prepare.
+                val kept = prior!!
+                System.err.println("RecordNotesRepository: not overwriting the body of note ${note.id}: ${out.reason}")
+                BlocksBody(
+                    note.copy(content = kept.content, contentFormat = kept.contentFormat, checklist = kept.checklist),
+                    saved = null,
+                )
+            }
+        }
+
+    private class BlocksBody(val note: Note, val saved: BlockDocument?)
+
+    /**
+     * Soft-deletes the note's pictures and drawings that [saved] no longer shows and undeletes the
+     * ones it shows again -- the port of `RoomNotesRepository.reconcilePictures`, inside the same
+     * [write] as the note so the body and its records are never published out of step.
+     *
+     * Each record gets its own clock and a tombstone-only stamp, exactly as [deleteAttachment] and
+     * [deleteSketch] write them; `deletedAt` is the save's own instant. Walked in id order so a save
+     * is the same sequence of writes every time.
+     */
+    private fun Snapshot.reconcilePictures(noteId: String, saved: BlockDocument, now: Long): Snapshot {
+        val ownAttachments = attachments.values.filter { it.attachment.noteId == noteId }.sortedBy { it.attachment.id }
+        val ownSketches = sketches.values.filter { it.sketch.noteId == noteId }.sortedBy { it.sketch.id }
+        val changes = PictureLifecycle.reconcile(saved, ownAttachments.map { it.attachment }, ownSketches.map { it.sketch })
+        var next = this
+        for (row in ownAttachments) {
+            val id = row.attachment.id
+            if (id in changes.delete) {
+                next = next.putAttachment(row, row.attachment.copy(isDeleted = true, deletedAt = now), hlc.next(now), TOMBSTONE_FIELDS)
+            } else if (id in changes.undelete) {
+                next = next.putAttachment(row, row.attachment.copy(isDeleted = false, deletedAt = null), hlc.next(now), TOMBSTONE_FIELDS)
+            }
+        }
+        for (row in ownSketches) {
+            val id = row.sketch.id
+            if (id in changes.delete) {
+                next = next.putSketch(row, row.sketch.copy(isDeleted = true, deletedAt = now), hlc.next(now), TOMBSTONE_FIELDS)
+            } else if (id in changes.undelete) {
+                next = next.putSketch(row, row.sketch.copy(isDeleted = false, deletedAt = null), hlc.next(now), TOMBSTONE_FIELDS)
+            }
+        }
+        return next
     }
 
     /**

@@ -110,6 +110,15 @@ interface SketchDao {
     suspend fun activeSketchesForNote(noteId: String): List<SketchEntity>
 
     /**
+     * Every sketch under [noteId], live AND trashed -- what `RoomNotesRepository.saveNote`
+     * reconciles a BLOCKS body against. Trashed ones are included because a block that references
+     * one again (Undo) must bring it back. Full rows, like [activeSketchesForNote]: strokes are
+     * text, small next to a photograph.
+     */
+    @Query("SELECT * FROM sketches WHERE noteId = :noteId")
+    suspend fun sketchesForNote(noteId: String): List<SketchEntity>
+
+    /**
      * Sends one sketch to Trash. Mirrors `NoteDao.softDeleteNote` exactly, `isDeleted = 0` guard
      * included: a second delete of an already-trashed sketch must not re-stamp `deletedAt` or mint
      * a clock for a write that changed nothing.
