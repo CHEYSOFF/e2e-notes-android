@@ -101,39 +101,16 @@ class EditorModel(initial: BlockDocument) {
         val shown = LinkedHashMap<String, PictureInfo>()
         val text = StringBuilder()
         val styles = mutableListOf<PlacedStyle>()
-        val seen = HashSet<String>()
-        val dupCount = HashMap<String, Int>()
-        fun startLine() {
+        for (line in project(doc)) {
+            val b = line.block
             if (lineIds.isNotEmpty()) text.append('\n')
+            if (Markers.isPictureType(b.type)) shown[b.id] = PictureInfo(b.type, b.ref)
+            val content = lineContent(b)
+            text.append(content)
+            placeStyles(b.spans, text.length - b.text.length, styles)
+            lineIds += b.id
+            line.source?.let { loaded[b.id] = it }
         }
-        for (b in doc.visible()) {
-            if (Markers.isPictureType(b.type)) {
-                if (!seen.add(b.id)) continue
-                startLine()
-                text.append(Markers.of(b.type, false)!!)
-                lineIds += b.id
-                shown[b.id] = PictureInfo(b.type, b.ref)
-                loaded[b.id] = b
-                continue
-            }
-            val blockId = if (seen.add(b.id)) {
-                b.id.also { loaded[it] = b }
-            } else {
-                val n = (dupCount[b.id] ?: 0) + 1
-                dupCount[b.id] = n
-                nameId("${b.id}/dup/$n").also { seen += it }
-            }
-            splitText(b.text, b.spans).forEachIndexed { i, piece ->
-                val id = if (i == 0) blockId else nameId("$blockId/line/$i").also { seen += it }
-                startLine()
-                if (i == 0) Markers.of(b.type, b.done)?.let { text.append(it) }
-                val base = text.length
-                text.append(piece.text)
-                placeStyles(piece.spans, base, styles)
-                lineIds += id
-            }
-        }
-        if (lineIds.isEmpty()) lineIds += nameId("empty-document")
         state.edit {
             getSpanStyles(TextRange(0, length)).forEach { removeStyle(it) }
             getParagraphStyles(TextRange(0, length)).forEach { removeStyle(it) }
@@ -144,6 +121,47 @@ class EditorModel(initial: BlockDocument) {
         state.undoState.clearHistory()
         pictures = shown
         ids = lineIds
+    }
+
+    /**
+     * The editor lines [doc] loads as, each as the [Block] that [blocks] would read back from it,
+     * with every normalisation of loading applied (see the class doc): private-use characters
+     * stripped, text split at `\n` under name-based ids, spans normalised, duplicate ids resolved,
+     * `done` kept only on checklist items, an empty document as one empty paragraph.
+     *
+     * [load] builds the field from this, and [RemoteApply] diffs incoming documents with it, so a
+     * synced block reaches the field exactly as it would on opening the note, and a block that
+     * reads the same is recognised as unchanged.
+     */
+    internal fun project(doc: BlockDocument): List<ProjectedLine> {
+        val out = mutableListOf<ProjectedLine>()
+        val seen = HashSet<String>()
+        val dupCount = HashMap<String, Int>()
+        for (b in doc.visible()) {
+            if (Markers.isPictureType(b.type)) {
+                if (!seen.add(b.id)) continue
+                out += ProjectedLine(Block(b.id, b.type, ref = b.ref), b)
+                continue
+            }
+            val first = seen.add(b.id)
+            val blockId = if (first) {
+                b.id
+            } else {
+                val n = (dupCount[b.id] ?: 0) + 1
+                dupCount[b.id] = n
+                nameId("${b.id}/dup/$n").also { seen += it }
+            }
+            splitText(b.text, b.spans).forEachIndexed { i, piece ->
+                val line = if (i == 0) {
+                    Block(blockId, b.type, piece.text, piece.spans, done = b.type == BlockType.CHECK && b.done)
+                } else {
+                    Block(nameId("$blockId/line/$i").also { seen += it }, BlockType.PARAGRAPH, piece.text, piece.spans)
+                }
+                out += ProjectedLine(line, if (i == 0 && first) b else null)
+            }
+        }
+        if (out.isEmpty()) out += ProjectedLine(Block(nameId("empty-document"), BlockType.PARAGRAPH), null)
+        return out
     }
 
     /**
@@ -488,6 +506,9 @@ private class Derived(
 )
 
 private class PictureInfo(val type: BlockType, val ref: String?)
+
+/** One line as [EditorModel.project] makes it; [source] is the block as given, for the line that keeps its id. */
+internal class ProjectedLine(val block: Block, val source: Block?)
 
 private class Change(val oStart: Int, val oEnd: Int, val nStart: Int, val nEnd: Int) {
     val delta get() = (nEnd - nStart) - (oEnd - oStart)

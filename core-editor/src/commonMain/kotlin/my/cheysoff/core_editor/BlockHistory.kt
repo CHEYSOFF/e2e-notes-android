@@ -1,7 +1,6 @@
 package my.cheysoff.core_editor
 
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.text.input.TextFieldBuffer
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -17,6 +16,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.TextRange
 import my.cheysoff.core_blocks.Block
+import my.cheysoff.core_editor.LineEdits.Anchor
 
 /**
  * Undo/redo for one [EditorModel], per block.
@@ -150,8 +150,14 @@ class BlockHistory(private val model: EditorModel, private val now: () -> Long) 
     @OptIn(ExperimentalFoundationApi::class) // undoState
     internal fun clearPlatformUndo() = model.state.undoState.clearHistory()
 
-    /** Test hook: runs before each step of an undo/redo, named as in [apply]. Throwing aborts it. */
-    internal var beforeStep: ((String) -> Unit)? = null
+    private val edits = LineEdits(model)
+
+    /** Test hook: runs before each step of an undo/redo, named as in [LineEdits.beforeStep]. Throwing aborts it. */
+    internal var beforeStep: ((String) -> Unit)?
+        get() = edits.beforeStep
+        set(value) {
+            edits.beforeStep = value
+        }
 
     /** Forgets everything; for a freshly loaded document, whose blocks the entries no longer describe. */
     fun clear() {
@@ -243,189 +249,39 @@ class BlockHistory(private val model: EditorModel, private val now: () -> Long) 
     private class Target(val id: String, val snap: Snap?, val moved: Boolean)
 
     /**
-     * Brings every target block to its state. One small [EditorModel.edit] per block, each of a
-     * shape whose id outcome [EditorModel.onEdited] guarantees (rewrite one line, insert one
-     * staged line, remove one line), rather than one big edit whose id derivation would depend on
-     * how the changes happen to group. All of it runs synchronously, so it shows as one change.
-     * Restores and inserts come first and removals last, so the document never runs out of lines.
+     * Brings every target block to its state, through [LineEdits] (one small edit per block, see
+     * there for why). All of it runs synchronously, so it shows as one change. Restores and
+     * inserts come first and removals last, so the document never runs out of lines.
      */
     private fun apply(targets: List<Target>) {
         var caretAfter: String? = null
         for (t in targets) {
             val snap = t.snap ?: continue
             if (t.id in model.ids && !Markers.isPictureType(snap.block.type)) {
-                if (rewrite(t.id, snap.block)) caretAfter = t.id
+                if (edits.rewrite(t.id, snap.block)) caretAfter = t.id
             }
         }
         for (t in targets.filter { it.snap != null }.sortedBy { it.snap!!.index }) {
             val snap = t.snap!!
             if (t.id !in model.ids) {
-                insert(snap)
+                edits.insert(snap.block) { ids -> anchor(snap, ids) }
                 caretAfter = t.id
             } else if (t.moved && Markers.isPictureType(snap.block.type)) {
-                move(snap)
+                edits.move(t.id) { others -> anchor(snap, others) }
                 caretAfter = t.id
             }
         }
-        for (t in targets) if (t.snap == null && t.id in model.ids) delete(t.id)
+        for (t in targets) if (t.snap == null && t.id in model.ids) edits.delete(t.id)
         val at = caretAfter?.let { id -> model.ids.indexOf(id).takeIf { it >= 0 } }
         if (at != null) model.edit { selection = TextRange(lineRanges(asCharSequence())[at].end) }
     }
 
-    /** Sets line [id]'s marker, text and spans to [block]'s. Returns whether anything changed. */
-    private fun rewrite(id: String, block: Block): Boolean {
-        val current = model.blocks().first { it.id == id }
-        if (sameContent(current, block)) return false
-        val k = model.ids.indexOf(id)
-        val content = lineContent(block)
-        step("rewrite")
-        model.edit {
-            val line = lineRanges(asCharSequence())[k]
-            if (asCharSequence().subSequence(line.start, line.end).toString() != content) {
-                replace(line.start, line.end, content)
-            }
-            setSpans(this, line.start + content.length - block.text.length, line.start + content.length, block)
-        }
-        return true
-    }
-
-    /** Re-inserts [snap]'s block under its old id, beside its old neighbour. */
-    private fun insert(snap: Snap) {
-        val block = snap.block
-        val picture = Markers.isPictureType(block.type)
-        step("insert")
-        if (picture) {
-            model.stagePicture(block.id, block.type, block.ref ?: block.id.substringAfter(':'))
-        } else {
-            model.stageText(block.id)
-        }
-        val content = lineContent(block)
-        model.edit {
-            val start = insertLine(this, anchor(snap, model.ids), content)
-            if (!picture) setSpans(this, start + content.length - block.text.length, start + content.length, block)
-        }
-    }
-
-    /**
-     * Moves picture [snap] back beside its old neighbour. Removed and re-inserted in one unstaged
-     * edit, which [EditorModel.onEdited] reads as a move and so keeps the id and record.
-     */
-    private fun move(snap: Snap) {
-        val ids = model.ids
-        val k = ids.indexOf(snap.block.id)
-        // Anchors are in the coordinates of the other lines, which are also the lines once this
-        // one is removed. Where it stands now is between others[k - 1] and others[k].
-        val others = ids.filterIndexed { i, _ -> i != k }
-        val where = anchor(snap, others)
-        val alreadyThere = where == Anchor(k - 1, after = true) ||
-            where == Anchor(k, after = false) ||
-            (k == 0 && where == Anchor(-1, after = false))
-        if (alreadyThere) return
-        step("move")
-        model.edit {
-            removeLine(this, k)
-            insertLine(this, where, lineContent(snap.block))
-        }
-    }
-
-    /**
-     * Removes line [id]. Deleting the first line takes the break after it, and the next line's id
-     * follows its first surviving character. A next line with no character but its marker (an
-     * empty item or paragraph) has none, and its id would be lost to the deleted line's. So such a
-     * line is first given a placeholder character, which carries its id across, and the
-     * placeholder is taken out again after.
-     */
-    private fun delete(id: String) {
-        val k = model.ids.indexOf(id)
-        if (model.ids.size == 1) {
-            // The last line cannot go; a document always has one. Leave it, emptied.
-            model.edit { replace(0, length, "") }
-            return
-        }
-        if (k == 0) {
-            val text = model.state.text
-            val next = lineRanges(text)[1]
-            val bare = pictureTypeOf(text, next) == null &&
-                (next.start until next.end).all { Markers.isPrivateUse(text[it]) }
-            if (bare) {
-                val carrier = model.ids[1]
-                step("placeholder")
-                model.edit { replace(next.end, next.end, PLACEHOLDER) }
-                try {
-                    step("delete")
-                    model.edit { removeLine(this, 0) }
-                } finally {
-                    // Whether or not the first line went, the placeholder must not stay.
-                    val at = model.ids.indexOf(carrier)
-                    model.edit {
-                        val line = lineRanges(asCharSequence())[at]
-                        replace(line.end - PLACEHOLDER.length, line.end, "")
-                    }
-                }
-                return
-            }
-        }
-        step("delete")
-        model.edit { removeLine(this, k) }
-    }
-
-    private fun step(name: String) {
-        beforeStep?.invoke(name)
-    }
-
-    /** Where a line goes: after line [line] if [after], else before it. `(-1, false)` is the top. */
-    private data class Anchor(val line: Int, val after: Boolean)
-
+    /** Next to its old previous block, else in front of its old next block, else at its old end. */
     private fun anchor(snap: Snap, ids: List<String>): Anchor {
         snap.prev?.let { p -> ids.indexOf(p).takeIf { it >= 0 }?.let { return Anchor(it, after = true) } }
         snap.next?.let { n -> ids.indexOf(n).takeIf { it >= 0 }?.let { return Anchor(it, after = false) } }
         return if (snap.index == 0 || ids.isEmpty()) Anchor(-1, after = false) else Anchor(ids.lastIndex, after = true)
     }
-
-    /** Inserts a line holding [content] at [where]. Returns the offset the new line starts at. */
-    private fun insertLine(buffer: TextFieldBuffer, where: Anchor, content: String): Int {
-        val lines = lineRanges(buffer.asCharSequence())
-        return if (where.after) {
-            val at = lines[where.line].end
-            buffer.replace(at, at, "\n$content")
-            at + 1
-        } else {
-            val at = if (where.line < 0) 0 else lines[where.line].start
-            buffer.replace(at, at, "$content\n")
-            at
-        }
-    }
-
-    /** Removes line [k] and one line break: the one before it, or for the first line the one after. */
-    private fun removeLine(buffer: TextFieldBuffer, k: Int) {
-        val lines = lineRanges(buffer.asCharSequence())
-        if (k > 0) buffer.replace(lines[k - 1].end, lines[k].end, "") else buffer.replace(0, lines[1].start, "")
-    }
-
-    /**
-     * Makes [block]'s spans the only inline styles on its text at [start, end). A style that
-     * reaches in from outside is cut back to its outside part, so the rewritten line shows exactly
-     * what [EditorModel.blocks] will read back.
-     */
-    private fun setSpans(buffer: TextFieldBuffer, start: Int, end: Int, block: Block) = with(buffer) {
-        for (r in getSpanStyles(TextRange(0, length))) {
-            val range = r.textRange
-            if (range.max <= start || range.min >= end) continue
-            val style = r.spanStyle
-            removeStyle(r)
-            if (range.min < start) addStyle(style, range.min, start)
-            if (range.max > end) addStyle(style, end, range.max)
-        }
-        val out = mutableListOf<PlacedStyle>()
-        placeStyles(block.spans, start, out)
-        out.forEach { addStyle(it.style, it.start, it.end) }
-    }
-
-    private fun lineContent(block: Block) = (Markers.of(block.type, block.done)?.toString() ?: "") +
-        if (Markers.isPictureType(block.type)) "" else block.text
-
-    private fun sameContent(x: Block, y: Block) =
-        x.type == y.type && x.text == y.text && x.spans == y.spans && x.done == y.done && x.ref == y.ref
 
     companion object {
         /** Typing pauses longer than this start a new undo entry. */
@@ -433,9 +289,6 @@ class BlockHistory(private val model: EditorModel, private val now: () -> Long) 
 
         /** Oldest entries are dropped beyond this, to bound memory in a long session. */
         const val MAX_ENTRIES = 200
-
-        /** Any ordinary char will do; it never stays in the text past one [delete]. */
-        private const val PLACEHOLDER = "x"
     }
 }
 
