@@ -388,7 +388,7 @@ class RecordNotesRepository private constructor(
             )
         }
         val next = snapshot.putNote(existing, updated, stamp, savedNoteFields(existing?.note, updated))
-        body?.saved?.let { next.reconcilePictures(note.id, it, now) } ?: next
+        body?.saved?.let { next.reconcilePictures(note.id, body.prior, it, now) } ?: next
     }
 
     /**
@@ -400,7 +400,7 @@ class RecordNotesRepository private constructor(
      */
     private fun blocksBody(prior: Note?, note: Note, stamp: Hlc): BlocksBody =
         when (val out = BlocksSave.prepare(prior?.contentFormat, prior?.content.orEmpty(), note.content, stamp)) {
-            is BlocksSave.Write -> BlocksBody(note.copy(content = out.content, checklist = ""), out.doc)
+            is BlocksSave.Write -> BlocksBody(note.copy(content = out.content, checklist = ""), out.doc, out.prior)
             is BlocksSave.Keep -> {
                 // Keep is only ever returned when a note exists; see BlocksSave.prepare.
                 val kept = prior!!
@@ -408,25 +408,27 @@ class RecordNotesRepository private constructor(
                 BlocksBody(
                     note.copy(content = kept.content, contentFormat = kept.contentFormat, checklist = kept.checklist),
                     saved = null,
+                    prior = null,
                 )
             }
         }
 
-    private class BlocksBody(val note: Note, val saved: BlockDocument?)
+    private class BlocksBody(val note: Note, val saved: BlockDocument?, val prior: BlockDocument?)
 
     /**
-     * Soft-deletes the note's pictures and drawings that [saved] no longer shows and undeletes the
-     * ones it shows again -- the port of `RoomNotesRepository.reconcilePictures`, inside the same
-     * [write] as the note so the body and its records are never published out of step.
+     * Soft-deletes the note's pictures and drawings that [prior] showed and [saved] no longer does,
+     * and undeletes the ones [saved] shows again -- the port of
+     * `RoomNotesRepository.reconcilePictures`, inside the same [write] as the note so the body and
+     * its records are never published out of step.
      *
      * Each record gets its own clock and a tombstone-only stamp, exactly as [deleteAttachment] and
      * [deleteSketch] write them; `deletedAt` is the save's own instant. Walked in id order so a save
      * is the same sequence of writes every time.
      */
-    private fun Snapshot.reconcilePictures(noteId: String, saved: BlockDocument, now: Long): Snapshot {
+    private fun Snapshot.reconcilePictures(noteId: String, prior: BlockDocument?, saved: BlockDocument, now: Long): Snapshot {
         val ownAttachments = attachments.values.filter { it.attachment.noteId == noteId }.sortedBy { it.attachment.id }
         val ownSketches = sketches.values.filter { it.sketch.noteId == noteId }.sortedBy { it.sketch.id }
-        val changes = PictureLifecycle.reconcile(saved, ownAttachments.map { it.attachment }, ownSketches.map { it.sketch })
+        val changes = PictureLifecycle.reconcile(prior, saved, ownAttachments.map { it.attachment }, ownSketches.map { it.sketch })
         var next = this
         for (row in ownAttachments) {
             val id = row.attachment.id

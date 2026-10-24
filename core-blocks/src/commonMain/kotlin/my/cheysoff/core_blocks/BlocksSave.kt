@@ -27,11 +27,35 @@ object BlocksSave {
 
     sealed interface Outcome
 
-    /** Store [content], which is `BlockCodec.encode(doc)`, and an empty checklist. */
-    data class Write(val content: String, val doc: BlockDocument) : Outcome
+    /**
+     * Store [content], which is `BlockCodec.encode(doc)`, and an empty checklist. [prior] is the
+     * stored document [doc] was stamped against (null for a legacy or absent body), which
+     * [PictureLifecycle] needs to tell a removed picture from one the editor never saw.
+     */
+    data class Write(val content: String, val doc: BlockDocument, val prior: BlockDocument?) : Outcome
 
     /** Leave the stored body (and checklist) as they are; [reason] is for the log. */
     data class Keep(val reason: String) : Outcome
+
+    /**
+     * The `note.content` of a BLOCKS save, built from the editor's blocks in visible order. **This
+     * is the only way UI code may build that body.**
+     *
+     * The order has to survive the encoding, and only `pos` carries order: a [BlockDocument] sorts
+     * its blocks by `(pos, id)`, so blocks encoded with blank or stale positions come back
+     * re-sorted by id, and the save would silently reorder the note. This assigns provisional
+     * increasing positions in list order. They mean nothing beyond that, because [prepare] stamps
+     * the real ones and ignores these, and clocks are ignored the same way.
+     */
+    fun encodeForSave(visible: List<Block>): String {
+        var previous: String? = null
+        val ordered = visible.map { b ->
+            val pos = FractionalIndex.between(previous, null)
+            previous = pos
+            b.copy(pos = pos)
+        }
+        return BlockCodec.encode(BlockDocument(ordered))
+    }
 
     /**
      * @param priorFormat the stored note's format, or null if there is no stored note.
@@ -51,6 +75,6 @@ object BlocksSave {
                 ?: if (priorFormat != null) return Keep("the editor's BLOCKS body does not decode") else emptyList()
         }
         val doc = BlockStamping.stamp(prior, edited, clock)
-        return Write(BlockCodec.encode(doc), doc)
+        return Write(BlockCodec.encode(doc), doc, prior)
     }
 }

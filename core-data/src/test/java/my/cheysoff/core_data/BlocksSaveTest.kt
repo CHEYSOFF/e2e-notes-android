@@ -9,6 +9,7 @@ import my.cheysoff.core_blocks.BlockCodec
 import my.cheysoff.core_blocks.BlockDocument
 import my.cheysoff.core_blocks.BlockIds
 import my.cheysoff.core_blocks.BlockType
+import my.cheysoff.core_blocks.BlocksSave
 import my.cheysoff.core_data.data.RoomNotesRepository
 import my.cheysoff.core_data.data.RoomSketchesRepository
 import my.cheysoff.core_data.data.local.NoteDatabase
@@ -262,5 +263,49 @@ class BlocksSaveTest {
         assertEquals(contentClock, fieldClock(FieldClocks.CONTENT))
         assertEquals("the other fields still save", "renamed", row().title)
         assertNotNull("no picture is reconciled against a body that was not written", repository.attachment("a1"))
+    }
+
+    // -- fix round 1: deleting only what the prior document showed, and the editor's order ----
+
+    @Test
+    fun `a picture that arrives after the prior save and is absent from the saved doc is not deleted`() = runTest {
+        repository.saveNote(edited(para("p1", "x", "a0")))
+        // Synced in while the editor was open; the editor never showed it.
+        repository.saveAttachment(attachment("late"))
+
+        repository.saveNote(edited(para("p1", "typing", "a0")))
+
+        assertNotNull(repository.attachment("late"))
+    }
+
+    @Test
+    fun `a picture referenced in the prior doc and removed is deleted`() = runTest {
+        repository.saveAttachment(attachment("a1"))
+        repository.saveNote(edited(picture("a1", "a0"), para("p1", "x", "a1")))
+
+        repository.saveNote(edited(para("p1", "x", "a1")))
+
+        assertNull(repository.attachment("a1"))
+    }
+
+    @Test
+    fun `the legacy first save deletes a record that was removed in the editor`() = runTest {
+        repository.saveNote(Note(id = "n1", title = "t", content = "legacy"))
+        repository.saveAttachment(attachment("kept"))
+        repository.saveAttachment(attachment("removed"))
+
+        repository.saveNote(edited(para("p1", "legacy", "a0"), picture("kept", "a1")))
+
+        assertNotNull(repository.attachment("kept"))
+        assertNull(repository.attachment("removed"))
+    }
+
+    @Test
+    fun `blocks built with encodeForSave are stored in the given order`() = runTest {
+        val visible = listOf(para("zz", "first", ""), para("mm", "second", ""), para("aa", "third", ""))
+
+        repository.saveNote(edited().copy(content = BlocksSave.encodeForSave(visible)))
+
+        assertEquals(listOf("zz", "mm", "aa"), storedDoc().blocks.map { it.id })
     }
 }

@@ -35,12 +35,15 @@ class PictureLifecycleTest {
 
     @Test
     fun `removed picture is deleted`() {
+        // The prior save showed both; this one dropped the picture block and one of the drawings.
+        val prior = BlockDocument(listOf(para("p", "a0"), pictureBlock("a-gone", "a1"), drawingBlock("d-kept", "a2"), drawingBlock("d-gone", "a3")))
         val saved = BlockDocument(
             listOf(para("p", "a0"), drawingBlock("d-kept")),
-            gone = listOf(Tombstone(BlockIds.forPicture("a-gone"), t2)),
+            gone = listOf(Tombstone(BlockIds.forPicture("a-gone"), t2), Tombstone(BlockIds.forDrawing("d-gone"), t2)),
         )
 
         val changes = PictureLifecycle.reconcile(
+            prior,
             saved,
             attachmentsOfNote = listOf(picture("a-gone")),
             sketchesOfNote = listOf(sketch("d-kept"), sketch("d-gone")),
@@ -51,12 +54,46 @@ class PictureLifecycleTest {
     }
 
     @Test
+    fun `a record the prior document never showed is not deleted`() {
+        // It synced in after the editor opened, so the editor could not have shown it.
+        val prior = BlockDocument(listOf(para("p", "a0")))
+        val saved = BlockDocument(listOf(para("p", "a0")))
+
+        val changes = PictureLifecycle.reconcile(prior, saved, listOf(picture("late")), listOf(sketch("late-d")))
+
+        assertEquals(PictureLifecycle.Changes(emptySet(), emptySet()), changes)
+    }
+
+    @Test
+    fun `a record whose block the prior document tombstoned is deleted`() {
+        // The block was deleted (perhaps on another device, by merge) but the record stayed live.
+        val prior = BlockDocument(listOf(para("p", "a0")), gone = listOf(Tombstone(BlockIds.forPicture("a1"), t2)))
+        val saved = BlockDocument(listOf(para("p", "a0")), gone = prior.gone)
+
+        val changes = PictureLifecycle.reconcile(prior, saved, listOf(picture("a1")), emptyList())
+
+        assertEquals(setOf("a1"), changes.delete)
+    }
+
+    @Test
+    fun `the legacy first save deletes a record removed in the editor`() {
+        // No prior document: assemble showed every live record, so a missing one was removed.
+        val saved = BlockDocument(listOf(para("p", "a0"), pictureBlock("kept", "a1")))
+
+        val changes = PictureLifecycle.reconcile(null, saved, listOf(picture("kept"), picture("removed")), listOf(sketch("d")))
+
+        assertEquals(setOf("removed", "d"), changes.delete)
+    }
+
+    @Test
     fun `undo re-reference undeletes`() {
         // The block came back (undo) after an earlier save had tombstoned it and soft-deleted the
         // record. A record already trashed and still unreferenced is left trashed.
+        val prior = BlockDocument(emptyList(), gone = listOf(Tombstone(BlockIds.forPicture("a1"), t1)))
         val saved = BlockDocument(listOf(pictureBlock("a1"), drawingBlock("d1")))
 
         val changes = PictureLifecycle.reconcile(
+            prior,
             saved,
             attachmentsOfNote = listOf(picture("a1", deleted = true), picture("a-old", deleted = true)),
             sketchesOfNote = listOf(sketch("d1", deleted = true)),
@@ -70,7 +107,7 @@ class PictureLifecycleTest {
     fun `picture whose record has not arrived is left alone`() {
         val saved = BlockDocument(listOf(pictureBlock("not-synced-yet"), drawingBlock("also-not-yet")))
 
-        val changes = PictureLifecycle.reconcile(saved, emptyList(), emptyList())
+        val changes = PictureLifecycle.reconcile(saved, saved, emptyList(), emptyList())
 
         assertEquals(PictureLifecycle.Changes(emptySet(), emptySet()), changes)
     }
@@ -80,7 +117,7 @@ class PictureLifecycleTest {
         // Type matters: a PICTURE block refers to an attachment, never to a sketch.
         val saved = BlockDocument(listOf(pictureBlock("x")))
 
-        val changes = PictureLifecycle.reconcile(saved, emptyList(), listOf(sketch("x")))
+        val changes = PictureLifecycle.reconcile(null, saved, emptyList(), listOf(sketch("x")))
 
         assertEquals(setOf("x"), changes.delete)
     }
@@ -125,5 +162,20 @@ class PictureLifecycleTest {
         val fresh = assertIs<BlocksSave.Write>(BlocksSave.prepare(null, "", "{garbage", t2))
         assertEquals(empty, fresh.content)
         assertTrue(fresh.doc.blocks.isEmpty())
+    }
+
+    @Test
+    fun `encodeForSave keeps the given order whatever the ids and positions`() {
+        val visible = listOf(
+            Block("zz", BlockType.PARAGRAPH, text = "first"),
+            Block("mm", BlockType.PARAGRAPH, text = "second", pos = "zzz"),
+            Block("aa", BlockType.PARAGRAPH, text = "third"),
+        )
+
+        val decoded = BlockCodec.decode(BlocksSave.encodeForSave(visible))!!
+
+        assertEquals(listOf("zz", "mm", "aa"), decoded.blocks.map { it.id })
+        val stamped = assertIs<BlocksSave.Write>(BlocksSave.prepare(null, "", BlocksSave.encodeForSave(visible), t1))
+        assertEquals(listOf("first", "second", "third"), stamped.doc.blocks.map { it.text })
     }
 }

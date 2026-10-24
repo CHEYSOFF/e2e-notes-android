@@ -202,7 +202,7 @@ class RoomNotesRepository @Inject constructor(
                 hlcNode = stamp.hlc.node,
                 fieldHlc = noteFieldHlc(prior?.clocks(), savedNoteFields(prior, stored, body?.keptFormat), stamp),
             )
-            body?.saved?.let { reconcilePictures(note.id, it, stamp) }
+            body?.saved?.let { reconcilePictures(note.id, body.prior, it, stamp) }
         }
     }
 
@@ -220,21 +220,28 @@ class RoomNotesRepository @Inject constructor(
             incoming = note.content,
             clock = stamp.hlc,
         )) {
-            is BlocksSave.Write -> BlocksBody(note.copy(content = out.content, checklist = ""), out.doc, keptFormat = null)
+            is BlocksSave.Write ->
+                BlocksBody(note.copy(content = out.content, checklist = ""), out.doc, out.prior, keptFormat = null)
             is BlocksSave.Keep -> {
                 // Keep is only ever returned when a row exists; see BlocksSave.prepare.
                 val kept = prior!!
                 Log.w(TAG, "Not overwriting the body of note ${note.id}: ${out.reason}")
-                BlocksBody(note.copy(content = kept.content, checklist = kept.checklist), null, kept.contentFormat)
+                BlocksBody(note.copy(content = kept.content, checklist = kept.checklist), null, null, kept.contentFormat)
             }
         }
 
     /** [blocksBody]'s answer. [keptFormat] is the stored format string when the body is kept. */
-    private class BlocksBody(val note: Note, val saved: BlockDocument?, val keptFormat: String?)
+    private class BlocksBody(
+        val note: Note,
+        val saved: BlockDocument?,
+        val prior: BlockDocument?,
+        val keptFormat: String?,
+    )
 
     /**
-     * Soft-deletes the note's pictures and drawings that [saved] no longer shows, and undeletes the
-     * ones it shows again -- `PictureLifecycle` decides which. Inside [saveNote]'s transaction, so
+     * Soft-deletes the note's pictures and drawings that [prior] showed and [saved] no longer does,
+     * and undeletes the ones [saved] shows again -- `PictureLifecycle` decides which, and why a
+     * record [prior] never showed is left alone. Inside [saveNote]'s transaction, so
      * the body and the records it refers to can never be seen out of step.
      *
      * Through the same statements [deleteAttachment], `RoomSketchesRepository.deleteSketch` and
@@ -243,10 +250,11 @@ class RoomNotesRepository @Inject constructor(
      * tombstones share the note save's `deletedAt`, as [deleteNote]'s do -- one gesture, one
      * instant. Walked in id order so a save is the same sequence of writes every time.
      */
-    private suspend fun reconcilePictures(noteId: String, saved: BlockDocument, stamp: SyncStamp) {
+    private suspend fun reconcilePictures(noteId: String, prior: BlockDocument?, saved: BlockDocument, stamp: SyncStamp) {
         val attachments = attachmentDao.attachmentStatesForNote(noteId).sortedBy { it.uuid }
         val sketches = sketchDao.sketchesForNote(noteId).sortedBy { it.uuid }
         val changes = PictureLifecycle.reconcileStates(
+            prior,
             saved,
             pictures = attachments.map { PictureLifecycle.RecordState(it.uuid, it.isDeleted) },
             drawings = sketches.map { PictureLifecycle.RecordState(it.uuid, it.isDeleted) },
