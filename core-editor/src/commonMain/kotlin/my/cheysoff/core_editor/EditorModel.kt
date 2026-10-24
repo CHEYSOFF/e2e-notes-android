@@ -440,7 +440,7 @@ class EditorModel(initial: BlockDocument) {
 private fun nameId(name: String) = NameUuid.v3(name.encodeToByteArray())
 
 /** The index of the last line of [lines] starting at or before [offset]. */
-private fun lineOf(lines: List<Line>, offset: Int): Int {
+internal fun lineOf(lines: List<Line>, offset: Int): Int {
     var lo = 0
     var hi = lines.size - 1
     while (lo < hi) {
@@ -468,13 +468,13 @@ private class Change(val oStart: Int, val oEnd: Int, val nStart: Int, val nEnd: 
 private class Region(val first: Int, var last: Int, var delta: Int)
 
 /** A line of the field: [start] inclusive, [end] exclusive, not counting its `\n`. */
-private class Line(val start: Int, val end: Int)
+internal class Line(val start: Int, val end: Int)
 
 private class Piece(val text: String, val spans: List<StyleSpan>)
 
-private class PlacedStyle(val style: SpanStyle, val start: Int, val end: Int)
+internal class PlacedStyle(val style: SpanStyle, val start: Int, val end: Int)
 
-private fun lineRanges(text: CharSequence): List<Line> {
+internal fun lineRanges(text: CharSequence): List<Line> {
     val out = mutableListOf<Line>()
     var start = 0
     for (i in text.indices) if (text[i] == '\n') {
@@ -486,7 +486,7 @@ private fun lineRanges(text: CharSequence): List<Line> {
 }
 
 /** The marker type if [line] is a picture/drawing line (exactly one marker char), else null. */
-private fun pictureTypeOf(text: CharSequence, line: Line): BlockType? {
+internal fun pictureTypeOf(text: CharSequence, line: Line): BlockType? {
     if (line.end - line.start != 1) return null
     return when (text[line.start]) {
         Markers.PICTURE -> BlockType.PICTURE
@@ -573,7 +573,7 @@ private val ItalicStyle = SpanStyle(fontStyle = FontStyle.Italic)
  * span's `textDecoration` replaces an earlier one rather than adding to it: two overlapping spans
  * would show only one of the lines.
  */
-private fun placeStyles(spans: List<StyleSpan>, base: Int, out: MutableList<PlacedStyle>) {
+internal fun placeStyles(spans: List<StyleSpan>, base: Int, out: MutableList<PlacedStyle>) {
     for (s in spans) when (s.style) {
         InlineStyle.BOLD -> out += PlacedStyle(BoldStyle, base + s.start, base + s.end)
         InlineStyle.ITALIC -> out += PlacedStyle(ItalicStyle, base + s.start, base + s.end)
@@ -596,7 +596,7 @@ private fun placeStyles(spans: List<StyleSpan>, base: Int, out: MutableList<Plac
 }
 
 /** The inline styles a field span stands for. Anything else it carries (colour, size) is not saved. */
-private fun stylesOf(style: SpanStyle): List<InlineStyle> = buildList {
+internal fun stylesOf(style: SpanStyle): List<InlineStyle> = buildList {
     val weight = style.fontWeight
     if (weight != null && weight >= FontWeight.Bold) add(InlineStyle.BOLD)
     if (style.fontStyle == FontStyle.Italic) add(InlineStyle.ITALIC)
