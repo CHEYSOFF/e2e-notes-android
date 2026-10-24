@@ -53,7 +53,10 @@ class BlockNoteBodyTest {
         blocks = blocks, unreadableBody = unreadable,
     )
 
-    private fun androidx.compose.ui.test.ComposeUiTest.showBody(opened: MutableList<String>): BlockEditorController {
+    private fun androidx.compose.ui.test.ComposeUiTest.showBody(
+        opened: MutableList<String>,
+        changes: MutableList<List<Block>> = mutableListOf(),
+    ): BlockEditorController {
         EditorFlags.enable()
         val controller = BlockEditorController("n1")
         setContent {
@@ -66,7 +69,7 @@ class BlockNoteBodyTest {
                     sketches = emptyList(),
                     pasteFailure = null,
                     onDismissPasteFailure = {},
-                    onBlocksChange = { _, _, _ -> },
+                    onBlocksChange = { _, blocks, _ -> changes += blocks },
                     onInsertPicture = {},
                     onOpenPicture = { opened += it.id },
                 )
@@ -115,5 +118,29 @@ class BlockNoteBodyTest {
         assertTrue(loaded.canPlacePicture(draft()))
         assertFalse(loaded.canPlacePicture(draft(unreadable = "{\"v\":99}")))
         assertFalse(loaded.canPlacePicture(draft(blocks = null)))
+    }
+
+    @Test
+    fun `the viewer's Delete on the block path removes the block and never the record`() = runComposeUiTest {
+        val changes = mutableListOf<List<Block>>()
+        val controller = showBody(mutableListOf(), changes)
+        val deletedRecords = mutableListOf<String>()
+
+        runOnIdle { deletePictureFromViewer("r1", controller, deleteRecord = { deletedRecords += it }) }
+        waitForIdle()
+
+        assertTrue("the record is left to the save's PictureLifecycle", deletedRecords.isEmpty())
+        assertEquals(listOf("t", "u"), changes.last().map { it.id })
+        onNodeWithTag("picture-pic:r1").assertDoesNotExist()
+        assertTrue("undoable", controller.canUndo)
+    }
+
+    @Test
+    fun `the viewer's Delete on the legacy path deletes the record as before`() {
+        val deletedRecords = mutableListOf<String>()
+
+        deletePictureFromViewer("r1", blockController = null, deleteRecord = { deletedRecords += it })
+
+        assertEquals(listOf("r1"), deletedRecords)
     }
 }

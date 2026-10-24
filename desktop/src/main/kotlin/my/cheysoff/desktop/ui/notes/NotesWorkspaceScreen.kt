@@ -45,6 +45,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import my.cheysoff.core_editor.ui.BlockEditorController
+import my.cheysoff.core_editor.ui.rememberBlockEditorController
 import my.cheysoff.desktop.ui.attachment.AttachmentViewer
 import my.cheysoff.desktop.ui.attachment.DesktopImageImporter
 import my.cheysoff.desktop.ui.attachment.orderedForDisplay
@@ -92,6 +94,13 @@ fun NotesWorkspaceScreen(
     textScale: TextScale,
     onCycleTextScale: () -> Unit,
 ) {
+    // The open note's block editor controller: one per note (keyed on its id), and only on the block
+    // path. Held here, above both the editor pane and the full-screen viewer, because the viewer's
+    // Delete has to act through the editor (see deletePictureFromViewer).
+    val openNoteId = state.editor?.id
+    val blockController =
+        if (model.blocksEditing && openNoteId != null) rememberBlockEditorController(openNoteId) else null
+
     Box(modifier = Modifier.fillMaxSize().background(AppBlack)) {
         Column(modifier = Modifier.fillMaxSize()) {
             TitleBar(
@@ -158,7 +167,7 @@ fun NotesWorkspaceScreen(
                         pasteFailure = state.pasteFailure,
                         onDismissPasteFailure = model::dismissPasteFailure,
                         modifier = Modifier.weight(1f),
-                        blocksEditing = model.blocksEditing,
+                        blockController = blockController,
                         onBlocksChange = model::onBlocksChanged,
                     )
                 }
@@ -192,11 +201,29 @@ fun NotesWorkspaceScreen(
                 onClose = model::closeAttachmentViewer,
                 onDelete = { id ->
                     model.closeAttachmentViewer()
-                    model.deleteAttachment(id)
+                    deletePictureFromViewer(id, blockController, deleteRecord = model::deleteAttachment)
                 },
             )
         }
     }
+}
+
+/**
+ * The full-screen viewer's Delete of picture [recordId].
+ *
+ * - **Block path** ([blockController] non-null): removes the picture's block through the editor
+ *   (`removePicture`), a local edit that is saved like typing and can be undone. The save then
+ *   soft-deletes the record (`PictureLifecycle`), and an undo undeletes it. The record is never
+ *   deleted here: with the block still in the body, the next save would bring it straight back.
+ *   If no block shows the record, nothing is deleted.
+ * - **Legacy path**: deletes the record, as before; there is no block.
+ */
+internal fun deletePictureFromViewer(
+    recordId: String,
+    blockController: BlockEditorController?,
+    deleteRecord: (String) -> Unit,
+) {
+    if (blockController != null) blockController.removePicture(recordId) else deleteRecord(recordId)
 }
 
 /**

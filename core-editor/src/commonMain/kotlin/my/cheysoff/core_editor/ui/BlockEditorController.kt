@@ -131,6 +131,17 @@ class BlockEditorController internal constructor(
         EditorCommands.insertPicture(model, id, kind)
     }
 
+    /**
+     * Removes the picture or drawing block showing record [recordId], as a local, undoable edit
+     * (reported through `onChange` like any other). Returns false if no block shows it, or before
+     * the note is loaded. See [EditorCommands.removePicture] for why the block, not the record.
+     */
+    fun removePicture(recordId: String): Boolean {
+        var removed = false
+        local { removed = EditorCommands.removePicture(model, recordId) }
+        return removed
+    }
+
     // Not through local(): history.onStepped reports these, for the keyboard shortcuts too.
     fun undo() {
         if (loaded) history.undo()

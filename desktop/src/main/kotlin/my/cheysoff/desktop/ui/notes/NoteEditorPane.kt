@@ -83,7 +83,7 @@ import my.cheysoff.desktop.ui.attachment.AttachmentRail
 import my.cheysoff.desktop.ui.attachment.DesktopImportResult
 import my.cheysoff.desktop.ui.attachment.clipboardImage
 import my.cheysoff.desktop.ui.attachment.pickImageFile
-import my.cheysoff.core_editor.ui.rememberBlockEditorController
+import my.cheysoff.core_editor.ui.BlockEditorController
 import java.awt.Image
 import my.cheysoff.desktop.ui.state.EditorDraft
 import my.cheysoff.desktop.ui.state.SaveStatus
@@ -105,12 +105,13 @@ import my.cheysoff.desktop.ui.theme.folderAccentColor
  * the title, which is deliberately quiet. Ctrl+S is wired to a flush so that the reflex does
  * something rather than nothing, but it is never the thing that makes an edit durable.
  *
- * **Two bodies, one switch.** With [blocksEditing] on, the body is the shared block editor
+ * **Two bodies, one switch.** With a [blockController] (block path on), the body is the shared block editor
  * ([BlockNoteBody]): text, checklists, pictures and drawings in one field, saved as BLOCKS through
  * [onBlocksChange]. Off, it is the legacy body ([LegacyNoteBody]): the rich-text field, the separate
  * checklist, the sketch section and the attachment rail, saved as HTML through [onContentChange].
  * Everything around the body -- the action bar, the title, the image paste -- is shared. The switch
- * follows `BlocksFormat.WRITE_ENABLED` (via `NotesWorkspaceModel.blocksEditing`) so that until both
+ * follows `BlocksFormat.WRITE_ENABLED` (via `NotesWorkspaceModel.blocksEditing`; the screen passes a
+ * controller only then) so that until both
  * apps can read BLOCKS this build edits exactly as the last one did; Task 16 removes the legacy body.
  */
 @OptIn(FlowPreview::class)
@@ -143,7 +144,12 @@ fun NoteEditorPane(
     pasteFailure: DesktopImportResult?,
     onDismissPasteFailure: () -> Unit,
     modifier: Modifier = Modifier,
-    blocksEditing: Boolean = false,
+    /**
+     * The block editor's controller for [draft]'s note (`rememberBlockEditorController(draft.id)`),
+     * or null for the legacy body. Hoisted to the screen because the full-screen viewer, drawn
+     * there, deletes a picture through it (see `deletePictureFromViewer`).
+     */
+    blockController: BlockEditorController? = null,
     /** A local edit in the block editor: the note it belongs to, its blocks, and the editor's base. */
     onBlocksChange: (noteId: String, blocks: List<Block>, base: BlockDocument) -> Unit = { _, _, _ -> },
 ) {
@@ -154,9 +160,6 @@ fun NoteEditorPane(
 
     val accent = folderAccentColor(draft.folderId, folders.firstOrNull { it.id == draft.folderId }?.colorArgb)
         ?: AccentIndigo
-    // One controller per note (keyed on its id), and only on the block path. Hoisted to the pane
-    // rather than kept inside the body so the Ctrl+V handler below can place a pasted picture.
-    val blockController = if (blocksEditing) rememberBlockEditorController(draft.id) else null
     val placePicture: ((String) -> Unit)? = blockController?.let { controller ->
         { recordId: String -> controller.insertPicture(recordId, BlockType.PICTURE) }
     }

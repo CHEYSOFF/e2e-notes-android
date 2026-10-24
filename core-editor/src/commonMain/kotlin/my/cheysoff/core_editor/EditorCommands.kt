@@ -180,6 +180,28 @@ object EditorCommands {
     }
 
     /**
+     * Removes the picture or drawing line showing record [recordId], as one local edit recorded for
+     * undo, so Undo puts the same block (id and ref) back. Returns false, changing nothing, when no
+     * line shows that record.
+     *
+     * For a delete made outside the text (the desktop's full-screen viewer): removing the BLOCK,
+     * not the record, keeps the body the one authority on which pictures a note has. The save that
+     * follows soft-deletes the record (`PictureLifecycle`), and undoing then undeletes it. Deleting
+     * the record directly would leave a block the next save brings the record back for.
+     *
+     * The line goes through [LineEdits.delete], the same removal synced deletes use, which keeps the
+     * neighbouring lines' ids where a plain text cut could hand a marker's id to the wrong line.
+     */
+    fun removePicture(model: EditorModel, recordId: String): Boolean {
+        val id = model.refs.entries.firstOrNull { it.value == recordId }?.key ?: return false
+        val history = model.history
+        val before = model.blocks()
+        LineEdits(model).delete(id)
+        history?.recordLocal(before, model.blocks())
+        return true
+    }
+
+    /**
      * Rewrites the field's inline styles with [change] applied to the selected text. [change] gets
      * the selected pieces of each line's text, never a marker or line break, and each style's runs
      * as field offsets. Every inline style is then re-placed per line through [placeStyles], the
