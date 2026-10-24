@@ -35,9 +35,14 @@ internal class EditorClipboard(private val delegate: Clipboard) : Clipboard {
 
     override suspend fun getClipEntry(): ClipEntry? = delegate.getClipEntry()
 
+    /**
+     * Fails closed: an entry whose text cannot be read (no plain-text flavour, or the read
+     * failed) is replaced by an empty plain entry rather than passed on, since whatever it does
+     * carry came from the field and may hold markers. A null entry (clearing) passes through.
+     */
     override suspend fun setClipEntry(clipEntry: ClipEntry?) {
-        val raw = clipEntry?.plainText()
-        delegate.setClipEntry(if (raw == null) clipEntry else plainClipEntry(plainOf(raw)))
+        if (clipEntry == null) return delegate.setClipEntry(null)
+        delegate.setClipEntry(plainClipEntry(plainOf(clipEntry.plainText() ?: "")))
     }
 
     // Deprecated on Android in favour of platform extensions, but foundation still reads it (paste

@@ -24,9 +24,16 @@ import my.cheysoff.core_editor.lineRanges
  * The handle a toolbar (and the hosting screen's save path) holds on one [BlockEditor].
  *
  * It owns the editor's state, not the composable, so the toolbar can sit outside the editor and
- * the save path can read [base] whenever it saves. One controller per open note: the hosting
- * screen keys it (and the [BlockEditor]) on the note id, since the first document a controller
- * sees is loaded and every later one is applied as a synced change of that same note.
+ * the save path can read [base] whenever it saves.
+ *
+ * One controller per note, enforced twice, because offering note B's document to an editor
+ * showing note A would apply B as a "synced change" of A, and undo would then re-insert A's
+ * blocks into B:
+ * - [rememberBlockEditorController] is keyed on the note id, so a new note gets a new controller:
+ *   a fresh model, undo history, remote state and drag state.
+ * - [BlockEditor] passes its `noteId` with every document ([receive]). A document of any note
+ *   other than the one loaded is never offered to [RemoteApply]; it is loaded instead, which
+ *   clears the undo history. So even a controller hoisted without the key cannot mix two notes.
  *
  * Every command here is a local edit: it is recorded for undo and reported through the editor's
  * `onChange`, exactly like typing.
@@ -34,9 +41,13 @@ import my.cheysoff.core_editor.lineRanges
  * Main thread only, like [EditorModel].
  */
 @Stable
-class BlockEditorController internal constructor(internal val now: () -> Long) {
+class BlockEditorController internal constructor(
+    /** The note this controller was made for; informational, [receive] decides by the note it is given. */
+    val noteId: String,
+    internal val now: () -> Long,
+) {
 
-    constructor() : this(::currentTimeMillis)
+    constructor(noteId: String) : this(noteId, ::currentTimeMillis)
 
     internal val model = EditorModel(BlockDocument(emptyList()))
     internal val history = BlockHistory(model, now)
@@ -46,16 +57,30 @@ class BlockEditorController internal constructor(internal val now: () -> Long) {
         history.onStepped = { localEdited(model.blocks()) }
     }
 
-    /** Whether the first document has been loaded; the field is not shown before it is. */
-    internal var loaded by mutableStateOf(false)
+    /** The note whose document is loaded, or null before the first; the field is not shown before it. */
+    internal var loadedNote: String? by mutableStateOf(null)
         private set
+
+    internal val loaded: Boolean get() = loadedNote != null
 
     /** The [now] time of the last local edit, for [RemoteApply.tick]. Snapshot state: it keys the re-tick. */
     internal var lastLocalEditAt by mutableStateOf(Long.MIN_VALUE)
         private set
 
-    /** The field's latest layout, for the overlays. Its text is the field's text, offset for offset. */
-    internal var layout: TextLayoutResult? by mutableStateOf(null)
+    /** The field's last layout that matched its text, with the ids it was made for; see [LaidOutText]. */
+    internal var laidOut: LaidOutText? by mutableStateOf(null)
+        private set
+
+    internal val layout: TextLayoutResult? get() = laidOut?.layout
+
+    /** From the field's `onTextLayout`: kept only if it is the layout of the text the model holds now. */
+    internal fun laidOut(result: TextLayoutResult?) {
+        if (result == null) return
+        val text = model.state.text.toString()
+        val ids = model.ids
+        if (result.layoutInput.text.text != text || lineRanges(text).size != ids.size) return
+        laidOut = LaidOutText(result, text, ids, model.refs)
+    }
 
     /** Set by [BlockEditor] to its current `onChange`. */
     internal var onChange: (List<Block>) -> Unit = {}
@@ -121,11 +146,18 @@ class BlockEditorController internal constructor(internal val now: () -> Long) {
     /** Moves the picture on line [from] to gap [toGap]; see [EditorCommands.movePicture]. */
     internal fun movePicture(from: Int, toGap: Int) = local { EditorCommands.movePicture(model, from, toGap) }
 
-    /** Opens [doc] if nothing is loaded yet, else offers it as a synced change and applies what it can now. */
-    internal fun receive(doc: BlockDocument) {
-        if (!loaded) {
+    /**
+     * Opens [doc] if nothing, or another note, is loaded; else offers it as a synced change of the
+     * loaded note and applies what it can now.
+     */
+    internal fun receive(noteId: String, doc: BlockDocument) {
+        if (noteId != loadedNote) {
+            // First document, or another note's: open it. noteLoaded -> EditorModel.load clears
+            // the undo history and drops any pending document of the previous note.
             remote.noteLoaded(doc)
-            loaded = true
+            loadedNote = noteId
+            lastLocalEditAt = Long.MIN_VALUE
+            laidOut = null
         } else {
             remote.offer(doc)
             remote.tick(lastLocalEditAt)
@@ -173,8 +205,12 @@ class BlockEditorController internal constructor(internal val now: () -> Long) {
     }
 }
 
-/** A [BlockEditorController] that lives as long as the composition that remembers it. */
+/**
+ * A [BlockEditorController] for note [noteId]. A different [noteId] gives a new controller, with
+ * nothing of the previous note's state or undo history.
+ */
 @Composable
-fun rememberBlockEditorController(): BlockEditorController = remember { BlockEditorController() }
+fun rememberBlockEditorController(noteId: String): BlockEditorController =
+    remember(noteId) { BlockEditorController(noteId) }
 
 internal expect fun currentTimeMillis(): Long

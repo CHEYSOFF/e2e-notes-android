@@ -9,14 +9,24 @@ import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.asAwtTransferable
 import java.awt.datatransfer.DataFlavor
 import java.awt.datatransfer.StringSelection
+import java.awt.datatransfer.UnsupportedFlavorException
+import java.io.IOException
 
 internal actual fun currentTimeMillis(): Long = System.currentTimeMillis()
 
+/** The entry's string flavour, or null if it has none or will not give it up. */
 @OptIn(ExperimentalComposeUiApi::class)
 internal actual suspend fun ClipEntry.plainText(): String? {
     val t = asAwtTransferable ?: return null
     if (!t.isDataFlavorSupported(DataFlavor.stringFlavor)) return null
-    return t.getTransferData(DataFlavor.stringFlavor) as? String
+    // A transferable may still refuse at read time; the caller then writes an empty entry.
+    return try {
+        t.getTransferData(DataFlavor.stringFlavor) as? String
+    } catch (e: UnsupportedFlavorException) {
+        null
+    } catch (e: IOException) {
+        null
+    }
 }
 
 /** A [StringSelection]: plain text only, so no styled or HTML flavour can carry the markers along. */

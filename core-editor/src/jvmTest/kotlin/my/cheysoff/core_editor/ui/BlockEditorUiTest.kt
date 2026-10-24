@@ -38,6 +38,13 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.runBlocking
+import java.awt.datatransfer.DataFlavor
+import java.awt.datatransfer.Transferable
+import java.awt.datatransfer.UnsupportedFlavorException
+import java.io.IOException
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.asAwtTransferable
 import my.cheysoff.core_blocks.Block
 import my.cheysoff.core_blocks.BlockDocument
 import my.cheysoff.core_blocks.BlockType
@@ -80,9 +87,9 @@ class BlockEditorUiTest {
     fun `clicking a checkbox ticks the item and calls onChange`() = runComposeUiTest {
         EditorFlags.enable()
         val changes = mutableListOf<List<Block>>()
-        val controller = BlockEditorController()
+        val controller = BlockEditorController("n1")
         setContent {
-            BlockEditor(doc(text, check), { changes += it }, { _, _ -> }, Modifier.width(400.dp), controller)
+            BlockEditor("n1", doc(text, check), { changes += it }, { _, _ -> }, Modifier.width(400.dp), controller)
         }
         waitForIdle()
         onNodeWithTag("check-c").performClick()
@@ -95,10 +102,10 @@ class BlockEditorUiTest {
     @Test
     fun `picture overlay sits on the placeholder line`() = runComposeUiTest {
         EditorFlags.enable()
-        val controller = BlockEditorController()
+        val controller = BlockEditorController("n1")
         setContent {
             BlockEditor(
-                doc(text, picture, number), {},
+                "n1", doc(text, picture, number), {},
                 { id, _ -> Box(Modifier.fillMaxSize().testTag("content-$id")) },
                 Modifier.width(400.dp).testTag("editor"), controller,
             )
@@ -122,10 +129,10 @@ class BlockEditorUiTest {
         EditorFlags.enable()
         val gone = Block("pic:gone", BlockType.PICTURE, ref = "gone")
         val changes = mutableListOf<List<Block>>()
-        val controller = BlockEditorController()
+        val controller = BlockEditorController("n1")
         setContent {
             BlockEditor(
-                doc(text, gone), { changes += it },
+                "n1", doc(text, gone), { changes += it },
                 { id, _ -> if (id == "known") Box(Modifier.fillMaxSize()) else BasicText("Picture not synced yet") },
                 Modifier.width(400.dp).testTag("editor"), controller,
             )
@@ -146,10 +153,10 @@ class BlockEditorUiTest {
     fun `copy of a selection with a picture and a checklist gives clean text`() = runComposeUiTest {
         EditorFlags.enable()
         val clipboard = FakeClipboard()
-        val controller = BlockEditorController()
+        val controller = BlockEditorController("n1")
         setContent {
             CompositionLocalProvider(LocalClipboard provides clipboard) {
-                BlockEditor(doc(text, check, picture, number), {}, { _, _ -> }, Modifier.width(400.dp), controller)
+                BlockEditor("n1", doc(text, check, picture, number), {}, { _, _ -> }, Modifier.width(400.dp), controller)
             }
         }
         waitForIdle()
@@ -170,10 +177,10 @@ class BlockEditorUiTest {
         EditorFlags.enable()
         val clipboard = FakeClipboard()
         val changes = mutableListOf<List<Block>>()
-        val controller = BlockEditorController()
+        val controller = BlockEditorController("n1")
         setContent {
             CompositionLocalProvider(LocalClipboard provides clipboard) {
-                BlockEditor(doc(text, check), { changes += it }, { _, _ -> }, Modifier.width(400.dp), controller)
+                BlockEditor("n1", doc(text, check), { changes += it }, { _, _ -> }, Modifier.width(400.dp), controller)
             }
         }
         waitForIdle()
@@ -189,7 +196,7 @@ class BlockEditorUiTest {
     }
 
     @Test
-    fun `ParagraphStyle indent adds no blank line`() = runComposeUiTest {
+    fun `ParagraphStyle indent still adds a blank line, so the fallback spacing is in use`() = runComposeUiTest {
         EditorFlags.enable()
         // The probe: a hanging-indent ParagraphStyle on list lines, in the buffer as the plan
         // first proposed. Compose 1.12 still lays out an extra empty line at each styled line
@@ -201,11 +208,11 @@ class BlockEditorUiTest {
             addStyle(indent, 5, 9)
         }
         var probeLayout: TextLayoutResult? = null
-        val controller = BlockEditorController()
+        val controller = BlockEditorController("n1")
         setContent {
             BasicTextField(probe, Modifier.width(400.dp), onTextLayout = { probeLayout = it() })
             BlockEditor(
-                doc(text, check, check.copy(id = "c2", text = "eggs"), Block("b", BlockType.BULLET, "x"), number),
+                "n1", doc(text, check, check.copy(id = "c2", text = "eggs"), Block("b", BlockType.BULLET, "x"), number),
                 {}, { _, _ -> }, Modifier.width(400.dp), controller,
             )
         }
@@ -219,9 +226,9 @@ class BlockEditorUiTest {
     fun `a remote document applies without calling onChange and becomes the base`() = runComposeUiTest {
         EditorFlags.enable()
         val changes = mutableListOf<List<Block>>()
-        val controller = BlockEditorController()
+        val controller = BlockEditorController("n1")
         var document by mutableStateOf(doc(text, check))
-        setContent { BlockEditor(document, { changes += it }, { _, _ -> }, Modifier.width(400.dp), controller) }
+        setContent { BlockEditor("n1", document, { changes += it }, { _, _ -> }, Modifier.width(400.dp), controller) }
         waitForIdle()
         val remote = doc(text, check.copy(done = true))
         document = remote
@@ -235,10 +242,10 @@ class BlockEditorUiTest {
     fun `dragging a picture moves it below the next line and can be undone`() = runComposeUiTest {
         EditorFlags.enable()
         val changes = mutableListOf<List<Block>>()
-        val controller = BlockEditorController()
+        val controller = BlockEditorController("n1")
         setContent {
             BlockEditor(
-                doc(text, picture, number), { changes += it },
+                "n1", doc(text, picture, number), { changes += it },
                 { _, _ -> Box(Modifier.fillMaxSize()) }, Modifier.width(400.dp), controller,
             )
         }
@@ -264,8 +271,8 @@ class BlockEditorUiTest {
     fun `typing and Ctrl+Z are local edits reported through onChange`() = runComposeUiTest {
         EditorFlags.enable()
         val changes = mutableListOf<List<Block>>()
-        val controller = BlockEditorController()
-        setContent { BlockEditor(doc(text), { changes += it }, { _, _ -> }, Modifier.width(400.dp), controller) }
+        val controller = BlockEditorController("n1")
+        setContent { BlockEditor("n1", doc(text), { changes += it }, { _, _ -> }, Modifier.width(400.dp), controller) }
         waitForIdle()
         controller.model.state.edit { selection = TextRange(5) }
         val field = onNodeWithTag(BlockEditorFieldTag)
@@ -278,6 +285,148 @@ class BlockEditorUiTest {
         assertEquals("Intro", controller.model.state.text.toString())
         assertEquals("Intro", changes.last().single().text)
         assertEquals(2, changes.size)
+    }
+
+    @Test
+    fun `picture content stays composed while another line is typed in`() = runComposeUiTest {
+        EditorFlags.enable()
+        val identities = mutableSetOf<Any>()
+        var disposed = 0
+        val controller = BlockEditorController("n1")
+        setContent {
+            BlockEditor(
+                "n1", doc(text, picture, number), {},
+                { _, _ ->
+                    val identity = remember { Any() }
+                    identities += identity
+                    DisposableEffect(Unit) { onDispose { disposed++ } }
+                    Box(Modifier.fillMaxSize())
+                },
+                Modifier.width(400.dp), controller,
+            )
+        }
+        waitForIdle()
+        controller.model.state.edit { selection = TextRange(5) } // end of "Intro", above the picture
+        val field = onNodeWithTag(BlockEditorFieldTag)
+        field.requestFocus()
+        for (c in "abc") {
+            field.performTextInput(c.toString())
+            waitForIdle()
+        }
+        field.performTextInput("\n")
+        waitForIdle()
+        assertEquals("Introabc", controller.model.blocks().first().text)
+        assertEquals(1, identities.size, "picture content was recreated")
+        assertEquals(0, disposed, "picture content left composition")
+    }
+
+    @Test
+    fun `switching the note id gives a fresh controller and Ctrl+Z cannot bring back the old note`() = runComposeUiTest {
+        EditorFlags.enable()
+        var noteId by mutableStateOf("a")
+        var controller: BlockEditorController? = null
+        val docs = mapOf("a" to doc(text), "b" to doc(Block("other", BlockType.PARAGRAPH, "Note B")))
+        setContent {
+            val c = rememberBlockEditorController(noteId)
+            controller = c
+            BlockEditor(noteId, docs.getValue(noteId), {}, { _, _ -> }, Modifier.width(400.dp), c)
+        }
+        waitForIdle()
+        controller!!.model.state.edit { selection = TextRange(5) }
+        onNodeWithTag(BlockEditorFieldTag).requestFocus()
+        onNodeWithTag(BlockEditorFieldTag).performTextInput("!")
+        waitForIdle()
+        assertTrue(controller!!.canUndo)
+
+        noteId = "b"
+        waitForIdle()
+        val b = controller!!
+        assertEquals("b", b.noteId)
+        assertFalse(b.canUndo)
+        assertEquals("Note B", b.model.state.text.toString())
+        val field = onNodeWithTag(BlockEditorFieldTag)
+        field.requestFocus()
+        field.performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.Z) } }
+        waitForIdle()
+        assertEquals("Note B", b.model.state.text.toString())
+        assertEquals(listOf("other"), b.model.ids)
+    }
+
+    @Test
+    fun `another note's document is loaded, never offered, even on a hoisted controller`() = runComposeUiTest {
+        EditorFlags.enable()
+        var noteId by mutableStateOf("a")
+        var document by mutableStateOf(doc(text))
+        val changes = mutableListOf<List<Block>>()
+        val controller = BlockEditorController("a")
+        setContent { BlockEditor(noteId, document, { changes += it }, { _, _ -> }, Modifier.width(400.dp), controller) }
+        waitForIdle()
+        controller.model.state.edit { selection = TextRange(5) }
+        onNodeWithTag(BlockEditorFieldTag).requestFocus()
+        onNodeWithTag(BlockEditorFieldTag).performTextInput("!")
+        waitForIdle()
+        assertTrue(controller.canUndo)
+        val other = doc(Block("other", BlockType.PARAGRAPH, "Note B"))
+        noteId = "b"
+        document = other
+        waitForIdle()
+        assertFalse(controller.canUndo)
+        assertFalse(controller.remote.hasPending)
+        assertEquals(other, controller.base)
+        assertEquals(listOf("other"), controller.model.ids)
+        controller.undo()
+        waitForIdle()
+        assertEquals("Note B", controller.model.state.text.toString())
+        assertEquals(1, changes.size, "the reload is not a local edit")
+    }
+
+    @Test
+    fun `copy of a selection starting mid-line gives that line's tail as a paragraph`() =
+        copies(TextRange(2, 15), "tro\n☐ buy milk")
+
+    @Test
+    fun `copy of a selection ending mid-line keeps the marker of the line it started`() =
+        copies(TextRange(0, 10), "Intro\n☐ buy")
+
+    private fun copies(selection: TextRange, expected: String) = runComposeUiTest {
+        EditorFlags.enable()
+        val clipboard = FakeClipboard()
+        val controller = BlockEditorController("n1")
+        setContent {
+            CompositionLocalProvider(LocalClipboard provides clipboard) {
+                BlockEditor("n1", doc(text, check), {}, { _, _ -> }, Modifier.width(400.dp), controller)
+            }
+        }
+        waitForIdle()
+        val field = onNodeWithTag(BlockEditorFieldTag)
+        field.requestFocus()
+        controller.model.state.edit { this.selection = selection }
+        field.performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.C) } }
+        waitForIdle()
+        assertEquals(expected, runBlocking { clipboard.entry?.plainText() })
+    }
+
+    @Test
+    fun `an entry with no readable text is replaced by an empty plain entry`() = runBlocking {
+        val target = FakeClipboard()
+        val clipboard = EditorClipboard(target)
+        val imageOnly = object : Transferable {
+            override fun getTransferDataFlavors() = arrayOf(DataFlavor.imageFlavor)
+            override fun isDataFlavorSupported(flavor: DataFlavor) = flavor == DataFlavor.imageFlavor
+            override fun getTransferData(flavor: DataFlavor): Any = throw UnsupportedFlavorException(flavor)
+        }
+        val refusing = object : Transferable {
+            override fun getTransferDataFlavors() = arrayOf(DataFlavor.stringFlavor)
+            override fun isDataFlavorSupported(flavor: DataFlavor) = true
+            override fun getTransferData(flavor: DataFlavor): Any = throw IOException("gone")
+        }
+        for (t in listOf(imageOnly, refusing)) {
+            target.entry = null
+            clipboard.setClipEntry(ClipEntry(t))
+            val written = assertNotNull(target.entry)
+            assertEquals("", written.plainText())
+            assertFalse(written.asAwtTransferable!!.isDataFlavorSupported(DataFlavor.imageFlavor))
+        }
     }
 
     private fun lineStart(controller: BlockEditorController, line: Int): Int {

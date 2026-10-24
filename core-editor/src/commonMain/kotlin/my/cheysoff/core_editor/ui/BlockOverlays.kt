@@ -53,20 +53,20 @@ import kotlin.math.roundToInt
 @Composable
 internal fun BlockOverlays(
     controller: BlockEditorController,
-    layout: TextLayoutResult,
+    view: LaidOutText,
     drag: PictureDrag,
     accent: Color,
     textColor: Color,
     pictureContent: @Composable (recordId: String, kind: BlockType) -> Unit,
 ) {
-    val model = controller.model
-    val text = model.state.text
-    // The layout lags the text by a frame after an edit; overlays wait for it rather than land on stale lines.
-    if (layout.layoutInput.text.length != text.length) return
+    // Placed from the last layout that matched the text (see LaidOutText), never dropped while a
+    // newer one is pending: leaving composition would dispose every overlay, the host's picture
+    // content included, and re-decode each picture on every keystroke.
+    val layout = view.layout
+    val text = view.text
     val lines = lineRanges(text)
-    val ids = model.ids
-    if (ids.size != lines.size) return
-    val refs = model.refs
+    val ids = view.ids
+    val refs = view.refs
     val density = LocalDensity.current
     var number = 0
     lines.forEachIndexed { k, line ->
@@ -83,7 +83,7 @@ internal fun BlockOverlays(
                     // A block saved without `ref` still names its record in its id ("pic:<record>").
                     val ref = refs[id] ?: id.substringAfter(':')
                     val kind = if (marker == Markers.DRAWING) BlockType.DRAWING else BlockType.PICTURE
-                    PictureOverlay(controller, layout, drag, lines, k, id, accent) { pictureContent(ref, kind) }
+                    PictureOverlay(controller, layout, drag, lines[k], id, accent) { pictureContent(ref, kind) }
                 }
                 marker == Markers.CHECK_OPEN || marker == Markers.CHECK_DONE -> {
                     val done = marker == Markers.CHECK_DONE
@@ -94,7 +94,10 @@ internal fun BlockOverlays(
                         }.size(boxSize).clip(RoundedCornerShape(5.dp))
                             .background(if (done) accent else Color.Transparent)
                             .border(1.5.dp, accent, RoundedCornerShape(5.dp))
-                            .clickable { controller.toggleCheck(k) }
+                            .clickable {
+                                // By id: the line may have moved since this layout.
+                                controller.model.ids.indexOf(id).takeIf { it >= 0 }?.let(controller::toggleCheck)
+                            }
                             .testTag("check-$id"),
                         contentAlignment = Alignment.Center,
                     ) {
@@ -135,18 +138,17 @@ private fun PictureOverlay(
     controller: BlockEditorController,
     layout: TextLayoutResult,
     drag: PictureDrag,
-    lines: List<Line>,
-    k: Int,
+    at: Line,
     id: String,
     accent: Color,
     content: @Composable () -> Unit,
 ) {
-    val line = layout.getLineForOffset(lines[k].start)
+    val line = layout.getLineForOffset(at.start)
     val top = layout.getLineTop(line)
     val bottom = layout.getLineBottom(line)
     val density = LocalDensity.current
     val sel = controller.model.state.selection
-    val selected = lines[k].start in sel.min until sel.max
+    val selected = at.start in sel.min until sel.max
     val dragging = drag.dragging == id
     with(density) {
         Box(
@@ -163,12 +165,12 @@ private fun PictureOverlay(
                     onStart = { at -> drag.start(id, at) },
                     onDrag = { by ->
                         // The line may have moved since composition; find it again by id.
-                        val now = controller.model.ids.indexOf(id)
-                        val cur = controller.layout
-                        if (now >= 0 && cur != null) {
-                            val ls = lineRanges(controller.model.state.text)
-                            val t = cur.getLineTop(cur.getLineForOffset(ls[now].start))
-                            drag.move(by, cur, ls, now, t)
+                        val cur = controller.laidOut
+                        val now = cur?.ids?.indexOf(id) ?: -1
+                        if (cur != null && now >= 0) {
+                            val ls = lineRanges(cur.text)
+                            val t = cur.layout.getLineTop(cur.layout.getLineForOffset(ls[now].start))
+                            drag.move(by, cur.layout, ls, now, t)
                         }
                     },
                     onEnd = {
@@ -195,3 +197,16 @@ private fun PictureOverlay(
         ) { content() }
     }
 }
+
+/**
+ * A field layout together with the text, line ids and picture records it was made for. The
+ * field's layout trails its text by a frame after each edit (composition sees the new text,
+ * `onTextLayout` comes during measure), so the overlays keep using the last consistent one until
+ * the next arrives, rather than mixing the new text with old line positions.
+ */
+internal class LaidOutText(
+    val layout: TextLayoutResult,
+    val text: String,
+    val ids: List<String>,
+    val refs: Map<String, String>,
+)

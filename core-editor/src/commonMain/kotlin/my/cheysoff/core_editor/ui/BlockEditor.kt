@@ -44,10 +44,10 @@ val DefaultEditorAccent = Color(0xFF7C5CFF)
  * runs across paragraphs, checklists and pictures, with checkboxes, bullets, numbers, pictures
  * and drawings drawn over their marker lines ([BlockOverlays]).
  *
- * - [document] is the latest stored version of the note. The first one is opened; every later
- *   emission is a synced change, offered to [RemoteApply], which applies it around the user's
- *   typing. Re-emit freely: an echo of our own save makes no edit. Key the editor (and its
- *   [controller]) on the note id when the note changes.
+ * - [document] is the latest stored version of note [noteId]. The first one is opened; every
+ *   later emission is a synced change, offered to [RemoteApply], which applies it around the
+ *   user's typing. Re-emit freely: an echo of our own save makes no edit. A document for another
+ *   [noteId] is opened afresh, never offered (see [BlockEditorController]).
  * - [onChange] gets the visible blocks after each LOCAL edit (typing, IME, paste, cut, a toolbar
  *   command, a tick, a picture drag, undo/redo), never after a synced change was applied, so a
  *   save it triggers is always the user's. Debounce in the caller; save against
@@ -65,19 +65,20 @@ val DefaultEditorAccent = Color(0xFF7C5CFF)
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun BlockEditor(
+    noteId: String,
     document: BlockDocument,
     onChange: (List<Block>) -> Unit,
     pictureContent: @Composable (recordId: String, kind: BlockType) -> Unit,
     modifier: Modifier = Modifier,
-    controller: BlockEditorController = rememberBlockEditorController(),
+    controller: BlockEditorController = rememberBlockEditorController(noteId),
     selectionAccent: Color = DefaultEditorAccent,
     textStyle: TextStyle = TextStyle(color = Color(0xFF1F1D2B), fontSize = 16.sp),
     pictureHeight: Dp = 200.dp,
 ) {
     SideEffect { controller.onChange = onChange }
 
-    // Every emission: the first opens the note, the rest are synced changes.
-    LaunchedEffect(controller, document) { controller.receive(document) }
+    // Every emission: the first of a note opens it, the rest are synced changes of it.
+    LaunchedEffect(controller, noteId, document) { controller.receive(noteId, document) }
 
     // A change held back for the user's typing is retried once the pause has passed, and again
     // after each later local edit; never in a loop. Changes held because both sides edited a
@@ -91,7 +92,9 @@ fun BlockEditor(
         controller.retick()
     }
 
-    if (!controller.loaded) return
+    // Until this note's document is in, show nothing: a field still holding another note's text
+    // would let typing (and its onChange) land on the wrong note.
+    if (controller.loadedNote != noteId) return
 
     val density = LocalDensity.current
     val textColor = textStyle.color.takeIf { it != Color.Unspecified } ?: Color.Black
@@ -100,7 +103,7 @@ fun BlockEditor(
         EditorStyling(bodySize, pictureHeight, density.fontScale, textColor.copy(alpha = 0.45f))
     }
     val input = remember(controller) { EditingRules(controller.model).then(ReportLocalEdits(controller)) }
-    val drag = remember(controller) { PictureDrag() }
+    val drag = remember(controller, controller.loadedNote) { PictureDrag() }
     val outerClipboard = LocalClipboard.current
     val clipboard = remember(outerClipboard) { EditorClipboard(outerClipboard) }
     val selectionColors = remember(selectionAccent) {
@@ -116,10 +119,10 @@ fun BlockEditor(
                 outputTransformation = styling,
                 textStyle = textStyle,
                 cursorBrush = SolidColor(selectionAccent),
-                onTextLayout = { result -> controller.layout = result() },
+                onTextLayout = { result -> controller.laidOut(result()) },
             )
-            controller.layout?.let { layout ->
-                BlockOverlays(controller, layout, drag, selectionAccent, textColor, pictureContent)
+            controller.laidOut?.let { view ->
+                BlockOverlays(controller, view, drag, selectionAccent, textColor, pictureContent)
             }
             drag.slot?.let { DropIndicator(it, selectionAccent) }
         }
