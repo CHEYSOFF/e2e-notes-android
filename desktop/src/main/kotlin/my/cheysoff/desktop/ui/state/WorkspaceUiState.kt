@@ -1,6 +1,7 @@
 package my.cheysoff.desktop.ui.state
 
 import androidx.compose.runtime.Immutable
+import my.cheysoff.core_blocks.BlockDocument
 import my.cheysoff.core_domain.model.AttachmentData
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.NoteContentFormat
@@ -82,6 +83,23 @@ data class EditorDraft(
      * editor owns its text and only re-reads [content] when the note id or this changes.
      */
     val contentRevision: Int = 0,
+    /**
+     * The document the shared block editor shows for this note, from `OpenDocument.assemble` over
+     * the stored row and the note's live pictures and drawings. Null on the legacy editor path
+     * (`BlocksFormat.WRITE_ENABLED` off) and until the first assembly lands.
+     *
+     * It lives on the draft, next to [id], so the note id and its document always travel as one
+     * value: the pane can never hand note A's document to an editor opened for note B. Re-assembled
+     * on every storage change of the note, its attachments or its sketches; the editor applies each
+     * one as a synced change (RemoteApply), which is why [contentRevision] plays no part for it.
+     */
+    val blocks: BlockDocument? = null,
+    /**
+     * The raw stored body when it is BLOCKS but does not decode -- most likely written by a newer
+     * build. Such a note is shown read-only and its body is never saved, since overwriting it would
+     * destroy what that build wrote. Null otherwise.
+     */
+    val unreadableBody: String? = null,
 )
 
 @Immutable

@@ -149,6 +149,15 @@ private fun BoxScope.DeleteCorner(onClick: () -> Unit, description: String) {
 }
 
 /**
+ * One drawing, letterboxed into whatever space [modifier] gives it. The block editor's drawing
+ * blocks use it, so a drawing reads the same inline as in the legacy section above.
+ */
+@Composable
+internal fun SketchCanvas(sketch: Sketch, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) { drawSketch(sketch, size) }
+}
+
+/**
  * The desktop's own thin `Path` builder over the shared `:core-domain` geometry -- the mapping
  * ([SketchGeometry]) and the smoothing ([StrokeSmoothing]) are exactly what `:core-ui`'s
  * Android-only `SketchRenderer` uses, because `:core-ui` is an `android.library` and this module

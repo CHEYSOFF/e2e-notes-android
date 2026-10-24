@@ -152,10 +152,14 @@ fun NotesWorkspaceScreen(
                         onDeleteSketch = model::deleteSketch,
                         attachments = state.attachments,
                         onAttachmentTapped = { model.openAttachmentViewer(it.id) },
-                        onPasteImage = { image -> model.pasteImage { DesktopImageImporter.import(image) } },
+                        onPasteImage = { image, onAttached ->
+                            model.pasteImage(onAttached) { DesktopImageImporter.import(image) }
+                        },
                         pasteFailure = state.pasteFailure,
                         onDismissPasteFailure = model::dismissPasteFailure,
                         modifier = Modifier.weight(1f),
+                        blocksEditing = model.blocksEditing,
+                        onBlocksChange = model::onBlocksChanged,
                     )
                 }
             }

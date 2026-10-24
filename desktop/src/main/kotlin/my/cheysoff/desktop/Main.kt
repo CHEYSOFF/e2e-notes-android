@@ -26,6 +26,7 @@ import my.cheysoff.desktop.ui.PairingScreen
 import my.cheysoff.desktop.ui.MananaTheme
 import my.cheysoff.desktop.ui.UnlockScreen
 import my.cheysoff.desktop.ui.MananaWindow
+import my.cheysoff.desktop.vault.BlocksBackup
 import my.cheysoff.desktop.vault.DesktopVault
 import my.cheysoff.desktop.vault.VaultLocation
 import java.io.PrintWriter
@@ -49,10 +50,15 @@ fun main(args: Array<String>) {
     EditorFlags.enable()
     val directory = vaultDirectoryFrom(args)
     installCrashLog(directory)
-    val vault = DesktopVault(
-        directory = directory,
-        credentialStore = CredentialStores.forHost(HostOs.current(), directory),
-    )
+    // One-time snapshot of the vault before anything can open records.db: this is the first build
+    // that can rewrite note bodies as BLOCKS. See BlocksBackup for why, and why a failure does not
+    // stop the app from starting.
+    val vault = BlocksBackup.beforeOpening(directory) {
+        DesktopVault(
+            directory = directory,
+            credentialStore = CredentialStores.forHost(HostOs.current(), directory),
+        )
+    }
 
     application {
         val scope = rememberCoroutineScope()

@@ -72,6 +72,9 @@ import com.mohamedrejeb.richeditor.ui.BasicRichTextEditor
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.drop
+import my.cheysoff.core_blocks.Block
+import my.cheysoff.core_blocks.BlockDocument
+import my.cheysoff.core_blocks.BlockType
 import my.cheysoff.core_domain.model.AttachmentData
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.NoteContentFormat
@@ -79,6 +82,8 @@ import my.cheysoff.core_domain.sketch.DisplaySketch
 import my.cheysoff.desktop.ui.attachment.AttachmentRail
 import my.cheysoff.desktop.ui.attachment.DesktopImportResult
 import my.cheysoff.desktop.ui.attachment.clipboardImage
+import my.cheysoff.desktop.ui.attachment.pickImageFile
+import my.cheysoff.core_editor.ui.rememberBlockEditorController
 import java.awt.Image
 import my.cheysoff.desktop.ui.state.EditorDraft
 import my.cheysoff.desktop.ui.state.SaveStatus
@@ -99,6 +104,14 @@ import my.cheysoff.desktop.ui.theme.folderAccentColor
  * Saving is automatic and there is no Save button; the only affordance is the status line next to
  * the title, which is deliberately quiet. Ctrl+S is wired to a flush so that the reflex does
  * something rather than nothing, but it is never the thing that makes an edit durable.
+ *
+ * **Two bodies, one switch.** With [blocksEditing] on, the body is the shared block editor
+ * ([BlockNoteBody]): text, checklists, pictures and drawings in one field, saved as BLOCKS through
+ * [onBlocksChange]. Off, it is the legacy body ([LegacyNoteBody]): the rich-text field, the separate
+ * checklist, the sketch section and the attachment rail, saved as HTML through [onContentChange].
+ * Everything around the body -- the action bar, the title, the image paste -- is shared. The switch
+ * follows `BlocksFormat.WRITE_ENABLED` (via `NotesWorkspaceModel.blocksEditing`) so that until both
+ * apps can read BLOCKS this build edits exactly as the last one did; Task 16 removes the legacy body.
  */
 @OptIn(FlowPreview::class)
 @Composable
@@ -122,10 +135,17 @@ fun NoteEditorPane(
     onDeleteSketch: (String) -> Unit,
     attachments: List<AttachmentData>,
     onAttachmentTapped: (AttachmentData) -> Unit,
-    onPasteImage: (Image) -> Unit,
+    /**
+     * An image to attach. On the block path [onAttached] is non-null and must be called with the
+     * saved record's id, once the record is written, to place its picture block at the caret.
+     */
+    onPasteImage: (image: Image, onAttached: ((recordId: String) -> Unit)?) -> Unit,
     pasteFailure: DesktopImportResult?,
     onDismissPasteFailure: () -> Unit,
     modifier: Modifier = Modifier,
+    blocksEditing: Boolean = false,
+    /** A local edit in the block editor: the note it belongs to, its blocks, and the editor's base. */
+    onBlocksChange: (noteId: String, blocks: List<Block>, base: BlockDocument) -> Unit = { _, _, _ -> },
 ) {
     if (draft == null) {
         EditorEmptyState(modifier)
@@ -134,29 +154,11 @@ fun NoteEditorPane(
 
     val accent = folderAccentColor(draft.folderId, folders.firstOrNull { it.id == draft.folderId }?.colorArgb)
         ?: AccentIndigo
-    val richTextState = rememberRichTextState().apply {
-        // Paste is plain text: styling copied out of a web page or a document (colours, font
-        // sizes, odd headings) is never what the note wants, and the toolbar is how a note gets
-        // its formatting. Copying out of the editor is plain text too, for the same reason.
-        config.richClipboardEnabled = false
-    }
-    var pendingChecklistFocus by remember { mutableStateOf<String?>(null) }
-
-    // Keyed on the note id, so switching notes reloads the body and switching back does not.
-    // Within one note the editor owns its text: the model never pushes `content` back down here,
-    // which is what stops an autosave echo from resetting the cursor mid-word.
-    // contentRevision moves only when a synced-in body replaced the one being shown.
-    LaunchedEffect(draft.id, draft.contentRevision) {
-        if (draft.contentFormat == NoteContentFormat.HTML) richTextState.setHtml(draft.content)
-        else richTextState.setText(draft.content)
-
-        snapshotFlow { richTextState.annotatedString }
-            .drop(1) // the emission caused by the load above is not a user edit
-            // toHtml() walks and re-serialises the whole document, so it is not something to do on
-            // every keystroke of a long note. 120ms is below the threshold where the list's
-            // snippet visibly lags the typing, and collapses a burst of typing into one pass.
-            .debounce(120)
-            .collect { onContentChange(richTextState.toHtml()) }
+    // One controller per note (keyed on its id), and only on the block path. Hoisted to the pane
+    // rather than kept inside the body so the Ctrl+V handler below can place a pasted picture.
+    val blockController = if (blocksEditing) rememberBlockEditorController(draft.id) else null
+    val placePicture: ((String) -> Unit)? = blockController?.let { controller ->
+        { recordId: String -> controller.insertPicture(recordId, BlockType.PICTURE) }
     }
 
     val scroll = rememberScrollState()
@@ -187,7 +189,7 @@ fun NoteEditorPane(
                 .onPreviewKeyEvent { event ->
                     if (event.type != KeyEventType.KeyDown || !event.isPaste()) return@onPreviewKeyEvent false
                     val image = clipboardImage() ?: return@onPreviewKeyEvent false
-                    onPasteImage(image)
+                    onPasteImage(image, placePicture)
                     true
                 }
                 .verticalScroll(scroll)
@@ -213,56 +215,35 @@ fun NoteEditorPane(
             HorizontalDivider(color = OutlineDark)
             Spacer(Modifier.height(6.dp))
 
-            FormattingToolbar(richTextState, accent)
-
-            if (pasteFailure != null) {
-                Text(
-                    text = when (pasteFailure) {
-                        DesktopImportResult.TooLarge -> "That image is too large to attach."
-                        else -> "Couldn't read an image from the clipboard."
-                    } + "  ✕",
-                    color = MetaGrey,
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier
-                        .pointerHoverIcon(handCursor)
-                        .clickable(onClickLabel = "Dismiss", onClick = onDismissPasteFailure)
-                        .padding(vertical = 4.dp),
+            if (blockController != null) {
+                BlockNoteBody(
+                    draft = draft,
+                    controller = blockController,
+                    accent = accent,
+                    attachments = attachments,
+                    sketches = sketches,
+                    pasteFailure = pasteFailure,
+                    onDismissPasteFailure = onDismissPasteFailure,
+                    onBlocksChange = onBlocksChange,
+                    onInsertPicture = { pickImageFile()?.let { onPasteImage(it, placePicture) } },
+                )
+            } else {
+                LegacyNoteBody(
+                    draft = draft,
+                    accent = accent,
+                    onContentChange = onContentChange,
+                    onAddChecklistItem = onAddChecklistItem,
+                    onChecklistTextChange = onChecklistTextChange,
+                    onToggleChecklistItem = onToggleChecklistItem,
+                    onRemoveChecklistItem = onRemoveChecklistItem,
+                    sketches = sketches,
+                    onDeleteSketch = onDeleteSketch,
+                    attachments = attachments,
+                    onAttachmentTapped = onAttachmentTapped,
+                    pasteFailure = pasteFailure,
+                    onDismissPasteFailure = onDismissPasteFailure,
                 )
             }
-
-            Spacer(Modifier.height(6.dp))
-
-            val bodyStyle = MaterialTheme.typography.bodyMedium
-            BasicRichTextEditor(
-                state = richTextState,
-                textStyle = bodyStyle.copy(color = EditorBodyGrey),
-                cursorBrush = SolidColor(accent),
-                modifier = Modifier.fillMaxWidth(),
-                decorationBox = { inner ->
-                    if (richTextState.annotatedString.isEmpty()) {
-                        Text("Start writing…", style = bodyStyle, color = PlaceholderGrey)
-                    }
-                    inner()
-                },
-            )
-
-            ChecklistSection(
-                draft = draft,
-                accent = accent,
-                pendingFocus = pendingChecklistFocus,
-                onFocusHandled = { pendingChecklistFocus = null },
-                onAdd = { after -> pendingChecklistFocus = onAddChecklistItem(after) },
-                onTextChange = onChecklistTextChange,
-                onToggle = onToggleChecklistItem,
-                onRemove = onRemoveChecklistItem,
-            )
-
-            SketchSection(sketches = sketches, onDelete = onDeleteSketch)
-
-            // The viewer itself is not rendered here -- it is a full-bleed overlay owned by
-            // NotesWorkspaceScreen (see AttachmentViewer's own KDoc for why), so this pane only
-            // ever forwards the tap.
-            AttachmentRail(attachments = attachments, onTapped = onAttachmentTapped)
 
             Spacer(Modifier.height(60.dp))
         }
@@ -273,6 +254,110 @@ fun NoteEditorPane(
             )
         }
     }
+}
+
+/**
+ * The legacy body: rich-text field, separate checklist, sketch section and attachment rail. Used
+ * while `BlocksFormat.WRITE_ENABLED` is off, unchanged from before the block editor; removed in
+ * Task 16.
+ */
+@OptIn(FlowPreview::class)
+@Composable
+private fun LegacyNoteBody(
+    draft: EditorDraft,
+    accent: Color,
+    onContentChange: (String) -> Unit,
+    onAddChecklistItem: (after: String?) -> String,
+    onChecklistTextChange: (String, String) -> Unit,
+    onToggleChecklistItem: (String) -> Unit,
+    onRemoveChecklistItem: (String) -> Unit,
+    sketches: List<DisplaySketch>,
+    onDeleteSketch: (String) -> Unit,
+    attachments: List<AttachmentData>,
+    onAttachmentTapped: (AttachmentData) -> Unit,
+    pasteFailure: DesktopImportResult?,
+    onDismissPasteFailure: () -> Unit,
+) {
+    val richTextState = rememberRichTextState().apply {
+        // Paste is plain text: styling copied out of a web page or a document (colours, font
+        // sizes, odd headings) is never what the note wants, and the toolbar is how a note gets
+        // its formatting. Copying out of the editor is plain text too, for the same reason.
+        config.richClipboardEnabled = false
+    }
+    var pendingChecklistFocus by remember { mutableStateOf<String?>(null) }
+
+    // Keyed on the note id, so switching notes reloads the body and switching back does not.
+    // Within one note the editor owns its text: the model never pushes `content` back down here,
+    // which is what stops an autosave echo from resetting the cursor mid-word.
+    // contentRevision moves only when a synced-in body replaced the one being shown.
+    LaunchedEffect(draft.id, draft.contentRevision) {
+        if (draft.contentFormat == NoteContentFormat.HTML) richTextState.setHtml(draft.content)
+        else richTextState.setText(draft.content)
+
+        snapshotFlow { richTextState.annotatedString }
+            .drop(1) // the emission caused by the load above is not a user edit
+            // toHtml() walks and re-serialises the whole document, so it is not something to do on
+            // every keystroke of a long note. 120ms is below the threshold where the list's
+            // snippet visibly lags the typing, and collapses a burst of typing into one pass.
+            .debounce(120)
+            .collect { onContentChange(richTextState.toHtml()) }
+    }
+
+    FormattingToolbar(richTextState, accent)
+
+    PasteFailureLine(pasteFailure, onDismissPasteFailure)
+
+    Spacer(Modifier.height(6.dp))
+
+    val bodyStyle = MaterialTheme.typography.bodyMedium
+    BasicRichTextEditor(
+        state = richTextState,
+        textStyle = bodyStyle.copy(color = EditorBodyGrey),
+        cursorBrush = SolidColor(accent),
+        modifier = Modifier.fillMaxWidth(),
+        decorationBox = { inner ->
+            if (richTextState.annotatedString.isEmpty()) {
+                Text("Start writing…", style = bodyStyle, color = PlaceholderGrey)
+            }
+            inner()
+        },
+    )
+
+    ChecklistSection(
+        draft = draft,
+        accent = accent,
+        pendingFocus = pendingChecklistFocus,
+        onFocusHandled = { pendingChecklistFocus = null },
+        onAdd = { after -> pendingChecklistFocus = onAddChecklistItem(after) },
+        onTextChange = onChecklistTextChange,
+        onToggle = onToggleChecklistItem,
+        onRemove = onRemoveChecklistItem,
+    )
+
+    SketchSection(sketches = sketches, onDelete = onDeleteSketch)
+
+    // The viewer itself is not rendered here -- it is a full-bleed overlay owned by
+    // NotesWorkspaceScreen (see AttachmentViewer's own KDoc for why), so this pane only
+    // ever forwards the tap.
+    AttachmentRail(attachments = attachments, onTapped = onAttachmentTapped)
+}
+
+/** Why the last image paste attached nothing; click to dismiss. Shared by both bodies. */
+@Composable
+internal fun PasteFailureLine(pasteFailure: DesktopImportResult?, onDismiss: () -> Unit) {
+    if (pasteFailure == null) return
+    Text(
+        text = when (pasteFailure) {
+            DesktopImportResult.TooLarge -> "That image is too large to attach."
+            else -> "Couldn't read an image from the clipboard."
+        } + "  ✕",
+        color = MetaGrey,
+        style = MaterialTheme.typography.labelSmall,
+        modifier = Modifier
+            .pointerHoverIcon(handCursor)
+            .clickable(onClickLabel = "Dismiss", onClick = onDismiss)
+            .padding(vertical = 4.dp),
+    )
 }
 
 @Composable

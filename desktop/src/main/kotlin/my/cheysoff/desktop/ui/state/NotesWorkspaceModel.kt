@@ -9,14 +9,23 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import my.cheysoff.core_blocks.Block
+import my.cheysoff.core_blocks.BlockCodec
+import my.cheysoff.core_blocks.BlockDocument
 import my.cheysoff.core_blocks.BlockText
+import my.cheysoff.core_blocks.BlocksFormat
+import my.cheysoff.core_blocks.BlocksSave
+import my.cheysoff.core_blocks.OpenDocument
 import my.cheysoff.core_domain.model.AttachmentData
 import my.cheysoff.core_domain.sketch.NoteBlocks
 import my.cheysoff.desktop.ui.attachment.DesktopImportResult
@@ -67,6 +76,20 @@ class NotesWorkspaceModel(
     private val sortOrder: NotesSortOrder = NotesSortOrder.DEFAULT,
     /** Where a pasted image is decoded and re-encoded; injected so a test can keep it on its scheduler. */
     private val encodeDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    /**
+     * Whether the note body is edited by the shared block editor and saved as BLOCKS. Defaults to
+     * [BlocksFormat.WRITE_ENABLED], which stays off until both apps ship the block editor (Task 16):
+     * a laptop writing BLOCKS while the phone still ran a build that refuses them would hand it notes
+     * it cannot open. A constructor parameter, not a read of the constant, so tests can run both
+     * paths. Off, this model behaves exactly as it did before the block editor existed.
+     */
+    private val blocksWriteEnabled: Boolean = BlocksFormat.WRITE_ENABLED,
+    /**
+     * The debounce between the block editor's last change and the save. Shorter than
+     * [autosaveDelayMillis] because the editor reports finished blocks, not a field to re-serialise.
+     */
+    private val blocksSaveDelayMillis: Long = 400L,
+    private val log: (String) -> Unit = { System.err.println(it) },
 ) {
     private val _state = MutableStateFlow(WorkspaceUiState())
     val state: StateFlow<WorkspaceUiState> = _state.asStateFlow()
@@ -79,6 +102,34 @@ class NotesWorkspaceModel(
 
     /** The stored row the open draft was last reconciled with. See [mergeIncoming]. */
     private var editorBaseline: Note? = null
+
+    /**
+     * The block editor's latest unsaved state, with the base it was edited against, or null when
+     * the last one was written. Captured together at [onBlocksChanged] time, never re-read at save
+     * time: a synced change the editor applies between the edit and the save moves the editor's base
+     * but not these blocks, and stamping old blocks against a newer base would read the synced change
+     * as the user undoing it. Cleared by the save that writes it, for the same reason: re-sending it
+     * later would claim blocks the other device has changed since.
+     */
+    private var unsavedBlocks: UnsavedBlocks? = null
+
+    private class UnsavedBlocks(val noteId: String, val blocks: List<Block>, val base: BlockDocument)
+
+    /**
+     * Ids of pasted pictures whose record is being written but whose block the editor has not
+     * inserted yet. Left out of the assembled document meanwhile, because a record with no block is
+     * otherwise appended at the end by [OpenDocument.assemble] -- the editor would receive it there
+     * first and the insert at the caret would then meet a block it already shows.
+     */
+    private val picturesBeingPlaced = MutableStateFlow<Set<String>>(emptySet())
+
+    /** The last assembled document, re-applied to a draft created after it arrived (see [recompute]). */
+    private var lastOpened: OpenedDocument? = null
+
+    private class OpenedDocument(val noteId: String, val document: BlockDocument, val unreadableBody: String?)
+
+    /** Whether the pane shows the shared block editor (true) or the legacy rich-text editor. */
+    val blocksEditing: Boolean get() = blocksWriteEnabled
 
     init {
         scope.launch {
@@ -113,6 +164,11 @@ class NotesWorkspaceModel(
                 selectedNoteAttachments(attachmentsPort)
                     .collect { list -> _state.value = _state.value.copy(attachments = list) }
             }
+        }
+
+        // Only on the block editor path: the legacy editor reads the draft's content instead.
+        if (blocksWriteEnabled) {
+            scope.launch { openedDocuments().collect(::attachDocument) }
         }
     }
 
@@ -165,6 +221,8 @@ class NotesWorkspaceModel(
         val id = _state.value.selectedNoteId ?: return
         autosaveJob?.cancel()
         val draft = _state.value.editor
+        val typed = unsavedBlocks?.takeIf { it.noteId == id }
+        unsavedBlocks = null
         // A pasted photo or a sketch is content too, even with no text beside it. Read before the
         // selection is cleared, which empties both lists.
         val hasMedia = _state.value.attachments.isNotEmpty() || _state.value.sketches.isNotEmpty()
@@ -175,7 +233,8 @@ class NotesWorkspaceModel(
         scope.launch {
             // A note that was created and left blank must never reach Trash — it would be a row
             // the user has to clean up for having pressed Ctrl+N by accident.
-            if (draft != null && draft.isBlank() && !hasMedia) repository.purgeNote(id) else repository.deleteNote(id)
+            val blank = draft != null && draft.isBlank() && (typed == null || BlockText.isEmpty(typed.blocks))
+            if (blank && !hasMedia) repository.purgeNote(id) else repository.deleteNote(id)
         }
     }
 
@@ -226,8 +285,16 @@ class NotesWorkspaceModel(
      * [encode] is the slow half (decode, downscale, JPEG) and is expected to have run off the UI
      * thread already; this only stamps identity and placement and writes. Shown in the rail
      * immediately, the same optimism [deleteAttachment] applies in the other direction.
+     *
+     * On the block path the caller passes [onAttached], which gets the new record's id once the
+     * record is written, to place the picture block at the caret. Until then the record is kept
+     * out of the assembled document (see [picturesBeingPlaced]).
      */
-    fun pasteImage(encode: () -> DesktopImportResult): Job? {
+    fun pasteImage(
+        // First, so the encode stays the trailing lambda at every existing call site.
+        onAttached: ((recordId: String) -> Unit)? = null,
+        encode: () -> DesktopImportResult,
+    ): Job? {
         val port = attachments ?: return null
         val noteId = _state.value.selectedNoteId ?: return null
         return scope.launch {
@@ -250,7 +317,20 @@ class NotesWorkspaceModel(
             if (_state.value.selectedNoteId == noteId) {
                 _state.value = _state.value.copy(attachments = existing + attachment, pasteFailure = null)
             }
-            port.saveAttachment(attachment)
+            if (onAttached == null) {
+                port.saveAttachment(attachment)
+                return@launch
+            }
+            picturesBeingPlaced.value += attachment.id
+            try {
+                // The record first, then the block: a block must never point at a record that was
+                // not written. If the user has moved to another note meanwhile, the block is not
+                // placed; the record is still the note's, and opening it appends the picture.
+                port.saveAttachment(attachment)
+                if (_state.value.selectedNoteId == noteId) onAttached(attachment.id)
+            } finally {
+                picturesBeingPlaced.value -= attachment.id
+            }
         }
     }
 
@@ -334,6 +414,26 @@ class NotesWorkspaceModel(
         draft.copy(checklist = draft.checklist.filterNot { it.id == itemId })
     }
 
+    /**
+     * The block editor's [blocks] for note [noteId] after a local edit, with the editor's [base]
+     * at that moment (`BlockEditorController.base`). Saved after [blocksSaveDelayMillis] of quiet,
+     * or at once by [flushPendingSave] when the user switches notes or closes the window.
+     *
+     * Ignored when the block path is off (logged, so a stray call is visible), when [noteId] is not
+     * the open note (an edit cannot be saved over another note), and when the open note's body is
+     * unreadable (it is read-only; see [EditorDraft.unreadableBody]).
+     */
+    fun onBlocksChanged(noteId: String, blocks: List<Block>, base: BlockDocument) {
+        if (!blocksWriteEnabled) {
+            log("NotesWorkspaceModel: block edit of note $noteId not saved: BlocksFormat.WRITE_ENABLED is off")
+            return
+        }
+        val draft = _state.value.editor ?: return
+        if (draft.id != noteId || draft.unreadableBody != null) return
+        unsavedBlocks = UnsavedBlocks(noteId, blocks, base)
+        scheduleSave(draft, blocksSaveDelayMillis)
+    }
+
     // ---------------------------------------------------------------- search
 
     fun openSearch() {
@@ -401,11 +501,11 @@ class NotesWorkspaceModel(
         persist(draft)
     }
 
-    private fun scheduleSave(draft: EditorDraft) {
+    private fun scheduleSave(draft: EditorDraft, delayMillis: Long = autosaveDelayMillis) {
         autosaveJob?.cancel()
         _state.value = _state.value.copy(saveStatus = SaveStatus.Pending)
         autosaveJob = scope.launch {
-            delay(autosaveDelayMillis)
+            delay(delayMillis)
             // The draft as it is NOW, not as it was when the debounce started: a sync landing
             // inside the window may have merged a remote change into it, and saving the captured
             // copy would write the older value straight back over that change.
@@ -413,17 +513,70 @@ class NotesWorkspaceModel(
         }
     }
 
+    /**
+     * Writes [draft]. With block edits pending for it, the body is those blocks as BLOCKS, built
+     * only by [BlocksSave.encodeForSave] and saved against the editor's base; the repository stamps
+     * and merges it (see `BlocksSave`). Without, the body is the draft's, which on the block path is
+     * the stored body as last emitted (the user never edits [EditorDraft.content] there), so a
+     * title-only save leaves the body as it is.
+     */
     private fun persist(draft: EditorDraft) {
-        val note = draft.toNote(updatedAt = now())
+        val typed = unsavedBlocks?.takeIf { it.noteId == draft.id && draft.unreadableBody == null }
+        unsavedBlocks = null
+        val plain = draft.toNote(updatedAt = now())
+        val note = if (typed == null) plain else plain.copy(
+            content = BlocksSave.encodeForSave(typed.blocks),
+            contentFormat = NoteContentFormat.BLOCKS,
+        )
+        val blocksBase = typed?.let { BlockCodec.encode(it.base) }
         // The local list is updated ahead of the repository echo so the sidebar row's title and
         // snippet track what is being typed. Waiting for the round trip would make the list lag a
         // whole debounce behind the editor.
         latestNotes = latestNotes.map { if (it.id == note.id) note else it }
         _state.value = recompute(_state.value.copy(saveStatus = SaveStatus.Saved(note.updatedAt)))
-        scope.launch { repository.saveNote(note) }
+        scope.launch { repository.saveNote(note, blocksBase) }
     }
 
     // ---------------------------------------------------------------- internals
+
+    /**
+     * The open note's document for the block editor, re-assembled whenever the stored row, its
+     * attachments or its sketches change, and dropped for the next note on a switch
+     * (flatMapLatest). Each emission names its note, so [attachDocument] can refuse one that
+     * arrives after the selection moved on.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun openedDocuments(): Flow<OpenedDocument> =
+        state.map { it.selectedNoteId }
+            .distinctUntilChanged()
+            .flatMapLatest { id ->
+                if (id == null) return@flatMapLatest emptyFlow()
+                combine(
+                    repository.getNoteById(id).filterNotNull().distinctUntilChanged(),
+                    attachments?.getAttachmentsForNote(id) ?: flowOf(emptyList()),
+                    sketches?.getSketchesForNote(id) ?: flowOf(emptyList()),
+                    picturesBeingPlaced,
+                ) { note, pictures, drawings, placing ->
+                    OpenedDocument(
+                        noteId = id,
+                        document = OpenDocument.assemble(note, pictures.filterNot { it.id in placing }, drawings),
+                        unreadableBody = note.content.takeIf {
+                            note.contentFormat == NoteContentFormat.BLOCKS && BlockCodec.decode(it) == null
+                        },
+                    )
+                }
+            }
+
+    private fun attachDocument(opened: OpenedDocument) {
+        lastOpened = opened
+        val draft = _state.value.editor ?: return
+        if (draft.id != opened.noteId) return
+        _state.value = _state.value.copy(editor = draft.withDocument(opened))
+    }
+
+    private fun EditorDraft.withDocument(opened: OpenedDocument?): EditorDraft =
+        if (opened == null || opened.noteId != id) this
+        else copy(blocks = opened.document, unreadableBody = opened.unreadableBody)
 
     /**
      * The live list of sketches for whichever note is selected, re-subscribing whenever the
@@ -481,7 +634,9 @@ class NotesWorkspaceModel(
                 if (stored == null || baseline == null || baseline.id != draft.id) draft
                 else mergeIncoming(draft, baseline, stored)
             }
-            else -> stored?.toDraft()
+            // A fresh draft picks up a document already assembled for its note, if one arrived
+            // before the draft could exist (the stored row reached getNoteById first).
+            else -> stored?.toDraft()?.withDocument(lastOpened)
         }
         editorBaseline = if (editor == null) null else stored ?: editorBaseline
         val search =
