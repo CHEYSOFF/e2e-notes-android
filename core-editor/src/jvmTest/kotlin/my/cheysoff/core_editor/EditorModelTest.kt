@@ -322,10 +322,72 @@ class EditorModelTest {
         assertFailsWith<IllegalStateException> { model.edit { insert(length, "\n\uE004") } }
         assertEquals("one", model.text())
         assertEquals(listOf("a"), model.ids)
-        // A staged id lasts one edit only.
+        // A staged id lasts one edit only (and an edit that leaves it unused is itself an error).
         model.stagePicture("pic:r1", BlockType.PICTURE, "r1")
-        model.edit { insert(0, "x") }
+        assertFailsWith<IllegalStateException> { model.edit { insert(0, "x") } }
         assertFailsWith<IllegalStateException> { model.edit { insert(length, "\n\uE004") } }
+    }
+
+    // --- Fix round 2 -------------------------------------------------------------------------
+
+    @Test
+    fun `insert before an empty line with a chosen id`() {
+        val model = EditorModel(doc(p("a", "a"), p("e", ""), p("c", "c")))
+        model.stageText("b")
+        model.edit { insert(2, "two\n") }
+        assertEquals("a\ntwo\n\nc", model.text())
+        assertEquals(listOf("a", "b", "e", "c"), model.ids)
+    }
+
+    @Test
+    fun `Enter at the start of an empty checklist item keeps the id on the item`() {
+        val model = EditorModel(doc(p("a", "a"), Block("c", BlockType.CHECK, "")))
+        model.edit { insert(2, "\n") }
+        assertEquals("a\n\n\uE000", model.text())
+        assertEquals("a", model.ids[0])
+        assertEquals("c", model.ids[2])
+        assertEquals(BlockType.CHECK, model.blocks()[2].type)
+    }
+
+    @Test
+    fun `a user edit carrying a picture marker loses the marker instead of throwing`() {
+        val model = EditorModel(doc(p("a", "one"), pic("r1")))
+        // What an IME commitText, drop or autofill of "\n<picture>" would do.
+        model.state.edit {
+            insert(3, "\n\uE004")
+            model.onEdited(this, fromUser = true)
+        }
+        assertEquals("one\n\n\uE004", model.text())
+        assertEquals(1, model.text().count { it == '\uE004' }, "only the real picture's marker")
+        assertEquals("a", model.ids[0])
+        assertEquals("pic:r1", model.ids[2])
+        assertEquals(mapOf("pic:r1" to "r1"), model.refs)
+        assertEquals(3, model.ids.toSet().size)
+    }
+
+    @Test
+    fun `a user edit that is only a picture marker leaves no marker`() {
+        val model = EditorModel(doc(p("a", "one")))
+        model.state.edit {
+            insert(3, "\n\uE005")
+            model.onEdited(this, fromUser = true)
+        }
+        assertEquals("one\n", model.text())
+        assertTrue(model.text().none(Markers::isPrivateUse))
+        assertEquals("a", model.ids[0])
+        assertEquals(2, model.ids.size)
+    }
+
+    @Test
+    fun `a staged id the edit does not use throws and reverts`() {
+        val model = EditorModel(doc(p("a", "one")))
+        model.stageText("b")
+        assertFailsWith<IllegalStateException> { model.edit { insert(3, "!") } }
+        assertEquals("one", model.text())
+        assertEquals(listOf("a"), model.ids)
+        // Staging was cleared, so the next edit is clean.
+        model.edit { insert(3, "!") }
+        assertEquals("one!", model.text())
     }
 
     @Test

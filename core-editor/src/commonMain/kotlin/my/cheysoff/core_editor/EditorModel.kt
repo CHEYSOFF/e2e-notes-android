@@ -188,12 +188,13 @@ class EditorModel(initial: BlockDocument) {
      * Makes a programmatic edit and keeps [ids] in step. `TextFieldState.edit` does not run the
      * field's InputTransformation (ruling R3), so editor commands and remote apply edit through
      * here rather than through [state] directly. Stage ids for the lines the edit creates with
-     * [stageText] / [stagePicture] first. If the ids cannot be derived (an unstaged marker), the
-     * edit is reverted and the exception rethrown, so text and ids never disagree.
+     * [stageText] / [stagePicture] first, exactly as many as the edit creates: a marker with no
+     * id, or a staged id left unused, means the caller's idea of the edit and the edit differ, and
+     * throws [IllegalStateException] after reverting the edit, so text and ids never disagree.
      */
     fun edit(block: TextFieldBuffer.() -> Unit) = state.edit {
         block()
-        onEdited(this)
+        onEdited(this, fromUser = false)
     }
 
     /**
@@ -202,8 +203,8 @@ class EditorModel(initial: BlockDocument) {
      * remote block (Task 12). A created line is one that inherits no old line's id: a line
      * inserted whole, or the second half of a split.
      *
-     * Staging lasts for one edit: whatever that edit does not use is dropped, so a stale id can
-     * never land on a line the user creates later.
+     * Staging lasts for one edit, so a stale id can never land on a line the user creates later.
+     * A programmatic edit that leaves a staged id unused throws (see [edit]).
      *
      * @throws IllegalArgumentException if [id] is already shown or already staged.
      */
@@ -243,40 +244,70 @@ class EditorModel(initial: BlockDocument) {
      *   text line not already taken. So typing keeps an id, Enter keeps it on the first half,
      *   Enter at the very start keeps it on the text (not on the new empty line above), joining
      *   keeps the first line's, and an IME replacement across a line break keeps both.
-     * - Remaining new text lines take [stageText] ids, then fresh random ids.
+     * - An old line with no surviving char (empty, marker only, or all of it deleted) keeps its id
+     *   on the new line at its surviving boundary, i.e. one that does not start inside inserted
+     *   text, if one is free; else on the first free new line (retyping a whole line). So Enter
+     *   at the start of an empty checklist item keeps the id on the item, and text inserted in
+     *   front of an empty line does not take the empty line's id.
+     * - Remaining new text lines, made entirely of inserted text, take [stageText] ids, then
+     *   fresh random ids.
      * - A picture/drawing line whose marker char is untouched keeps its id wherever the text
      *   around it moves it. An inserted marker takes a staged id of its type, else the id of a
      *   picture of its type removed in this same edit (a move). Never one of the other type.
      *
-     * @throws IllegalStateException for an inserted marker with neither: inventing a picture with
-     *   no record would save a broken block. Unreachable from user input, since paste strips
-     *   markers. The buffer is reverted before throwing.
+     * An inserted marker alone on its line with neither has no record, and inventing a picture
+     * without one would save a broken block. What happens then depends on [fromUser]:
+     * - `true` (the field's InputTransformation): the marker char is deleted from [buffer]. User
+     *   input can carry one, through IME commitText, drag-and-drop, autofill or Unicode entry,
+     *   and none of those may crash the editor. The line it stood on stays, empty.
+     * - `false` (programmatic, via [edit]): it is a programming error. [buffer] is reverted and
+     *   [IllegalStateException] thrown; the same happens if a staged id goes unused.
      *
      * Adapted from the planned `onEdited(changes, before)`: the original text is needed to know
      * where the old lines were, and the buffer carries it alongside the changes, so it is passed
      * whole. The ids before the edit are this model's own [ids].
      */
-    @OptIn(ExperimentalFoundationApi::class) // TextFieldBuffer.changes
-    fun onEdited(buffer: TextFieldBuffer) {
+    fun onEdited(buffer: TextFieldBuffer, fromUser: Boolean) {
         try {
-            val list = buffer.changes
-            if (list.changeCount == 0) return
-            val changes = (0 until list.changeCount).map {
-                val o = list.getOriginalRange(it)
-                val r = list.getRange(it)
-                Change(o.min, o.max, r.min, r.max)
-            }.sortedBy { it.oStart }
-            val (newIds, newPictures) = try {
-                rederive(buffer.originalText, buffer.asCharSequence(), changes)
-            } catch (e: IllegalStateException) {
-                buffer.revertAllChanges()
-                throw e
+            var derived = derive(buffer) ?: return
+            if (derived.unplaced.isNotEmpty()) {
+                if (!fromUser) {
+                    buffer.revertAllChanges()
+                    throw IllegalStateException(
+                        "a picture/drawing marker was inserted with no staged id; stage it with stagePicture first",
+                    )
+                }
+                derived.unplaced.sortedDescending().forEach { buffer.replace(it, it + 1, "") }
+                derived = derive(buffer) ?: return
+                check(derived.unplaced.isEmpty()) { "markers left after removing unplaced ones" }
             }
-            pictures = newPictures
-            ids = newIds
+            if (!fromUser && derived.unusedStaged > 0) {
+                buffer.revertAllChanges()
+                throw IllegalStateException("${derived.unusedStaged} staged id(s) not used by the edit")
+            }
+            pictures = derived.pictures
+            ids = derived.ids
         } finally {
             stagedText.clear()
             stagedPictures.clear()
+        }
+    }
+
+    /** [rederive] for [buffer]'s current changes; null if there are none. Reverts [buffer] on a bug. */
+    @OptIn(ExperimentalFoundationApi::class) // TextFieldBuffer.changes
+    private fun derive(buffer: TextFieldBuffer): Derived? {
+        val list = buffer.changes
+        if (list.changeCount == 0) return null
+        val changes = (0 until list.changeCount).map {
+            val o = list.getOriginalRange(it)
+            val r = list.getRange(it)
+            Change(o.min, o.max, r.min, r.max)
+        }.sortedBy { it.oStart }
+        return try {
+            rederive(buffer.originalText, buffer.asCharSequence(), changes)
+        } catch (e: IllegalStateException) {
+            buffer.revertAllChanges()
+            throw e
         }
     }
 
@@ -284,7 +315,10 @@ class EditorModel(initial: BlockDocument) {
         old: CharSequence,
         new: CharSequence,
         changes: List<Change>,
-    ): Pair<List<String>, Map<String, PictureInfo>> {
+    ): Derived {
+        // Copies: the user path may run this twice, and must find staging intact the second time.
+        val stagedText = ArrayDeque(stagedText)
+        val stagedPictures = ArrayDeque(stagedPictures)
         val oldLines = lineRanges(old)
         check(oldLines.size == ids.size) {
             "EditorModel out of sync before an edit: ${oldLines.size} lines, ${ids.size} ids"
@@ -362,7 +396,11 @@ class EditorModel(initial: BlockDocument) {
                 val j = lineOf(newLines, toNew(x))
                 if (free(j)) out[j] = ids[k] // else: joined into a line that already has an id
             }
-            for (k in orphans) region.firstOrNull { free(it) }?.let { out[it] = ids[k] }
+            for (k in orphans) {
+                val j = region.firstOrNull { free(it) && !inserted(newLines[it].start) }
+                    ?: region.firstOrNull { free(it) }
+                if (j != null) out[j] = ids[k]
+            }
             for (j in region) if (free(j)) out[j] = stagedText.removeFirstOrNull() ?: BlockIds.random()
 
             newLine = nl + 1
@@ -372,6 +410,7 @@ class EditorModel(initial: BlockDocument) {
         while (oldLine < ids.size) keep(oldLine++)
         check(newLine == newLines.size) { "id re-derivation covered $newLine of ${newLines.size} lines" }
 
+        val unplaced = mutableListOf<Int>()
         for ((j, type) in pending) {
             val staged = stagedPictures.firstOrNull { it.second.type == type }
             if (staged != null) {
@@ -381,17 +420,20 @@ class EditorModel(initial: BlockDocument) {
                 continue
             }
             val moved = removed.firstOrNull { shown.getValue(it).type == type }
-                ?: throw IllegalStateException(
-                    "a ${type.wire} marker was inserted with no staged id; stage it with stagePicture first",
-                )
+            if (moved == null) {
+                unplaced += newLines[j].start
+                continue
+            }
             removed.remove(moved)
             out[j] = moved
             newPictures[moved] = shown.getValue(moved)
         }
 
-        val result = out.map { it!! }
-        check(result.size == result.toSet().size) { "duplicate block ids after an edit: $result" }
-        return result to newPictures
+        // Unplaced lines hold "": such a result is never committed (onEdited removes or throws).
+        val result = out.map { it ?: "" }
+        val placed = result.filter { it.isNotEmpty() }
+        check(placed.size == placed.toSet().size) { "duplicate block ids after an edit: $result" }
+        return Derived(result, newPictures, unplaced, stagedText.size + stagedPictures.size)
     }
 }
 
@@ -407,6 +449,15 @@ private fun lineOf(lines: List<Line>, offset: Int): Int {
     }
     return lo
 }
+
+/** What an edit does to ids, before it is committed. */
+private class Derived(
+    val ids: List<String>,
+    val pictures: Map<String, PictureInfo>,
+    /** Start offsets of inserted marker lines that got no id. */
+    val unplaced: List<Int>,
+    val unusedStaged: Int,
+)
 
 private class PictureInfo(val type: BlockType, val ref: String?)
 
