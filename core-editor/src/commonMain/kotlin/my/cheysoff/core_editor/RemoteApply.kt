@@ -31,15 +31,20 @@ import my.cheysoff.core_editor.LineEdits.Anchor
  * created (not in [base]) is not deleted for being absent from the incoming document, and a block
  * the user just deleted (in [base]) is not put back.
  *
- * **A block changed on both sides waits while the user types.** If the editor's version and the
- * incoming one both differ from [base], the editor holds typing the merge has not seen yet: the
- * debounced save has not run, or its echo has not come back (an older emission can arrive after
- * the caret has moved on). Applying the incoming version, or its delete, would wipe that typing.
- * So while the user typed within the last [quietMs] such a block is deferred like the caret's
- * block. Meanwhile the save runs and its echo, merged by clock, settles the block: usually the
- * echo carries the local text and nothing is left to apply. Only if the incoming version is still
- * different after the pause is it applied: by then it is the stored merge result, which already
- * holds every save made so far.
+ * **A block changed on both sides is held, however long that takes.** If the editor's version
+ * and the incoming one both differ from [base], the editor holds text the merge has not seen yet:
+ * the debounced save has not run, has failed or was skipped (saves are skipped while
+ * `BlocksFormat.WRITE_ENABLED` is off), or its echo has not come back (an older emission can arrive
+ * after the caret has moved on). Applying the incoming version, or its delete, would wipe that
+ * text, so the block keeps showing the user's version, typing or not, and [base] keeps its old
+ * version (which makes the next save claim it). The hold ends only when:
+ * - an incoming document has the block exactly as the editor shows it (the echo of our save, or
+ *   the two sides converging), or
+ * - [base] catches up with the editor's version, or
+ * - the user undoes or retypes the block back to its [base] version; then the incoming change is
+ *   an ordinary remote edit again.
+ * The save path settles the block by clock. The [quietMs] pause below governs only the caret's
+ * block when the editor still shows its [base] version.
  *
  * **Where.** An added block goes right after the nearest block that precedes it in the incoming
  * order and is in the editor, else at the top. Text lines are never reordered: no local edit
@@ -47,8 +52,8 @@ import my.cheysoff.core_editor.LineEdits.Anchor
  * order the other device chose. Pictures and drawings the remote moved (their `pos` differs from
  * [base]) are moved, one per edit, so each keeps its id and record.
  *
- * **The block being typed in waits.** While the user typed within the last [quietMs], a change
- * to a line holding the selection, the caret or the IME composition (an edit, or a delete) is
+ * **The block being typed in waits.** While the user typed within the last [quietMs], a remote
+ * change to a line holding the selection, the caret or the IME composition (an edit, or a delete) is
  * deferred, so it cannot move the caret or eat keystrokes; every other block is applied at once.
  * The deferred document stays pending, a later [offer] replaces it (the latest document wins), and
  * the first [tick] after the pause applies it. Call [tick] again when [hasPending] and the pause
@@ -174,7 +179,8 @@ class RemoteApply(
             return !sameContent(was, mine)
         }
 
-        fun held(id: String) = id in caretLines || (typing && localChanged(id) && remoteChanged(id))
+        // Not time-based: see "A block changed on both sides is held" in the class doc.
+        fun held(id: String) = id in caretLines || (localChanged(id) && remoteChanged(id))
 
         // 1. Rewrite changed lines in place.
         for (b in incoming) {

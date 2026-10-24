@@ -83,6 +83,12 @@ class RemoteApplyTest {
     /** What a save of the editor stamps (and, merged with nothing newer, what storage echoes back). */
     private fun Editor.saved(clock: Hlc) = BlockStamping.stamp(remote.base, model.blocks(), clock)
 
+    /**
+     * The debounced save runs and its echo comes back: the editor's text is then the base, so a
+     * remote change to the caret's block is an ordinary one that waits only for the pause.
+     */
+    private fun Editor.echoSave(ms: Long = 20) = receive(saved(hlc(ms)))
+
     private fun Editor.assertConsistent() {
         assertEquals(text().split('\n').size, model.ids.size, "one id per line in ${text()}")
         assertEquals(model.ids.size, model.ids.toSet().size, "ids are unique: ${model.ids}")
@@ -130,6 +136,7 @@ class RemoteApplyTest {
     fun `remote change to the paragraph being typed waits for the pause`() {
         val e = open(check("c", "milk"), p("p", "hello"))
         e.type(e.lineEnd("p"), " wor")
+        e.echoSave()
         val caret = e.model.state.selection
         val loaded = e.remote.base
         val incoming = doc(check("c", "milk"), p("p", "HELLO"))
@@ -138,7 +145,7 @@ class RemoteApplyTest {
         assertEquals("hello wor", e.block("p").text, "not while typing")
         assertEquals(caret, e.model.state.selection)
         assertTrue(e.remote.hasPending)
-        assertEquals(loaded, e.remote.base, "nothing else changed, so the base still reads as loaded")
+        assertEquals(loaded, e.remote.base, "nothing else changed, so the base still reads as before")
 
         clock += RemoteApply.QUIET_MS - 1
         e.remote.tick(e.lastLocalEditAt)
@@ -190,6 +197,7 @@ class RemoteApplyTest {
     fun `remote delete of the line being typed in waits for the pause`() {
         val e = open(p("a", "keep"), p("p", "typing"))
         e.type(e.lineEnd("p"), " here")
+        e.echoSave()
         val incoming = doc(p("a", "keep"))
 
         e.receive(incoming)
@@ -207,6 +215,7 @@ class RemoteApplyTest {
     fun `a later offer supersedes a deferred one`() {
         val e = open(p("a", "x"), p("p", "hello"))
         e.type(e.lineEnd("p"), "!")
+        e.echoSave()
         e.receive(doc(p("a", "x"), p("p", "first remote")))
         val latest = doc(p("a", "x2"), p("p", "second remote"))
         e.receive(latest)
@@ -391,15 +400,45 @@ class RemoteApplyTest {
     }
 
     @Test
-    fun `a remote edit of a block changed on both sides applies after the pause`() {
+    fun `a block changed on both sides stays held with no echo, however long the pause`() {
         val e = open(p("a", "one"), p("b", "two"))
+        val loaded = e.remote.base
         e.type(e.lineEnd("a"), " local")
         e.enterAndType("a", "more")
-        e.receive(doc(p("a", "one remote"), p("b", "two")))
+        e.receive(doc(p("a", "one remote"), p("b", "two remote")))
         assertEquals("one local", e.block("a").text)
-        clock += RemoteApply.QUIET_MS
+        assertEquals("two remote", e.block("b").text, "a block changed only remotely applies")
+
+        // The save is slow, failed, or skipped (writing BLOCKS switched off): no echo comes.
+        clock += 10_000
         e.remote.tick(e.lastLocalEditAt)
-        assertEquals("one remote", e.block("a").text, "still different after the pause: the stored merge wins")
+        assertEquals("one local", e.block("a").text, "still the user's text, typing or not")
+        assertEquals(loaded.blocks.first { it.id == "a" }, e.remote.base.blocks.first { it.id == "a" }, "base keeps the old a")
+        assertTrue(e.remote.hasPending)
+
+        // The echo of the save, carrying the local text, releases the hold and the base advances.
+        val echo = e.saved(hlc(30))
+        e.receive(echo)
+        assertEquals("one local", e.block("a").text)
+        assertSame(echo, e.remote.base)
+        assertFalse(e.remote.hasPending)
+    }
+
+    @Test
+    fun `undoing a block back to its base releases the hold`() {
+        val e = open(p("a", "one"), p("b", "two"))
+        e.type(e.lineEnd("a"), "!")
+        e.receive(doc(p("a", "one remote"), p("b", "two")))
+        assertEquals("one!", e.block("a").text)
+        clock += 10_000
+        e.remote.tick(e.lastLocalEditAt)
+        assertEquals("one!", e.block("a").text)
+
+        assertTrue(e.history.undo())
+        assertEquals("one", e.block("a").text)
+        e.remote.tick(e.lastLocalEditAt)
+        assertEquals("one remote", e.block("a").text, "an ordinary remote edit again")
+        assertFalse(e.remote.hasPending)
     }
 
     @Test
@@ -413,9 +452,10 @@ class RemoteApplyTest {
         assertEquals(listOf("a", newLine, "b"), e.model.ids, "not deleted while typing")
         assertEquals("one local", e.block("a").text)
 
-        clock += RemoteApply.QUIET_MS
+        clock += 10_000
         e.remote.tick(e.lastLocalEditAt)
-        assertEquals(listOf(newLine, "b"), e.model.ids, "deleted after the pause")
+        assertEquals(listOf("a", newLine, "b"), e.model.ids, "changed here too: held, typing or not")
+        assertEquals("one local", e.block("a").text)
         e.assertConsistent()
     }
 
@@ -460,16 +500,22 @@ class RemoteApplyTest {
         assertEquals(hlc(10), stamped.getValue("x").posClock)
         assertEquals(hlc(50), stamped.getValue("y").clock)
 
-        clock += RemoteApply.QUIET_MS
+        // Y changed on both sides: held with no echo, however long.
+        clock += 10_000
         e.remote.tick(e.lastLocalEditAt)
-        assertSame(incoming, e.remote.base, "nothing deferred any more: the base is the incoming doc")
+        assertEquals(loaded.blocks[1], e.remote.base.blocks.first { it.id == "y" })
+        // The echo of that save settles Y: nothing deferred any more, the base is the echo.
+        val echo = BlockStamping.stamp(e.remote.base, e.model.blocks(), hlc(50))
+        e.receive(echo)
+        assertSame(echo, e.remote.base)
     }
 
     @Test
     fun `base keeps a deferred delete and drops its tombstone`() {
         val e = open(p("a", "keep"), p("p", "typing"))
-        val loaded = e.remote.base
         e.type(e.lineEnd("p"), "!")
+        e.echoSave()
+        val loaded = e.remote.base
         val incoming = BlockDocument(listOf(p("a", "keep").copy(pos = "aa")), listOf(Tombstone("p", hlc(10))))
         e.receive(incoming)
         assertEquals(listOf("a", "p"), e.model.ids)
