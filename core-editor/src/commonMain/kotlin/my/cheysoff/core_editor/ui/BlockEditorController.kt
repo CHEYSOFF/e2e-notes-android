@@ -94,6 +94,17 @@ class BlockEditorController internal constructor(
      */
     val base: BlockDocument get() = remote.base
 
+    /**
+     * The blocks the editor shows now, in order: local edits and applied synced changes included,
+     * nothing pending. Empty before the note is loaded.
+     *
+     * For readers outside the editor that need the note as it is on screen rather than as last
+     * saved: the phone's share/copy text, its word count, and a title edit, which saves the body
+     * the editor shows with [base] so a stale body is never written. Snapshot state, so reading
+     * it in composition follows the text.
+     */
+    val blocks: List<Block> get() = if (loaded) model.blocks() else emptyList()
+
     val canUndo: Boolean get() = history.canUndo
     val canRedo: Boolean get() = history.canRedo
 

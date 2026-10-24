@@ -1,15 +1,22 @@
 package my.cheysoff.feature_notes.ui.single
 
+import android.util.Log
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.receiveAsFlow
@@ -17,7 +24,15 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import my.cheysoff.core_blocks.Block
+import my.cheysoff.core_blocks.BlockCodec
+import my.cheysoff.core_blocks.BlockDocument
 import my.cheysoff.core_blocks.BlockText
+import my.cheysoff.core_blocks.BlockType
+import my.cheysoff.core_blocks.BlocksSave
+import my.cheysoff.core_blocks.BlocksFormat
+import my.cheysoff.core_blocks.OpenDocument
 import my.cheysoff.core_domain.attachment.sortAttachments
 import my.cheysoff.core_domain.model.AttachmentData
 import my.cheysoff.core_domain.model.AttachmentPreview
@@ -33,6 +48,8 @@ import my.cheysoff.core_domain.sketch.Sketch
 import my.cheysoff.core_domain.sketch.StrokeCodec
 import my.cheysoff.core_domain.sketch.sortSketches as sortSketchesForDisplay
 import my.cheysoff.feature_notes.model.single.ChecklistItem
+import my.cheysoff.feature_notes.model.single.OpenedNoteDocument
+import my.cheysoff.feature_notes.model.single.PicturePlacement
 import my.cheysoff.feature_notes.model.single.SingleNoteIntent
 import my.cheysoff.feature_notes.model.single.SingleNoteScreenState
 import my.cheysoff.feature_notes.model.single.normalizeChecklistText
@@ -334,21 +351,49 @@ internal fun AttachmentData.toPreview(): AttachmentPreview = AttachmentPreview(
 )
 
 @HiltViewModel
-class SingleNoteViewModel @Inject constructor(
+class SingleNoteViewModel internal constructor(
     private val notesRepository: NotesRepository,
     private val sketchesRepository: SketchesRepository,
     private val attachmentsRepository: AttachmentsRepository,
     private val imageImporter: ImageImporter,
     private val settingsRepository: SettingsRepository,
-    savedStateHandle: SavedStateHandle
+    savedStateHandle: SavedStateHandle,
+    /**
+     * Whether the body is the shared block editor, saved as BLOCKS. The injected constructor passes
+     * [BlocksFormat.WRITE_ENABLED], which stays off until both apps ship the block editor (Task 16):
+     * a phone writing BLOCKS while the laptop still ran a build that refuses them would hand it
+     * notes it cannot open. A parameter rather than a read of the constant so tests run both paths.
+     * Off, this ViewModel behaves exactly as it did before the block editor existed.
+     */
+    private val blocksWriteEnabled: Boolean,
+    /**
+     * The debounce between the block editor's last change and the save, the desktop's value.
+     * Shorter than the legacy path's, because the editor reports finished blocks rather than a
+     * field that has to be re-serialised first.
+     */
+    private val blocksSaveDelayMillis: Long = 400L,
+    private val log: (String) -> Unit = { Log.w("SingleNoteViewModel", it) },
 ) : ViewModel() {
+
+    @Inject constructor(
+        notesRepository: NotesRepository,
+        sketchesRepository: SketchesRepository,
+        attachmentsRepository: AttachmentsRepository,
+        imageImporter: ImageImporter,
+        settingsRepository: SettingsRepository,
+        savedStateHandle: SavedStateHandle,
+    ) : this(
+        notesRepository, sketchesRepository, attachmentsRepository, imageImporter, settingsRepository,
+        savedStateHandle, blocksWriteEnabled = BlocksFormat.WRITE_ENABLED,
+    )
+
     private val noteId: String? = savedStateHandle["noteId"]
 
     // Set only by the route NotesListViewModel.createNewNote() navigates to, immediately after it
     // inserted this row. Absent (and therefore false) on every other way into this screen.
     private val openedForNewNote: Boolean = savedStateHandle["isNew"] ?: false
 
-    private val _state = MutableStateFlow(SingleNoteScreenState())
+    private val _state = MutableStateFlow(SingleNoteScreenState(blocksEditing = blocksWriteEnabled))
     val state = _state.asStateFlow()
 
     private val _events = Channel<SingleNoteEvent>(Channel.BUFFERED)
@@ -416,6 +461,36 @@ class SingleNoteViewModel @Inject constructor(
     // one — is NEVER auto-deleted: that would be data loss with no undo.
     private var createdBlankNote = false
 
+    // ---- Block path only (blocksWriteEnabled). The desktop twin is NotesWorkspaceModel. ----------
+
+    /**
+     * The block editor's latest unsaved blocks with the base they were edited against, or null when
+     * the last ones were written. Captured together by [onBlocksChanged], never re-read at save
+     * time (see [SingleNoteIntent.BlocksChanged]); cleared by the save that writes them, because
+     * re-sending them later would claim blocks the other device may have changed since.
+     */
+    private var unsavedBlocks: UnsavedBlocks? = null
+
+    private class UnsavedBlocks(val blocks: List<Block>, val base: BlockDocument)
+
+    /**
+     * The blocks of the last local edit, kept after they are saved: the blank-note discard asks
+     * them whether the editor shows anything, because [SingleNoteScreenState.content] trails the
+     * editor by a save and its echo.
+     */
+    private var lastEditedBlocks: List<Block>? = null
+
+    /** True from scheduling a block-path save until it starts writing; what [flushBlocksSave] acts on. */
+    private var blocksSavePending = false
+
+    /**
+     * Ids of pictures and drawings whose record is being written but whose block the editor has not
+     * inserted yet. Left out of the assembled document meanwhile: a record with no block is
+     * otherwise appended at the end by [OpenDocument.assemble], so the editor would receive it
+     * there first and the insert at the cursor would then meet a block it already shows.
+     */
+    private val picturesBeingPlaced = MutableStateFlow<Set<String>>(emptySet())
+
     init {
         noteId?.let { id ->
             notesRepository.getNoteById(id)
@@ -438,9 +513,22 @@ class SingleNoteViewModel @Inject constructor(
                     // dispatcher and there is no suspension point between the read and the write.
                     val merged = mergeIncomingNote(_state.value, baseline, note)
                     baseline = merged.baseline
-                    _state.value = merged.state
+                    // contentRevision re-seeds the rich-text editor; the block editor takes synced
+                    // bodies through its document instead (assembled below), so on that path a
+                    // replaced body must not bump it.
+                    _state.value = if (blocksWriteEnabled) {
+                        merged.state.copy(contentRevision = _state.value.contentRevision)
+                    } else {
+                        merged.state
+                    }
                 }
                 .launchIn(viewModelScope)
+
+            if (blocksWriteEnabled) {
+                openedDocuments(id)
+                    .onEach { opened -> _state.update { it.copy(blockDocument = opened) } }
+                    .launchIn(viewModelScope)
+            }
 
             // Independent of the note-load flow above, exactly like the folders collection below:
             // sketches live in their own table with their own Flow, and their write path (the
@@ -492,6 +580,15 @@ class SingleNoteViewModel @Inject constructor(
         when (intent) {
             is SingleNoteIntent.TitleChanged -> {
                 val current = _state.value
+                if (blocksWriteEnabled) {
+                    // No EditorHistory on the block path: undo there is the block editor's own,
+                    // and a title step on a second stack would interleave with it unpredictably.
+                    if (intent.title != current.title) {
+                        _state.update { it.copy(title = intent.title) }
+                        scheduleBlocksSave()
+                    }
+                    return
+                }
                 // Nothing to save and nothing to undo when the value did not actually move; the
                 // guard keeps a step that would appear to do nothing off the history stack.
                 if (intent.title != current.title) {
@@ -656,6 +753,15 @@ class SingleNoteViewModel @Inject constructor(
 
             is SingleNoteIntent.DuplicateNote -> duplicateNote()
 
+            is SingleNoteIntent.BlocksChanged -> onBlocksChanged(intent.noteId, intent.blocks, intent.base)
+
+            is SingleNoteIntent.PicturePlaced -> {
+                picturesBeingPlaced.update { it - intent.recordId }
+                _state.update { s -> s.copy(picturesToPlace = s.picturesToPlace.filterNot { it.recordId == intent.recordId }) }
+            }
+
+            is SingleNoteIntent.FlushPendingSave -> if (blocksWriteEnabled) flushBlocksSave()
+
             is SingleNoteIntent.DeleteNote -> {
                 val id = noteId ?: return
                 viewModelScope.launch {
@@ -664,6 +770,8 @@ class SingleNoteViewModel @Inject constructor(
                     // so it could not resurrect the note, but it would still bump updatedAt for an
                     // edit the user has just discarded.
                     saveJob?.cancel()
+                    unsavedBlocks = null
+                    blocksSavePending = false
                     metaWriteJob?.join()
                     // SOFT delete: the row keeps its content, pin, favorite and folder so Restore is
                     // lossless. Contrast the blank-note discard in BackClicked, which purges.
@@ -690,6 +798,11 @@ class SingleNoteViewModel @Inject constructor(
                     // not yet re-emitted into _state) when current.attachments is read below, and
                     // the note gets purged with the image orphaned under it.
                     attachmentSaveJob?.join()
+                    if (blocksWriteEnabled) {
+                        leaveBlocksNote()
+                        _events.send(SingleNoteEvent.NavigateBack)
+                        return@launch
+                    }
                     val current = _state.value
                     val id = noteId
                     when {
@@ -750,8 +863,12 @@ class SingleNoteViewModel @Inject constructor(
         // closes on tap, so this is a guard against a double tap, not an expected path.
         if (duplicateJob?.isActive == true) return
         duplicateJob = viewModelScope.launch {
-            if (_state.value.hasUnsavedContent()) saveNote(debounce = false)?.join()
-            val copy = buildDuplicate(_state.value, newId = UUID.randomUUID().toString())
+            val copy = if (blocksWriteEnabled) {
+                blocksDuplicate() ?: return@launch
+            } else {
+                if (_state.value.hasUnsavedContent()) saveNote(debounce = false)?.join()
+                buildDuplicate(_state.value, newId = UUID.randomUUID().toString())
+            }
             saveMutex.withLock { notesRepository.saveNote(copy) }
             _events.send(SingleNoteEvent.NoteDuplicated(copy.title))
         }
@@ -784,6 +901,9 @@ class SingleNoteViewModel @Inject constructor(
             val now = System.currentTimeMillis()
             val encoded = StrokeCodec.encode(sketch)
             val existing = editingId?.let { eid -> current.sketches.find { it.id == eid } }
+            // On the block path a new drawing is a block of the body: refused, before anything is
+            // written, where there is no editable body to put it in (see canPlacePicture).
+            if (existing == null && blocksWriteEnabled && !canPlacePicture()) return@launch
             val data = existing?.copy(strokes = encoded, updatedAt = now) ?: run {
                 val anchor = NoteBlocks.count(current.content, current.contentFormat)
                 SketchData(
@@ -796,7 +916,14 @@ class SingleNoteViewModel @Inject constructor(
                     updatedAt = now,
                 )
             }
+            // The record first, then the block: a block must never point at a record that was not
+            // written. Kept out of the assembled document until the editor has placed it.
+            val place = blocksWriteEnabled && existing == null
+            if (place) picturesBeingPlaced.update { it + data.id }
             sketchesRepository.saveSketch(data)
+            if (place) {
+                _state.update { it.copy(picturesToPlace = it.picturesToPlace + PicturePlacement(data.id, BlockType.DRAWING)) }
+            }
             // Mirror the write into `_state` right here, rather than waiting for
             // sketchesRepository's Flow to echo it back: BackClicked's blank-note discard guard
             // reads current.sketches immediately after joining this job (sketchSaveJob), and
@@ -826,6 +953,11 @@ class SingleNoteViewModel @Inject constructor(
      */
     private fun importAttachment(uri: String) {
         val id = noteId ?: return
+        // On the block path a picture is a block of the body. A read-only note has no editable body
+        // to put it in, and one whose document is not assembled yet has no editor to insert it;
+        // either way a record written now would be a picture the user did not see land. Refused
+        // before anything is imported, as on the desktop.
+        if (blocksWriteEnabled && !canPlacePicture()) return
         _state.update { it.copy(isImportingAttachment = true) }
         val job = viewModelScope.launch {
             when (val result = imageImporter.import(uri)) {
@@ -844,6 +976,10 @@ class SingleNoteViewModel @Inject constructor(
                     // saveAttachment deliberately never sets `meta` itself -- it stays "" here and
                     // the repository is what carries a stored value forward. See AttachmentData.meta
                     // and AttachmentsRepository.saveAttachment's own KDoc.
+                    // The record first, then the block: a block must never point at a record that
+                    // was not written. Kept out of the assembled document until the editor has
+                    // placed it.
+                    if (blocksWriteEnabled) picturesBeingPlaced.update { it + attachment.id }
                     attachmentsRepository.saveAttachment(attachment)
                     // Mirror the write into `_state` right here, for the exact reason saveSketch
                     // does: BackClicked's blank-note guard reads current.attachments immediately
@@ -856,6 +992,11 @@ class SingleNoteViewModel @Inject constructor(
                                 it.attachments.filterNot { a -> a.id == attachment.id } + attachment.toPreview()
                             ),
                             isImportingAttachment = false,
+                            picturesToPlace = if (blocksWriteEnabled) {
+                                it.picturesToPlace + PicturePlacement(attachment.id, BlockType.PICTURE)
+                            } else {
+                                it.picturesToPlace
+                            },
                         )
                     }
                 }
@@ -1008,12 +1149,190 @@ class SingleNoteViewModel @Inject constructor(
         return job
     }
 
+    // ---------------------------------------------------------------- block path
+
+    /**
+     * The open note's document for the block editor, re-assembled whenever the stored row, its
+     * attachments, its sketches or [picturesBeingPlaced] change. Each emission carries its note id
+     * so the screen hands the editor the id and the document together.
+     */
+    private fun openedDocuments(id: String) = combine(
+        notesRepository.getNoteById(id).filterNotNull().distinctUntilChanged(),
+        attachmentsRepository.attachmentsOf(id),
+        sketchesRepository.getSketchesForNote(id),
+        picturesBeingPlaced,
+    ) { note, pictures, drawings, placing ->
+        OpenedNoteDocument(
+            noteId = id,
+            document = OpenDocument.assemble(
+                note,
+                pictures.filterNot { it.id in placing }.map { it.toAssemblyRecord() },
+                drawings.filterNot { it.id in placing },
+            ),
+            unreadableBody = note.content.takeIf {
+                note.contentFormat == NoteContentFormat.BLOCKS && BlockCodec.decode(it) == null
+            },
+        )
+    }
+
+    /** Whether a picture or drawing may be added now: the document is assembled and readable. */
+    private fun canPlacePicture(): Boolean {
+        val opened = _state.value.blockDocument ?: return false
+        return opened.noteId == noteId && opened.unreadableBody == null
+    }
+
+    /**
+     * A local edit in the block editor. Saved after [blocksSaveDelayMillis] of quiet, or at once
+     * by [flushBlocksSave] on back, on leaving the screen and on `ON_STOP`.
+     *
+     * Ignored with the block path off (logged, so a stray call is visible), for any note but this
+     * one, and while the body is unreadable: it is read-only and must never be saved over.
+     */
+    private fun onBlocksChanged(editedNoteId: String, blocks: List<Block>, base: BlockDocument) {
+        if (!blocksWriteEnabled) {
+            log("block edit of note $editedNoteId not saved: BlocksFormat.WRITE_ENABLED is off")
+            return
+        }
+        if (editedNoteId != noteId) return
+        val opened = _state.value.blockDocument ?: return
+        if (opened.noteId != editedNoteId || opened.unreadableBody != null) return
+        unsavedBlocks = UnsavedBlocks(blocks, base)
+        lastEditedBlocks = blocks
+        scheduleBlocksSave()
+    }
+
+    private fun scheduleBlocksSave() {
+        if (noteId == null) return
+        saveJob?.cancel()
+        blocksSavePending = true
+        saveJob = viewModelScope.launch {
+            delay(blocksSaveDelayMillis)
+            persistBlocksPath()
+        }
+    }
+
+    /**
+     * Writes a pending block-path save now, cancelling its debounce, and returns the job writing
+     * it (or the save already writing, for a caller that wants to wait for it).
+     *
+     * [scope] is [viewModelScope] except from [onCleared], where that scope is already cancelled.
+     * Either way the write itself runs [NonCancellable] (see [persistBlocksPath]), so the back
+     * stack being cleared right after `ON_STOP` (the app lock) cannot cut it short.
+     */
+    private fun flushBlocksSave(scope: CoroutineScope = viewModelScope): Job? {
+        if (!blocksSavePending) return saveJob
+        saveJob?.cancel()
+        val job = scope.launch { persistBlocksPath() }
+        saveJob = job
+        return job
+    }
+
+    /**
+     * The block path's one write. With block edits pending, the body is those blocks, built only by
+     * [BlocksSave.encodeForSave] and saved against the editor's base, which the repository stamps
+     * and merges. Without (a title edit before the editor loaded, or on a read-only body), the body
+     * is the stored row's, read fresh under [saveMutex]: [SingleNoteScreenState.content] can trail
+     * a block save whose echo has not come back yet, and writing it would put the older body back.
+     *
+     * The baseline moves for the title and metadata only. The body's baseline is left alone, so the
+     * stored row's echo is adopted into [SingleNoteScreenState.content] as news.
+     */
+    private suspend fun persistBlocksPath() = withContext(NonCancellable) {
+        saveMutex.withLock {
+            blocksSavePending = false
+            val id = noteId ?: return@withLock
+            val current = _state.value
+            val readable = current.blockDocument?.unreadableBody == null
+            val typed = unsavedBlocks?.takeIf { readable }
+            unsavedBlocks = null
+            val note = if (typed != null) {
+                Note(
+                    id = id,
+                    title = current.title,
+                    content = BlocksSave.encodeForSave(typed.blocks),
+                    contentFormat = NoteContentFormat.BLOCKS,
+                    checklist = current.checklist.serializeChecklist(),
+                    isPinned = current.isPinned,
+                    folderId = current.folderId,
+                )
+            } else {
+                val stored = notesRepository.getNoteById(id).first() ?: return@withLock
+                stored.copy(title = current.title, isPinned = current.isPinned, folderId = current.folderId)
+            }
+            notesRepository.saveNote(note, typed?.let { BlockCodec.encode(it.base) })
+            baseline = baseline?.copy(title = current.title, isPinned = current.isPinned, folderId = current.folderId)
+        }
+    }
+
+    /**
+     * Back on the block path: discards a note created for this screen and still blank, else writes
+     * any pending save.
+     *
+     * Blank is asked of the editor's last edit when there was one ([BlockText.isEmpty]: a picture
+     * or drawing block is content), else of the stored body. A picture or drawing record of the
+     * note, or one still waiting for its block, keeps the note too, so no photo is purged with it.
+     */
+    private suspend fun leaveBlocksNote() {
+        val id = noteId ?: return
+        val current = _state.value
+        val bodyBlank = lastEditedBlocks?.let(BlockText::isEmpty)
+            ?: (bodyIsBlank(current.content, current.contentFormat) && current.checklist.isEmpty())
+        val blank = createdBlankNote && current.title.isBlank() && bodyBlank &&
+            current.sketches.isEmpty() && current.attachments.isEmpty() && current.picturesToPlace.isEmpty()
+        if (blank) {
+            saveJob?.cancel()
+            unsavedBlocks = null
+            blocksSavePending = false
+            saveMutex.withLock { notesRepository.purgeNote(id) }
+        } else {
+            flushBlocksSave()?.join()
+        }
+    }
+
+    /**
+     * The block path's duplicate: the body as stored once any pending save is written, so the copy
+     * matches the note on screen. Picture and drawing blocks are left out: their records belong to
+     * this note, and a copy pointing at them would show placeholders forever; the legacy duplicate
+     * never copied photos or drawings either.
+     */
+    private suspend fun blocksDuplicate(): Note? {
+        val id = noteId ?: return null
+        flushBlocksSave()?.join()
+        val stored = notesRepository.getNoteById(id).first() ?: return null
+        val doc = if (stored.contentFormat == NoteContentFormat.BLOCKS) BlockCodec.decode(stored.content) else null
+        val content = doc?.let { d ->
+            BlocksSave.encodeForSave(d.visible().filter { it.type != BlockType.PICTURE && it.type != BlockType.DRAWING })
+        } ?: stored.content
+        return Note(
+            id = UUID.randomUUID().toString(),
+            title = duplicateTitle(_state.value.title),
+            content = content,
+            contentFormat = stored.contentFormat,
+            checklist = stored.checklist,
+            isPinned = false,
+            isFavorite = false,
+            folderId = _state.value.folderId,
+        )
+    }
+
+    /**
+     * A block save still waiting for its debounce when the ViewModel goes (the back stack cleared
+     * under it). [viewModelScope] is cancelled by now, so the write gets a scope of its own; it is
+     * the same [NonCancellable] write as every other.
+     */
+    override fun onCleared() {
+        if (blocksWriteEnabled && blocksSavePending) flushBlocksSave(CoroutineScope(Dispatchers.Main.immediate))
+        super.onCleared()
+    }
+
     // Content fields only (title/body/checklist) — exactly what a save stamps updatedAt for.
     // Metadata (pin/favorite/folder) persists through targeted UPDATEs and must not force an upsert.
     // Compared against the baseline rather than the last row *seen*: an edit made after the last
     // write must count as unsaved even though Room hasn't echoed that write back yet.
     private fun SingleNoteScreenState.hasUnsavedContent(): Boolean {
         val persisted = baseline ?: return true
+        // On the block path the body is the editor's, unsaved exactly while a block save is pending.
+        if (blocksWriteEnabled) return blocksSavePending || title != persisted.title
         return title != persisted.title ||
                 content != persisted.content ||
                 // A body that changed format but not bytes still has to be flushed, or the row
@@ -1029,3 +1348,27 @@ class SingleNoteViewModel @Inject constructor(
  */
 private fun bodyIsBlank(content: String, format: NoteContentFormat): Boolean =
     BlockText.bodyIsBlank(content, format) ?: content.isBlank()
+
+/**
+ * [AttachmentPreview] as the [AttachmentData] that [OpenDocument.assemble] takes. Assembly reads
+ * only identity, ownership, order and the tombstone, so the full-size bytes this screen never holds
+ * are left empty rather than loaded.
+ */
+private fun AttachmentPreview.toAssemblyRecord(): AttachmentData = AttachmentData(
+    id = id,
+    noteId = noteId,
+    anchor = anchor,
+    order = order,
+    mimeType = mimeType,
+    width = width,
+    height = height,
+    bytes = ByteArray(0),
+    thumbWidth = thumbWidth,
+    thumbHeight = thumbHeight,
+    thumbBytes = thumbBytes,
+    createdAt = createdAt,
+    updatedAt = updatedAt,
+    isDeleted = isDeleted,
+    deletedAt = deletedAt,
+    meta = meta,
+)

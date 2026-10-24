@@ -179,6 +179,14 @@ fun SingleNoteScreen(
     loadAttachment: suspend (String) -> AttachmentData?,
     onColorMixed: (Long) -> Unit,
 ) {
+    // The one switch between the two editors, fixed for the ViewModel's life by
+    // BlocksFormat.WRITE_ENABLED: the shared block editor, saved as BLOCKS, or everything below,
+    // exactly as it was before the block editor existed. Task 16 removes the legacy half.
+    if (state.blocksEditing) {
+        BlockNoteScreen(state, onIntent, loadAttachment, onColorMixed)
+        return
+    }
+
     val focusManager = LocalFocusManager.current
     val isImeVisible = WindowInsets.isImeVisible
     // Used by the overflow actions (start an activity / write the clipboard) and by the sketch
@@ -725,7 +733,7 @@ private fun ChecklistSection(
  * [SingleNoteScreen] rather than by this section, because opening it has to flush the pending body
  * edit first (see the toolbar's `onAddSketch`) -- something only the top-level composable can do.
  */
-private sealed interface SketchEditTarget {
+internal sealed interface SketchEditTarget {
     data object New : SketchEditTarget
     data class Existing(val id: String, val sketch: Sketch) : SketchEditTarget
 }
@@ -873,7 +881,7 @@ private fun SketchCard(sketch: Sketch, onTapped: () -> Unit, onDeleted: () -> Un
 /** The same DrawScope calls [SketchCanvasScreen]'s own drawing surface uses for a [RenderedStroke]
  * -- [SketchRenderer] already did the one piece of geometry both places have to agree on (the
  * mapping and smoothing); this is just handing its output to `drawPath`/`drawCircle`. */
-private fun DrawScope.drawSketchStroke(rendered: RenderedStroke) {
+internal fun DrawScope.drawSketchStroke(rendered: RenderedStroke) {
     if (rendered.isDot) {
         drawCircle(color = rendered.color, radius = rendered.strokeWidthPx / 2f, center = rendered.dotCenter)
     } else {
@@ -886,7 +894,7 @@ private fun DrawScope.drawSketchStroke(rendered: RenderedStroke) {
 }
 
 @Composable
-private fun EditorTopBar(
+internal fun EditorTopBar(
     isPinned: Boolean,
     isFavorite: Boolean,
     accent: Color,
@@ -1058,7 +1066,7 @@ private fun noteAsPlainText(state: SingleNoteScreenState, richTextState: RichTex
  * toast there would be a second, redundant one — hence the version check. Below 13 nothing else
  * tells the user anything happened.
  */
-private fun copyNoteToClipboard(context: Context, text: String) {
+internal fun copyNoteToClipboard(context: Context, text: String) {
     if (text.isEmpty()) {
         Toast.makeText(context, "Nothing to copy — this note is empty", Toast.LENGTH_SHORT).show()
         return
@@ -1071,7 +1079,7 @@ private fun copyNoteToClipboard(context: Context, text: String) {
 }
 
 /** Hands the note to any app that accepts plain text, through the system share sheet. */
-private fun shareNote(context: Context, title: String, text: String) {
+internal fun shareNote(context: Context, title: String, text: String) {
     if (text.isEmpty()) {
         Toast.makeText(context, "Nothing to share — this note is empty", Toast.LENGTH_SHORT).show()
         return
@@ -1181,7 +1189,7 @@ private val headingOptions = listOf(
 )
 
 @Composable
-private fun ToolIcon(icon: ImageVector, desc: String, tint: Color, onClick: () -> Unit) {
+internal fun ToolIcon(icon: ImageVector, desc: String, tint: Color, onClick: () -> Unit) {
     IconButton(onClick = onClick, modifier = Modifier.size(34.dp)) {
         Icon(imageVector = icon, contentDescription = desc, tint = tint, modifier = Modifier.size(20.dp))
     }
@@ -1250,20 +1258,20 @@ private fun RichTextState.clearFormatting() {
 }
 
 /** Editor accent = the folder's chosen color (or the hash fallback), or default indigo when it has no folder. */
-private fun editorAccent(folderId: String?, folders: List<Folder>): Color {
+internal fun editorAccent(folderId: String?, folders: List<Folder>): Color {
     if (folderId.isNullOrBlank()) return AccentIndigo
     val colorArgb = folders.find { it.id == folderId }?.colorArgb
     return folderAccentColor(folderId, colorArgb) ?: AccentIndigo
 }
 
-private fun metaLine(updatedAt: Long, words: Int): String {
+internal fun metaLine(updatedAt: Long, words: Int): String {
     val wordLabel = if (words == 1) "1 word" else "$words words"
     val rel = relativeTime(updatedAt)
     return if (rel.isEmpty()) wordLabel else "Edited $rel · $wordLabel"
 }
 
 /** Counts words without allocating a list/regex (single pass over the chars). */
-private fun countWords(text: String): Int {
+internal fun countWords(text: String): Int {
     var count = 0
     var inWord = false
     for (c in text) {

@@ -1,5 +1,7 @@
 package my.cheysoff.feature_notes.model.single
 
+import my.cheysoff.core_blocks.Block
+import my.cheysoff.core_blocks.BlockDocument
 import my.cheysoff.core_domain.sketch.Sketch
 
 sealed interface SingleNoteIntent {
@@ -72,4 +74,24 @@ sealed interface SingleNoteIntent {
      * dialog says plainly that this cannot be undone.
      */
     data class AttachmentDeleted(val id: String) : SingleNoteIntent
+
+    // ---- Block path only (SingleNoteScreenState.blocksEditing) ---------------------------------
+
+    /**
+     * The block editor's [blocks] for note [noteId] after a local edit, with the editor's [base]
+     * read at that same moment (`BlockEditorController.base`). Captured together, never re-read at
+     * save time: a synced change applied between the edit and the save moves the base but not
+     * these blocks, and stamping old blocks against a newer base would read the synced change as
+     * the user undoing it.
+     */
+    data class BlocksChanged(val noteId: String, val blocks: List<Block>, val base: BlockDocument) : SingleNoteIntent
+
+    /** The editor inserted the block for [recordId] from `SingleNoteScreenState.picturesToPlace`. */
+    data class PicturePlaced(val recordId: String) : SingleNoteIntent
+
+    /**
+     * Write a debounced save now. Sent when the screen leaves composition and on `ON_STOP`, after
+     * which the process may be killed without another callback.
+     */
+    data object FlushPendingSave : SingleNoteIntent
 }
