@@ -1,0 +1,139 @@
+package my.cheysoff.core_editor.ui
+
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.input.InputTransformation
+import androidx.compose.foundation.text.input.TextFieldBuffer
+import androidx.compose.foundation.text.input.then
+import androidx.compose.foundation.text.selection.LocalTextSelectionColors
+import androidx.compose.foundation.text.selection.TextSelectionColors
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.isUnspecified
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
+import my.cheysoff.core_blocks.Block
+import my.cheysoff.core_blocks.BlockDocument
+import my.cheysoff.core_blocks.BlockType
+import my.cheysoff.core_editor.EditingRules
+import my.cheysoff.core_editor.RemoteApply
+import my.cheysoff.core_editor.blockHistoryKeys
+
+/** Test tag of the editor's text field. */
+const val BlockEditorFieldTag = "block-editor-field"
+
+/** The default accent: Manana's violet. Both apps pass their theme's primary instead. */
+val DefaultEditorAccent = Color(0xFF7C5CFF)
+
+/**
+ * The note editor shared by both apps: the whole note in one `BasicTextField`, so a selection
+ * runs across paragraphs, checklists and pictures, with checkboxes, bullets, numbers, pictures
+ * and drawings drawn over their marker lines ([BlockOverlays]).
+ *
+ * - [document] is the latest stored version of the note. The first one is opened; every later
+ *   emission is a synced change, offered to [RemoteApply], which applies it around the user's
+ *   typing. Re-emit freely: an echo of our own save makes no edit. Key the editor (and its
+ *   [controller]) on the note id when the note changes.
+ * - [onChange] gets the visible blocks after each LOCAL edit (typing, IME, paste, cut, a toolbar
+ *   command, a tick, a picture drag, undo/redo), never after a synced change was applied, so a
+ *   save it triggers is always the user's. Debounce in the caller; save against
+ *   [BlockEditorController.base].
+ * - [pictureContent] draws a picture or drawing record into the space its line takes. It must
+ *   cope with a record it cannot resolve (not synced yet, failed to decode) by drawing a
+ *   placeholder; the block itself stays and is saved as it is.
+ * - [selectionAccent] colours the selection handles and cursor, and at 30 % alpha the selection
+ *   background; pass the app theme's primary.
+ *
+ * The field has no scrolling of its own and grows with its text: put it in a scrolling column.
+ * Undo/redo is the editor's per-block history ([my.cheysoff.core_editor.BlockHistory]), on the
+ * usual keys and on [BlockEditorController.undo]/[BlockEditorController.redo].
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun BlockEditor(
+    document: BlockDocument,
+    onChange: (List<Block>) -> Unit,
+    pictureContent: @Composable (recordId: String, kind: BlockType) -> Unit,
+    modifier: Modifier = Modifier,
+    controller: BlockEditorController = rememberBlockEditorController(),
+    selectionAccent: Color = DefaultEditorAccent,
+    textStyle: TextStyle = TextStyle(color = Color(0xFF1F1D2B), fontSize = 16.sp),
+    pictureHeight: Dp = 200.dp,
+) {
+    SideEffect { controller.onChange = onChange }
+
+    // Every emission: the first opens the note, the rest are synced changes.
+    LaunchedEffect(controller, document) { controller.receive(document) }
+
+    // A change held back for the user's typing is retried once the pause has passed, and again
+    // after each later local edit; never in a loop. Changes held because both sides edited a
+    // block wait for the next emission or edit (see RemoteApply).
+    val pending = controller.remote.hasPending
+    val lastEdit = controller.lastLocalEditAt
+    LaunchedEffect(controller, pending, lastEdit) {
+        if (!pending) return@LaunchedEffect
+        val wait = if (lastEdit == Long.MIN_VALUE) 0L else lastEdit + RemoteApply.QUIET_MS - controller.now()
+        delay(wait.coerceAtLeast(0L) + 1L)
+        controller.retick()
+    }
+
+    if (!controller.loaded) return
+
+    val density = LocalDensity.current
+    val textColor = textStyle.color.takeIf { it != Color.Unspecified } ?: Color.Black
+    val bodySize = if (textStyle.fontSize.isUnspecified) 16.sp else textStyle.fontSize
+    val styling = remember(bodySize, pictureHeight, density.fontScale, textColor) {
+        EditorStyling(bodySize, pictureHeight, density.fontScale, textColor.copy(alpha = 0.45f))
+    }
+    val input = remember(controller) { EditingRules(controller.model).then(ReportLocalEdits(controller)) }
+    val drag = remember(controller) { PictureDrag() }
+    val outerClipboard = LocalClipboard.current
+    val clipboard = remember(outerClipboard) { EditorClipboard(outerClipboard) }
+    val selectionColors = remember(selectionAccent) {
+        TextSelectionColors(handleColor = selectionAccent, backgroundColor = selectionAccent.copy(alpha = 0.3f))
+    }
+
+    CompositionLocalProvider(LocalTextSelectionColors provides selectionColors, LocalClipboard provides clipboard) {
+        Box(modifier) {
+            BasicTextField(
+                state = controller.model.state,
+                modifier = Modifier.fillMaxWidth().blockHistoryKeys(controller.history).testTag(BlockEditorFieldTag),
+                inputTransformation = input,
+                outputTransformation = styling,
+                textStyle = textStyle,
+                cursorBrush = SolidColor(selectionAccent),
+                onTextLayout = { result -> controller.layout = result() },
+            )
+            controller.layout?.let { layout ->
+                BlockOverlays(controller, layout, drag, selectionAccent, textColor, pictureContent)
+            }
+            drag.slot?.let { DropIndicator(it, selectionAccent) }
+        }
+    }
+}
+
+/**
+ * Last in the field's input chain, after [EditingRules]: a user edit that changed the text is a
+ * local edit, reported with the blocks as the buffer now holds them (the field commits exactly
+ * that right after).
+ */
+@OptIn(ExperimentalFoundationApi::class) // TextFieldBuffer.changes
+private class ReportLocalEdits(private val controller: BlockEditorController) : InputTransformation {
+    override fun TextFieldBuffer.transformInput() {
+        if (changes.changeCount > 0) controller.localEdited(controller.model.blocksOf(this))
+    }
+}

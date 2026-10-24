@@ -129,6 +129,7 @@ class BlockHistory(private val model: EditorModel, private val now: () -> Long) 
         entry.open = false
         redoStack += entry
         refresh()
+        onStepped?.invoke()
         return true
     }
 
@@ -139,6 +140,7 @@ class BlockHistory(private val model: EditorModel, private val now: () -> Long) 
         redoStack.removeAt(redoStack.lastIndex)
         undoStack += entry
         refresh()
+        onStepped?.invoke()
         return true
     }
 
@@ -151,6 +153,13 @@ class BlockHistory(private val model: EditorModel, private val now: () -> Long) 
     internal fun clearPlatformUndo() = model.state.undoState.clearHistory()
 
     private val edits = LineEdits(model)
+
+    /**
+     * Runs after every successful [undo] or [redo], however it was triggered ([blockHistoryKeys]
+     * or a toolbar). Undo is a local change the user made, so the editor reports it like typing
+     * (`onChange`, save); this is the one place that sees both triggers.
+     */
+    internal var onStepped: (() -> Unit)? = null
 
     /** Test hook: runs before each step of an undo/redo, named as in [LineEdits.beforeStep]. Throwing aborts it. */
     internal var beforeStep: ((String) -> Unit)?
