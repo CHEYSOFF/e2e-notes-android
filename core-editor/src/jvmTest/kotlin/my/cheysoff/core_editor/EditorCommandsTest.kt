@@ -234,6 +234,68 @@ class EditorCommandsTest {
     }
 
     @Test
+    fun `insertPicture over a selection starting right after a picture keeps that picture`() {
+        val p0 = Markers.PICTURE
+        val model = EditorModel(doc(pic("r0"), p("x", "xy"), p("z", "z")))
+        model.select(1, 3) // "\nx": removing it joins "y" onto the picture line
+        EditorCommands.insertPicture(model, "pic:r1", BlockType.PICTURE)
+        assertEquals("$p0\n$p0\ny\nz", model.text())
+        assertEquals(listOf("pic:r0", "pic:r1", "x", "z"), model.ids)
+        assertEquals(mapOf("pic:r0" to "r0", "pic:r1" to "r1"), model.refs)
+        assertEquals(BlockType.PARAGRAPH to "y", model.blocks()[2].let { it.type to it.text })
+        model.assertConsistent()
+    }
+
+    @Test
+    fun `insertPicture over a selection ending right before a picture keeps that picture`() {
+        val p0 = Markers.PICTURE
+        val model = EditorModel(doc(p("a", "ab"), pic("r0")))
+        model.select(1, 3) // "b\n": removing it runs "a" into the picture line
+        EditorCommands.insertPicture(model, "pic:r1", BlockType.PICTURE)
+        assertEquals("a\n$p0\n$p0", model.text())
+        assertEquals(listOf("a", "pic:r1", "pic:r0"), model.ids)
+        assertEquals(mapOf("pic:r0" to "r0", "pic:r1" to "r1"), model.refs)
+    }
+
+    @Test
+    fun `insertPicture over a selected picture replaces it`() {
+        val model = EditorModel(doc(p("a", "one"), pic("r0"), p("b", "two")))
+        model.select(4, 5)
+        EditorCommands.insertPicture(model, "pic:r1", BlockType.PICTURE)
+        assertEquals("one\n${Markers.PICTURE}\ntwo", model.text())
+        assertEquals(listOf("a", "pic:r1", "b"), model.ids)
+        assertEquals(mapOf("pic:r1" to "r1"), model.refs)
+    }
+
+    @Test
+    fun `toggle and clearFormatting over a picture line leave the picture alone`() {
+        val model = EditorModel(doc(p("a", "one"), pic("r0"), p("b", "two")))
+        model.select(0, model.text().length)
+        EditorCommands.toggle(model, InlineStyle.BOLD)
+        assertEquals(
+            listOf(listOf(StyleSpan(0, 3, InlineStyle.BOLD)), emptyList(), listOf(StyleSpan(0, 3, InlineStyle.BOLD))),
+            model.blocks().map { it.spans },
+        )
+        assertTrue(model.state.textStyles.getSpanStyles(TextRange(4, 5)).none { it.start <= 4 && it.end > 4 })
+        EditorCommands.clearFormatting(model)
+        assertTrue(model.blocks().all { it.spans.isEmpty() })
+        assertEquals(listOf("a", "pic:r0", "b"), model.ids)
+        assertEquals(mapOf("pic:r0" to "r0"), model.refs)
+        assertEquals(BlockType.PICTURE, model.blocks()[1].type)
+    }
+
+    @Test
+    fun `movePicture leaves the caret collapsed after the moved picture`() {
+        val model = EditorModel(doc(p("a", "one"), p("b", "two"), pic("r1")))
+        EditorCommands.movePicture(model, from = 2, toGap = 1)
+        assertEquals("one\n${Markers.PICTURE}\ntwo", model.text())
+        assertEquals(TextRange(6), model.state.selection, "at the start of the line after it")
+        EditorCommands.movePicture(model, from = 1, toGap = 3)
+        assertEquals("one\ntwo\n${Markers.PICTURE}", model.text())
+        assertEquals(TextRange(model.text().length), model.state.selection, "after it, at the end")
+    }
+
+    @Test
     fun `movePicture to gap 0 puts it first`() {
         val model = EditorModel(doc(p("a", "one"), p("b", "two"), pic("r1")))
         EditorCommands.movePicture(model, from = 2, toGap = 0)

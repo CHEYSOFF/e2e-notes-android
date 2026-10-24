@@ -1,5 +1,6 @@
 package my.cheysoff.core_editor
 
+import androidx.compose.foundation.text.input.TextFieldBuffer
 import androidx.compose.ui.text.TextRange
 import my.cheysoff.core_blocks.BlockType
 import my.cheysoff.core_blocks.InlineStyle
@@ -100,7 +101,9 @@ object EditorCommands {
      * - Mid-line, the line is split around it. The first half keeps the block's id. The second is
      *   a new block of the same type (an unticked item for a checklist), as Enter would make it.
      * - An empty paragraph becomes the picture.
-     * The caret ends up just after the inserted lines.
+     * The caret ends up just after the inserted lines. Removing the selection can join a picture
+     * line and a text line. They are first split apart again, so the existing picture keeps its
+     * line, id and record, and the text keeps its own line.
      *
      * @throws IllegalArgumentException if [kind] is not a picture type, [blockId] does not match
      *   it, or the block is already shown.
@@ -113,8 +116,11 @@ object EditorCommands {
         model.stagePicture(blockId, kind, blockId.removePrefix(prefix))
         model.edit {
             val sel = selection
-            if (!sel.collapsed) replace(sel.min, sel.max, "")
-            val at = sel.min
+            var at = sel.min
+            if (!sel.collapsed) {
+                replace(sel.min, sel.max, "")
+                at = splitJoinedPicture(this, at)
+            }
             val text = asCharSequence()
             val lines = lineRanges(text)
             val line = lines[lineOf(lines, at)]
@@ -141,7 +147,8 @@ object EditorCommands {
      * of the current text, and gap `lines` is after the last line. The two gaps beside the picture
      * itself leave it where it is. One picture per edit, deleted and re-inserted in the same edit
      * and not staged. That is how [EditorModel.onEdited] recognises a move and keeps the picture's
-     * id. The moved picture ends up selected.
+     * id. The caret ends up collapsed just after the moved picture's line, not on its marker,
+     * so the next typed letter cannot replace the picture.
      *
      * @throws IllegalArgumentException if line [from] is not a picture or [toGap] is out of range.
      */
@@ -160,11 +167,11 @@ object EditorCommands {
             if (target < rest.size) {
                 val at = rest[target].start
                 replace(at, at, "$marker\n")
-                selection = TextRange(at, at + 1)
+                selection = TextRange(at + 2)
             } else {
                 val at = length
                 replace(at, at, "\n$marker")
-                selection = TextRange(at + 1, at + 2)
+                selection = TextRange(at + 2)
             }
         }
     }
@@ -215,6 +222,28 @@ object EditorCommands {
             }
             out.forEach { addStyle(it.style, it.start, it.end) }
         }
+    }
+
+    /**
+     * After a removed selection joined the lines around [at], puts a line break back between a
+     * picture marker and text now sharing its line. Returns where [at] is afterwards. Without this,
+     * the picture would read back as a paragraph and be dropped. This is a much narrower job than
+     * the picture rule in [EditingRules]: a command inserts nothing of the user's, so there is no
+     * typed text to move, only the one join point to split.
+     */
+    private fun splitJoinedPicture(buffer: TextFieldBuffer, at: Int): Int {
+        val t = buffer.asCharSequence()
+        fun isPicture(c: Char) = c == Markers.PICTURE || c == Markers.DRAWING
+        // "<picture>|text": the picture line is now followed by text.
+        if (at > 0 && isPicture(t[at - 1]) && (at == 1 || t[at - 2] == '\n') && at < t.length && t[at] != '\n') {
+            buffer.replace(at, at, "\n")
+            return at + 1
+        }
+        // "text|<picture>": text now runs into the picture line.
+        if (at > 0 && t[at - 1] != '\n' && at < t.length && isPicture(t[at]) && (at + 1 == t.length || t[at + 1] == '\n')) {
+            buffer.replace(at, at, "\n")
+        }
+        return at
     }
 
     /** The offsets of [line]'s text, without its marker. Empty for a picture line. */

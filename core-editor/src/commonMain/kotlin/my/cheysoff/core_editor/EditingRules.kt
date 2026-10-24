@@ -30,9 +30,11 @@ import androidx.compose.ui.text.TextRange
  *      text keeps its marker and its id.
  *    On a heading, as in Word, Enter at its end starts a paragraph. Anywhere else in it, Enter
  *    gives two headings, so Enter right after the marker leaves the text a heading.
- * 3. **Deleting the line break next to a picture deletes the picture line.** This is Backspace at
- *    the start of the line below a picture, or Delete at the end of the line above it. Merging the
- *    text into the picture line instead would make it a paragraph and lose the picture.
+ * 3. **Deleting the line break between a picture and a line with text deletes the picture line.**
+ *    This is Backspace at the start of the text line below a picture, or Delete at the end of the
+ *    text line above it. Merging the text into the picture line instead would make it a paragraph
+ *    and lose the picture. If the joined line is empty, only that empty line goes and the picture
+ *    stays.
  * 4. **A picture stays alone on its line.**
  *    - Text typed before or after its marker moves to a new line after it.
  *    - Surviving text that a wider delete joined to it is split off and keeps its side.
@@ -109,14 +111,22 @@ class EditingRules(private val model: EditorModel) : InputTransformation {
         return true
     }
 
-    /** Rule 3. [e] must be the deletion of exactly one `\n`. */
+    /**
+     * Rule 3. [e] must be the deletion of exactly one `\n`. Only a joined line with text costs the
+     * picture. When the joined line is empty, deleting the break already just removes that empty
+     * line and leaves the picture alone on its line, which is what Word does. For example, Enter
+     * after a picture followed by Backspace must give the picture back unchanged.
+     */
     private fun TextFieldBuffer.joinAtPicture(e: Edit, caret: Caret) {
         if (e.nEnd != e.nStart || e.oEnd - e.oStart != 1 || originalText[e.oStart] != '\n') return
         val old = originalText
         val o = e.oStart
         val n = e.nStart
-        val above = o >= 1 && isPictureChar(old[o - 1]) && (o == 1 || old[o - 2] == '\n')
-        val below = o + 1 < old.length && isPictureChar(old[o + 1]) && (o + 2 == old.length || old[o + 2] == '\n')
+        val lineBelowHasText = o + 1 < old.length && old[o + 1] != '\n'
+        val lineAboveHasText = o > 0 && old[o - 1] != '\n'
+        val above = lineBelowHasText && o >= 1 && isPictureChar(old[o - 1]) && (o == 1 || old[o - 2] == '\n')
+        val below = lineAboveHasText && o + 1 < old.length && isPictureChar(old[o + 1]) &&
+            (o + 2 == old.length || old[o + 2] == '\n')
         when {
             above -> edit(n - 1, n, "", caret)
             below -> edit(n, n + 1, "", caret)

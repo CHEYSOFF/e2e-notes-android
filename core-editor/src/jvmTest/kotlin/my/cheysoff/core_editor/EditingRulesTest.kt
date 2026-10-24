@@ -152,6 +152,65 @@ class EditingRulesTest {
     }
 
     @Test
+    fun `Enter after a picture then Backspace keeps the picture`() {
+        val model = EditorModel(doc(p("a", "one"), pic("r1")))
+        model.commit(5, "\n")
+        assertEquals("one\n${Markers.PICTURE}\n", model.text())
+        model.deleteRange(5, 6) // Backspace at the start of the new empty line
+        assertEquals("one\n${Markers.PICTURE}", model.text())
+        assertEquals(listOf("a", "pic:r1"), model.ids)
+        assertEquals(mapOf("pic:r1" to "r1"), model.refs)
+        assertEquals(TextRange(5), model.caret())
+    }
+
+    @Test
+    fun `Delete on an empty line above a picture keeps the picture`() {
+        val model = EditorModel(doc(p("a", "one"), p("e", ""), pic("r1"), p("b", "two")))
+        model.deleteRange(4, 5) // Delete at the end of the empty line
+        assertEquals("one\n${Markers.PICTURE}\ntwo", model.text())
+        assertEquals(listOf("a", "pic:r1", "b"), model.ids)
+        assertEquals(mapOf("pic:r1" to "r1"), model.refs)
+        model.assertConsistent()
+    }
+
+    @Test
+    fun `Backspace on an empty line below a picture keeps the picture when text follows`() {
+        val model = EditorModel(doc(pic("r1"), p("e", ""), p("b", "two")))
+        model.deleteRange(1, 2)
+        assertEquals("${Markers.PICTURE}\ntwo", model.text())
+        assertEquals(listOf("pic:r1", "b"), model.ids)
+        assertEquals(mapOf("pic:r1" to "r1"), model.refs)
+    }
+
+    @Test
+    fun `typing over a selected picture replaces it and keeps every letter`() {
+        val model = EditorModel(doc(p("a", "one"), pic("r1"), p("b", "two")))
+        model.user {
+            replace(4, 5, "x") // the picture was selected; an IME commit replaces it
+            selection = TextRange(5)
+        }
+        assertEquals("one\nx\ntwo", model.text())
+        assertTrue(model.refs.isEmpty(), "the user selected the picture, so it may go")
+        assertEquals("a", model.ids[0])
+        assertEquals("b", model.ids[2])
+        assertEquals(listOf("one", "x", "two"), model.blocks().map { it.text })
+        model.assertConsistent()
+    }
+
+    @Test
+    fun `typing over a selection spanning a picture keeps the surrounding text`() {
+        val model = EditorModel(doc(p("a", "one"), pic("r1"), p("b", "two")))
+        model.user {
+            replace(2, 7, "Z") // "e\n<picture>\nt"
+            selection = TextRange(3)
+        }
+        assertEquals("onZwo", model.text())
+        assertEquals(listOf("a"), model.ids)
+        assertTrue(model.refs.isEmpty())
+        assertEquals(TextRange(3), model.caret())
+    }
+
+    @Test
     fun `typing on a picture line goes to the next line`() {
         val model = EditorModel(doc(p("a", "one"), pic("r1")))
         model.commit(5, "x") // after the marker
@@ -275,9 +334,10 @@ class EditingRulesTest {
                 // one already there (the rules trim a re-commit before stripping).
                 val m = t.indexOf(Markers.PICTURE)
                 if (m >= 0 && m !in s until e) {
+                    // Only when the joined line has text (fix round 1: an empty one just goes).
                     fun breakBeside(net: String) =
-                        (m > 0 && t[m - 1] == '\n' && net == t.removeRange(m - 1, m)) ||
-                            (m + 1 < t.length && t[m + 1] == '\n' && net == t.removeRange(m + 1, m + 2))
+                        (m > 1 && t[m - 1] == '\n' && t[m - 2] != '\n' && net == t.removeRange(m - 1, m)) ||
+                            (m + 2 < t.length && t[m + 1] == '\n' && t[m + 2] != '\n' && net == t.removeRange(m + 1, m + 2))
                     val rule3 = breakBeside(t.substring(0, s) + ins.filter { !Markers.isPrivateUse(it) } + t.substring(e)) ||
                         breakBeside(t.substring(0, s) + ins + t.substring(e))
                     if (!rule3) assertTrue("pic:r1" in model.refs, "picture lost by '$t' replace($s,$e,'$ins') -> '${model.text()}'")
