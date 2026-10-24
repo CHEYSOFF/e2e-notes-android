@@ -13,7 +13,7 @@ kotlin {
 
 android {
     namespace = "my.cheysoff.notes"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "my.cheysoff.notes"

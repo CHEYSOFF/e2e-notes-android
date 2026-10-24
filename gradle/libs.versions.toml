@@ -1,5 +1,8 @@
 [versions]
-agp = "9.0.1"
+# 9.1.0 and compileSdk 37 (every module), because Compose 1.12 (composeBom below) says so in its AAR
+# metadata: minCompileSdk=37, minAndroidGradlePluginVersion=9.1.0. Under 9.0.1/36,
+# :app:checkDebugAarMetadata failed, which stopped :app:testDebugUnitTest and every app build.
+agp = "9.1.0"
 # Compose Multiplatform. 1.12.0 is the current stable and resolves through the Google mirror
 # (Maven Central 403s from this network -- see settings.gradle.kts).
 composeMultiplatform = "1.12.0"

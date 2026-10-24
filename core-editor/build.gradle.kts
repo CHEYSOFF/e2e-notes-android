@@ -11,7 +11,7 @@ plugins {
 kotlin {
     androidLibrary {
         namespace = "my.cheysoff.core_editor"
-        compileSdk = 36
+        compileSdk = 37
         minSdk = 24
     }
     jvm { compilerOptions { jvmTarget.set(JvmTarget.JVM_11) } }

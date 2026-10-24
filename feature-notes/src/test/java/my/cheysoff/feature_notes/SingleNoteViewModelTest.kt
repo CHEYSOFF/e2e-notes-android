@@ -267,6 +267,23 @@ class SingleNoteViewModelTest {
         assertEquals(listOf(SingleNoteEvent.NavigateBack), events)
     }
 
+    // --- writeMeta must claim ONLY the field its UPDATE actually wrote ---------------------------
+    //
+    // Each of the three tests below holds one targeted UPDATE open, lets its sibling finish, and
+    // then delivers the row the database genuinely holds at that instant — i.e. carrying the
+    // finished field's new value and the in-flight field's OLD one.
+    //
+    // If the finished write's `record` lambda claims the in-flight field too, the baseline now says
+    // "the database holds the new value" for a column the database has not been told about. The
+    // very next emission reports the old value, the merge sees local == baseline and classifies it
+    // as an external change, and adopts it — silently undoing the toggle the user just made.
+    //
+    // Note there is no matching test for the opposite mistake (a `record` that claims too LITTLE).
+    // That one has no symptom: the merge self-heals, because a baseline that lags behind makes
+    // `local != baseline`, which keeps the local value and then adopts the incoming row as the new
+    // baseline anyway. Over-claiming is the only direction that loses data, so it is the only
+    // direction with a test.
+
     @Test
     fun `an in-flight pin write is not reverted by the echo of a finished favorite write`() =
         runTest(mainDispatcherRule.dispatcher) {

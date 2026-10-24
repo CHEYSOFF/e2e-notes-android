@@ -12,7 +12,7 @@ plugins {
 kotlin {
     androidLibrary {
         namespace = "my.cheysoff.core_pairing"
-        compileSdk = 36
+        compileSdk = 37
         // 24 rather than :feature-pairing's 31. Nothing here needs 31 -- P-256 through plain JCA
         // has been on the platform since API 23, and zxing is pure Java. The 31 floor belongs to
         // CameraX, which is in :feature-pairing and stays there.

@@ -12,7 +12,7 @@ kotlin {
 
 android {
     namespace = "my.cheysoff.feature_notes"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 24
