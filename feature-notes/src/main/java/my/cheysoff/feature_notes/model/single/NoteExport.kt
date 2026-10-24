@@ -1,6 +1,7 @@
 package my.cheysoff.feature_notes.model.single
 
 import my.cheysoff.core_blocks.BlockText
+import my.cheysoff.core_blocks.LegacyImport
 import my.cheysoff.core_domain.model.NoteContentFormat
 
 /**
@@ -20,8 +21,7 @@ private const val BLOCK_SEPARATOR = "\n\n"
  * checklist, separated by blank lines.
  *
  * [plainBody] must already BE plain text — this function does no markup handling of any kind. The
- * caller supplies it, and the editor's caller supplies the rich-text editor's own
- * `annotatedString.text`, which is literally the characters on screen.
+ * overload below, which takes a stored body, produces it.
  *
  * Empty parts are dropped rather than emitted as blank blocks, so a note with only a checklist
  * shares as just the checklist. Checklist rows whose text is blank are dropped too: the editor
@@ -47,13 +47,14 @@ fun buildNoteShareText(
 }
 
 /**
- * [buildNoteShareText] for a stored body whose format may be BLOCKS.
+ * [buildNoteShareText] for a stored body in any format.
  *
- * A BLOCKS body is JSON, so it is read through [BlockText] instead of being handed over raw; any
- * other format is passed through unchanged, because for those the editor supplies the body text
- * itself (see the first overload). A leftover legacy checklist is still exported, but a row the
- * blocks already show as a check line is dropped so an item that was converted into the body but
- * not yet cleared from the field does not appear twice.
+ * A BLOCKS body is JSON, so it is read through [BlockText] instead of being handed over raw. An
+ * HTML body (written by the pre-blocks editor) is read the way the block editor opens it,
+ * [LegacyImport] then [BlockText.plain], so a share never carries markup; a PLAIN body is already
+ * text. A leftover legacy checklist is still exported, but a row the body already shows as a check
+ * line is dropped so an item that was converted into the body but not yet cleared from the field
+ * does not appear twice.
  */
 fun buildNoteShareText(
     title: String,
@@ -62,7 +63,10 @@ fun buildNoteShareText(
     checklist: List<ChecklistItem>,
 ): String {
     val blocksBody = BlockText.bodyPlain(content, format)
-        ?: return buildNoteShareText(title, content, checklist)
+        ?: when (format) {
+            NoteContentFormat.HTML -> BlockText.plain(LegacyImport.toBlocks("", content, format, "")).trim()
+            else -> return buildNoteShareText(title, content, checklist)
+        }
     val bodyLines = blocksBody.lines().toSet()
     val leftover = checklist.filter {
         val text = it.text.trim()

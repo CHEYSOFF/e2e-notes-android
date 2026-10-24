@@ -439,9 +439,9 @@ class SingleNoteMergeTest {
     }
 
     @Test
-    fun `a remote body adopted while the note is open moves contentRevision`() {
-        // The screen re-seeds its RichTextState only when contentRevision changes, so without the
-        // bump the editor keeps showing the empty body and the next save writes it back over this.
+    fun `a remote body adopted while the note is open reaches the state`() {
+        // The open editor takes the body through its assembled document (RemoteApply); the state's
+        // content must follow too, for the blank-note check and for share before the editor loads.
         val empty = Note(id = "n", title = "", content = "", contentFormat = NoteContentFormat.PLAIN)
         val first = mergeIncomingNote(SingleNoteScreenState(), baseline = null, incoming = empty)
 
@@ -449,6 +449,6 @@ class SingleNoteMergeTest {
         val second = mergeIncomingNote(first.state, first.baseline, withText)
 
         assertEquals("<p>typed on the laptop</p>", second.state.content)
-        assertNotEquals(first.state.contentRevision, second.state.contentRevision)
+        assertEquals(NoteContentFormat.HTML, second.state.contentFormat)
     }
 }

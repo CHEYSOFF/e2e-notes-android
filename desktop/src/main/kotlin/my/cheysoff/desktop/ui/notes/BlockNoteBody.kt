@@ -50,7 +50,7 @@ import my.cheysoff.desktop.ui.theme.MetaGrey
 import my.cheysoff.desktop.ui.theme.PlaceholderGrey
 
 /**
- * The note body on the block path: a toolbar over the shared [BlockEditor], which holds the text,
+ * The note body: a toolbar over the shared [BlockEditor], which holds the text,
  * checklists, pictures and drawings of the note in one field.
  *
  * - The editor gets [EditorDraft.id] and [EditorDraft.blocks] from the same draft, so the note id
@@ -108,7 +108,7 @@ internal fun BlockNoteBody(
 /**
  * Bold, Italic, Strikethrough, H1-H3, Bullet, Checklist, Picture, Clear formatting, Undo, Redo.
  *
- * Fixed under the rule like the legacy toolbar (a desktop window has no keyboard to dodge). The
+ * Fixed under the rule, not floating like the phone's (a desktop window has no keyboard to dodge). The
  * lit state comes from the controller's snapshot state ([BlockEditorController.activeStyles],
  * [BlockEditorController.activeType], [BlockEditorController.canUndo]/[canRedo][BlockEditorController.canRedo]),
  * so it follows the caret without the toolbar polling anything. The type buttons toggle: pressing

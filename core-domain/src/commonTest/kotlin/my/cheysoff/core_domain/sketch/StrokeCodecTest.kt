@@ -10,9 +10,9 @@ import kotlin.test.assertTrue
  *
  * Byte-stability is the property that matters most here and is the least obvious. Every device
  * decodes a sketch and re-encodes it whenever it merges or re-saves; if that round trip differed by
- * one character, every sketch on the account would go dirty at once and be pushed again. The same
- * failure already threatens this codebase through `richeditor`'s HTML round trip, which is why the
- * encoding below emits no floats at all — Kotlin/JVM and Kotlin/Native do not format them
+ * one character, every sketch on the account would go dirty at once and be pushed again. The
+ * pre-blocks editor's HTML round trip had exactly that failure, which is why the encoding below
+ * emits no floats at all — Kotlin/JVM and Kotlin/Native do not format them
  * identically, and the desktop and the phone would disagree about bytes that mean the same picture.
  */
 class StrokeCodecTest {

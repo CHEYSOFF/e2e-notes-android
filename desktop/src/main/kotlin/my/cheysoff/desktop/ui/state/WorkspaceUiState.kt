@@ -26,12 +26,12 @@ data class WorkspaceUiState(
      */
     val sketches: List<DisplaySketch> = emptyList(),
     /**
-     * The open note's live attachments, unsorted -- ordering an attachment rail is a UI concern
-     * (`AttachmentRail` applies `sortAttachments` at render time), not something computed here, the
+     * The open note's live attachments, unsorted -- ordering them is a UI concern (the viewer pages
+     * through `orderedForDisplay`), not something computed here, the
      * same split [getSketchesForNote][my.cheysoff.desktop.store.RecordNotesRepository.getSketchesForNote]
      * documents for [sketches]. Unlike [sketches] there is no decode-checked "for display" mapping:
-     * an attachment's bytes are decoded per tile in the rail itself, and a failed decode there is a
-     * placeholder tile, not a filtered-out row. Empty whenever nothing is open, or on the
+     * an attachment's bytes are decoded where its picture block is drawn, and a failed decode there
+     * is a placeholder, not a filtered-out row. Empty whenever nothing is open, or on the
      * preview build (no [my.cheysoff.desktop.store.DesktopAttachments] to read from).
      */
     val attachments: List<AttachmentData> = emptyList(),
@@ -79,19 +79,14 @@ data class EditorDraft(
     val createdAt: Long,
     val updatedAt: Long,
     /**
-     * Moves when [content] is replaced from outside the editor (a synced-in body). The rich-text
-     * editor owns its text and only re-reads [content] when the note id or this changes.
-     */
-    val contentRevision: Int = 0,
-    /**
      * The document the shared block editor shows for this note, from `OpenDocument.assemble` over
-     * the stored row and the note's live pictures and drawings. Null on the legacy editor path
-     * (`BlocksFormat.WRITE_ENABLED` off) and until the first assembly lands.
+     * the stored row and the note's live pictures and drawings. Null until the first assembly
+     * lands.
      *
      * It lives on the draft, next to [id], so the note id and its document always travel as one
      * value: the pane can never hand note A's document to an editor opened for note B. Re-assembled
      * on every storage change of the note, its attachments or its sketches; the editor applies each
-     * one as a synced change (RemoteApply), which is why [contentRevision] plays no part for it.
+     * one as a synced change (RemoteApply), so a synced body never reloads the editor.
      */
     val blocks: BlockDocument? = null,
     /**

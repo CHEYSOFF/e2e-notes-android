@@ -130,7 +130,7 @@ class RecordPayloadCodecTest {
     }
 
     /**
-     * A body written by a different `richeditor` escapes text differently. Refusing rather than
+     * A body written by a different HTML serializer escapes text differently. Refusing rather than
      * re-saving is what stops this build from rewriting it at version 1 and mangling it.
      */
     @Test

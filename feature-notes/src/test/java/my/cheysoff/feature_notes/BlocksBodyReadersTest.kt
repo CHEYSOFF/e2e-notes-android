@@ -50,4 +50,23 @@ class BlocksBodyReadersTest {
         )
         assertEquals("T\n\nTrip plan\n☐ buy tickets\n\n[x] old item", text)
     }
+
+    @Test
+    fun `share text for an HTML note carries its text, never its markup`() {
+        // The pre-blocks editor wrote HTML; the note screen shares the stored body before the
+        // editor has loaded it, so the reader has to turn markup into text itself.
+        val text = buildNoteShareText(
+            title = "T",
+            content = "<h1>Trip&period;</h1><ul><li>Email &lt;a@b.c&gt;</li></ul>",
+            format = NoteContentFormat.HTML,
+            checklist = listOf(ChecklistItem(id = "c1", text = "pack", isDone = false)),
+        )
+        assertEquals("T\n\nTrip.\n• Email <a@b.c>\n\n[ ] pack", text)
+    }
+
+    @Test
+    fun `share text for a PLAIN note is its text as stored`() {
+        val text = buildNoteShareText("T", "a <b> c", NoteContentFormat.PLAIN, emptyList())
+        assertEquals("T\n\na <b> c", text)
+    }
 }

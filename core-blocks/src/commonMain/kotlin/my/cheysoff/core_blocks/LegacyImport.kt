@@ -6,8 +6,8 @@ import my.cheysoff.core_domain.sync.Hlc
 import my.cheysoff.core_domain.sync.NameUuid
 
 /**
- * Turns a pre-blocks note (PLAIN text, or the HTML richeditor 1.0.0-rc14 and 1.1.0 wrote) into
- * blocks, so every existing note opens in the block editor with nothing lost.
+ * Turns a pre-blocks note (PLAIN text, or the HTML the pre-blocks rich-text editor wrote in its
+ * 1.0.0-rc14 and 1.1.0 releases) into blocks, so every existing note opens in the block editor with nothing lost.
  *
  * Deterministic on purpose: the phone and the desktop each convert the same note when they open it,
  * before either has saved, and the two results must be the same blocks with the same ids or the

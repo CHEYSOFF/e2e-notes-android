@@ -121,26 +121,17 @@ class BlockNoteBodyTest {
     }
 
     @Test
-    fun `the viewer's Delete on the block path removes the block and never the record`() = runComposeUiTest {
+    fun `the viewer's Delete removes the block, undoably`() = runComposeUiTest {
+        // The record is left to the save's PictureLifecycle: deletePictureFromViewer has no way to
+        // delete one (it takes only the controller), so that half is enforced by its signature.
         val changes = mutableListOf<List<Block>>()
         val controller = showBody(mutableListOf(), changes)
-        val deletedRecords = mutableListOf<String>()
 
-        runOnIdle { deletePictureFromViewer("r1", controller, deleteRecord = { deletedRecords += it }) }
+        runOnIdle { deletePictureFromViewer("r1", controller) }
         waitForIdle()
 
-        assertTrue("the record is left to the save's PictureLifecycle", deletedRecords.isEmpty())
         assertEquals(listOf("t", "u"), changes.last().map { it.id })
         onNodeWithTag("picture-pic:r1").assertDoesNotExist()
         assertTrue("undoable", controller.canUndo)
-    }
-
-    @Test
-    fun `the viewer's Delete on the legacy path deletes the record as before`() {
-        val deletedRecords = mutableListOf<String>()
-
-        deletePictureFromViewer("r1", blockController = null, deleteRecord = { deletedRecords += it })
-
-        assertEquals(listOf("r1"), deletedRecords)
     }
 }

@@ -17,8 +17,8 @@ import my.cheysoff.core_domain.model.NoteContentFormat
 object NoteBlocks {
 
     /**
-     * HTML tags this treats as a block boundary, matching the shapes `richeditor-compose`'s
-     * `toHtml()` actually emits: `<p>`, `<div>`, headings, lists (as a whole, not per `<li>`),
+     * HTML tags this treats as a block boundary, matching the shapes the pre-blocks rich-text
+     * editor's `toHtml()` emitted: `<p>`, `<div>`, headings, lists (as a whole, not per `<li>`),
      * block quotes and preformatted text.
      *
      * Changing this set moves the anchor of every sketch already saved against an existing note,
@@ -33,7 +33,7 @@ object NoteBlocks {
 
     /**
      * HTML elements that never have a matching closing tag. Left out of the nesting stack so a
-     * `<br>` inside a `<p>` (`richeditor`'s own line-break shape) does not desynchronise the depth
+     * `<br>` inside a `<p>` (the pre-blocks editor's line-break shape) does not desynchronise the depth
      * count from the closing `</p>` that follows it.
      */
     private val VOID_TAGS = setOf("br", "hr", "img")

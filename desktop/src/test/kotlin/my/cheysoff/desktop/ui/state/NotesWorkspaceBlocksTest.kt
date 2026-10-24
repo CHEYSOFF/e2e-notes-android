@@ -49,9 +49,7 @@ import org.junit.Test
  * The desktop's BLOCKS path through [NotesWorkspaceModel]: what document the shared editor is
  * handed for the open note, and what a local edit saves.
  *
- * The write flag is injected (`blocksWriteEnabled`) rather than read from
- * `BlocksFormat.WRITE_ENABLED`, which stays false until Task 16; both settings are exercised so the
- * legacy path is proven untouched while the flag is off.
+ * A note stored as PLAIN or HTML opens converted and is written as BLOCKS on its first edit.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class NotesWorkspaceBlocksTest {
@@ -129,7 +127,6 @@ class NotesWorkspaceBlocksTest {
         repository: NotesRepository,
         attachments: DesktopAttachments = FakeAttachments(),
         sketches: DesktopSketches = FakeSketches(),
-        writeEnabled: Boolean,
     ): NotesWorkspaceModel {
         val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + Job())
         scopes += scope
@@ -140,7 +137,6 @@ class NotesWorkspaceBlocksTest {
             attachments = attachments,
             now = { 5_000L },
             encodeDispatcher = StandardTestDispatcher(testScheduler),
-            blocksWriteEnabled = writeEnabled,
         )
     }
 
@@ -156,7 +152,7 @@ class NotesWorkspaceBlocksTest {
             repository.saveNote(note("n1", content = "body", checklist = "0milk"))
             val body = BlocksSave.encodeForSave(listOf(Block("p", BlockType.PARAGRAPH, text = "body")))
             repository.saveNote(note("n1", content = body, format = NoteContentFormat.BLOCKS, checklist = "0milk"))
-            val model = model(repository, repository, repository, writeEnabled = true)
+            val model = model(repository, repository, repository)
             advanceUntilIdle()
             model.selectNote("n1")
             advanceUntilIdle()
@@ -181,7 +177,6 @@ class NotesWorkspaceBlocksTest {
             RecordingRepository(InMemoryNotesRepository(listOf(legacy))),
             FakeAttachments(listOf(photo)),
             FakeSketches(listOf(drawing)),
-            writeEnabled = true,
         )
         advanceUntilIdle()
         model.selectNote("n1")
@@ -203,7 +198,7 @@ class NotesWorkspaceBlocksTest {
     @Test
     fun `a picture that arrives later re-assembles the open document`() = runTest {
         val attachments = FakeAttachments()
-        val model = model(RecordingRepository(InMemoryNotesRepository(listOf(note("n1")))), attachments, writeEnabled = true)
+        val model = model(RecordingRepository(InMemoryNotesRepository(listOf(note("n1")))), attachments)
         advanceUntilIdle()
         model.selectNote("n1")
         advanceUntilIdle()
@@ -219,7 +214,7 @@ class NotesWorkspaceBlocksTest {
     @Test
     fun `edits save as BLOCKS when writing is enabled`() = runTest {
         val repository = RecordingRepository(InMemoryNotesRepository(listOf(note("n1"))))
-        val model = model(repository, writeEnabled = true)
+        val model = model(repository)
         advanceUntilIdle()
         model.selectNote("n1")
         advanceUntilIdle()
@@ -246,7 +241,7 @@ class NotesWorkspaceBlocksTest {
     @Test
     fun `a pending block save is flushed when the user switches notes`() = runTest {
         val repository = RecordingRepository(InMemoryNotesRepository(listOf(note("n1"), note("n2"))))
-        val model = model(repository, writeEnabled = true)
+        val model = model(repository)
         advanceUntilIdle()
         model.selectNote("n1")
         advanceUntilIdle()
@@ -268,7 +263,7 @@ class NotesWorkspaceBlocksTest {
     @Test
     fun `a title edit after a saved block edit keeps the stored BLOCKS body and claims no blocks`() = runTest {
         val repository = RecordingRepository(InMemoryNotesRepository(listOf(note("n1"))))
-        val model = model(repository, writeEnabled = true)
+        val model = model(repository)
         advanceUntilIdle()
         model.selectNote("n1")
         advanceUntilIdle()
@@ -293,7 +288,7 @@ class NotesWorkspaceBlocksTest {
     @Test
     fun `an edit for a note that is no longer open is not saved over the open one`() = runTest {
         val repository = RecordingRepository(InMemoryNotesRepository(listOf(note("n1"), note("n2"))))
-        val model = model(repository, writeEnabled = true)
+        val model = model(repository)
         advanceUntilIdle()
         model.selectNote("n2")
         advanceUntilIdle()
@@ -306,27 +301,10 @@ class NotesWorkspaceBlocksTest {
     }
 
     @Test
-    fun `with writing disabled the legacy path stays and block edits are not saved`() = runTest {
-        val repository = RecordingRepository(InMemoryNotesRepository(listOf(note("n1"))))
-        val model = model(repository, writeEnabled = false)
-        advanceUntilIdle()
-        model.selectNote("n1")
-        advanceUntilIdle()
-        assertFalse(model.blocksEditing)
-        assertNull("no document is assembled for the legacy editor", model.state.value.editor!!.blocks)
-        repository.saves.clear()
-
-        model.onBlocksChanged("n1", listOf(Block(id = "x", type = BlockType.PARAGRAPH, text = "typed")), BlockDocument(emptyList()))
-        advanceUntilIdle()
-
-        assertTrue(repository.saves.isEmpty())
-    }
-
-    @Test
     fun `an unreadable BLOCKS body opens read-only and is never saved`() = runTest {
         val raw = "{\"v\":99,\"future\":true}"
         val repository = RecordingRepository(InMemoryNotesRepository(listOf(note("n1", content = raw, format = NoteContentFormat.BLOCKS))))
-        val model = model(repository, writeEnabled = true)
+        val model = model(repository)
         advanceUntilIdle()
         model.selectNote("n1")
         advanceUntilIdle()
@@ -343,7 +321,7 @@ class NotesWorkspaceBlocksTest {
     @Test
     fun `a pasted image is saved first and then handed to the editor by record id`() = runTest {
         val attachments = FakeAttachments()
-        val model = model(RecordingRepository(InMemoryNotesRepository(listOf(note("n1")))), attachments, writeEnabled = true)
+        val model = model(RecordingRepository(InMemoryNotesRepository(listOf(note("n1")))), attachments)
         advanceUntilIdle()
         model.selectNote("n1")
         advanceUntilIdle()
@@ -382,7 +360,7 @@ class NotesWorkspaceBlocksTest {
     @Test
     fun `typing followed by an immediate lock persists the text first`() = runTest {
         val repository = SlowRepository(InMemoryNotesRepository(listOf(note("n1"))))
-        val model = model(repository, writeEnabled = true)
+        val model = model(repository)
         advanceUntilIdle()
         model.selectNote("n1")
         advanceUntilIdle()
@@ -400,32 +378,17 @@ class NotesWorkspaceBlocksTest {
     }
 
     @Test
-    fun `the legacy path also persists pending typing before a lock`() = runTest {
-        val repository = SlowRepository(InMemoryNotesRepository(listOf(note("n1"))))
-        val model = model(repository, writeEnabled = false)
-        advanceUntilIdle()
-        model.selectNote("n1")
-        advanceUntilIdle()
-        var savedAtLock: List<Note>? = null
-
-        model.setContent("<p>typed</p>")
-        model.flushThen { savedAtLock = repository.finished.map { it.first } }
-        advanceUntilIdle()
-
-        assertEquals("<p>typed</p>", savedAtLock!!.single().content)
-    }
-
-    @Test
     fun `a hung save does not hang the lock past the timeout`() = runTest {
         val repository = SlowRepository(InMemoryNotesRepository(listOf(note("n1"))), hang = true)
-        val model = model(repository, writeEnabled = false)
+        val model = model(repository)
         advanceUntilIdle()
         model.selectNote("n1")
         advanceUntilIdle()
         var lockedAt: Long? = null
         val start = currentTime
+        val base = model.state.value.editor!!.blocks!!
 
-        model.setContent("<p>typed</p>")
+        model.onBlocksChanged("n1", base.visible().map { it.copy(text = "typed") }, base)
         model.flushThen { lockedAt = currentTime }
         advanceTimeBy(NotesWorkspaceModel.FLUSH_TIMEOUT_MILLIS + 1)
         runCurrent()
@@ -440,7 +403,6 @@ class NotesWorkspaceBlocksTest {
         val model = model(
             RecordingRepository(InMemoryNotesRepository(listOf(note("n1", content = raw, format = NoteContentFormat.BLOCKS)))),
             attachments,
-            writeEnabled = true,
         )
         advanceUntilIdle()
         model.selectNote("n1")
@@ -458,7 +420,7 @@ class NotesWorkspaceBlocksTest {
     @Test
     fun `an image paste before the document is assembled is refused`() = runTest {
         val attachments = FakeAttachments()
-        val model = model(RecordingRepository(InMemoryNotesRepository(listOf(note("n1"), note("n2")))), attachments, writeEnabled = true)
+        val model = model(RecordingRepository(InMemoryNotesRepository(listOf(note("n1"), note("n2")))), attachments)
         advanceUntilIdle()
         model.selectNote("n1")
         advanceUntilIdle()

@@ -176,7 +176,7 @@ subprojects {
 // directory*, which is why every one of them starts with `**/`.
 //
 // What is deliberately NOT excluded: `**/ui/**`. See docs/design/code-coverage.md §Exclusions —
-// in this project that directory holds all five ViewModels and `EditorHistory`, so excluding it
+// in this project that directory holds all five ViewModels, so excluding it
 // would remove both the least-tested and some of the best-tested code in the repo.
 val coverageExclusions = listOf(
     // --- Android build plumbing ---------------------------------------------------------------

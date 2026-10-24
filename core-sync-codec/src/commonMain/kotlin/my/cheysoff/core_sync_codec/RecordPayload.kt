@@ -107,9 +107,11 @@ object RecordPayloadCodec {
     /**
      * Content-serializer version — how `content` is encoded when `contentFormat` is `html`.
      *
-     * Version 1 is `richeditor-compose` 1.1.0's `toHtml()`. This is not decoration: rc14 and 1.1.0
-     * escape text differently (see the `richeditor` entry in `gradle/libs.versions.toml`), so a
-     * body written by one and parsed by the other round-trips but does not compare equal. A device
+     * Version 1 is the pre-blocks rich-text editor's `toHtml()` (its 1.1.0 release; HTML notes are
+     * no longer written, only read and converted). This is not decoration: that editor's rc14 and
+     * 1.1.0 releases escape text differently (see the `ksoup-entities` entry in
+     * `gradle/libs.versions.toml`), so a body written by one and parsed by the other round-trips but
+     * does not compare equal. A device
      * that cannot render version N must refuse the record rather than re-save it at version 1.
      */
     const val SERIALIZER_VERSION = 1

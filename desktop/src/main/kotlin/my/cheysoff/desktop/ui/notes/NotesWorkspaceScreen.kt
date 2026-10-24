@@ -94,12 +94,11 @@ fun NotesWorkspaceScreen(
     textScale: TextScale,
     onCycleTextScale: () -> Unit,
 ) {
-    // The open note's block editor controller: one per note (keyed on its id), and only on the block
-    // path. Held here, above both the editor pane and the full-screen viewer, because the viewer's
-    // Delete has to act through the editor (see deletePictureFromViewer).
+    // The open note's block editor controller: one per note (keyed on its id). Held here, above
+    // both the editor pane and the full-screen viewer, because the viewer's Delete has to act
+    // through the editor (see deletePictureFromViewer).
     val openNoteId = state.editor?.id
-    val blockController =
-        if (model.blocksEditing && openNoteId != null) rememberBlockEditorController(openNoteId) else null
+    val blockController = if (openNoteId != null) rememberBlockEditorController(openNoteId) else null
 
     Box(modifier = Modifier.fillMaxSize().background(AppBlack)) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -148,17 +147,11 @@ fun NotesWorkspaceScreen(
                         now = now,
                         titleFocus = titleFocus,
                         onTitleChange = model::setTitle,
-                        onContentChange = model::setContent,
                         onSetFolder = model::setNoteFolder,
                         onTogglePin = model::togglePinned,
                         onToggleFavorite = model::toggleFavorite,
                         onDelete = model::deleteSelectedNote,
-                        onAddChecklistItem = model::addChecklistItem,
-                        onChecklistTextChange = model::setChecklistItemText,
-                        onToggleChecklistItem = model::toggleChecklistItem,
-                        onRemoveChecklistItem = model::removeChecklistItem,
                         sketches = state.sketches,
-                        onDeleteSketch = model::deleteSketch,
                         attachments = state.attachments,
                         onAttachmentTapped = { model.openAttachmentViewer(it.id) },
                         onPasteImage = { image, onAttached ->
@@ -190,9 +183,8 @@ fun NotesWorkspaceScreen(
         // update to the row is reflected immediately; a stale id (the row vanished from under the
         // viewer) simply renders nothing rather than a stale photo.
         state.attachments.firstOrNull { it.id == state.viewingAttachmentId }?.let { attachment ->
-            // The rail's own order, so the arrows, the dots and the tiles all agree about which
-            // photo comes next -- a second comparator here is exactly the drift sortAttachments'
-            // KDoc warns about.
+            // The shared display order, so the arrows and the dots agree about which photo comes
+            // next -- a second comparator here is exactly the drift sortAttachments' KDoc warns about.
             val ordered = remember(state.attachments) { orderedForDisplay(state.attachments) }
             AttachmentViewer(
                 attachment = attachment,
@@ -201,7 +193,7 @@ fun NotesWorkspaceScreen(
                 onClose = model::closeAttachmentViewer,
                 onDelete = { id ->
                     model.closeAttachmentViewer()
-                    deletePictureFromViewer(id, blockController, deleteRecord = model::deleteAttachment)
+                    blockController?.let { deletePictureFromViewer(id, it) }
                 },
             )
         }
@@ -209,21 +201,14 @@ fun NotesWorkspaceScreen(
 }
 
 /**
- * The full-screen viewer's Delete of picture [recordId].
- *
- * - **Block path** ([blockController] non-null): removes the picture's block through the editor
- *   (`removePicture`), a local edit that is saved like typing and can be undone. The save then
- *   soft-deletes the record (`PictureLifecycle`), and an undo undeletes it. The record is never
- *   deleted here: with the block still in the body, the next save would bring it straight back.
- *   If no block shows the record, nothing is deleted.
- * - **Legacy path**: deletes the record, as before; there is no block.
+ * The full-screen viewer's Delete of picture [recordId]: removes the picture's block through the
+ * editor (`removePicture`), a local edit that is saved like typing and can be undone. The save then
+ * soft-deletes the record (`PictureLifecycle`), and an undo undeletes it. The record is never
+ * deleted here: with the block still in the body, the next save would bring it straight back. If no
+ * block shows the record, nothing is deleted.
  */
-internal fun deletePictureFromViewer(
-    recordId: String,
-    blockController: BlockEditorController?,
-    deleteRecord: (String) -> Unit,
-) {
-    if (blockController != null) blockController.removePicture(recordId) else deleteRecord(recordId)
+internal fun deletePictureFromViewer(recordId: String, blockController: BlockEditorController) {
+    blockController.removePicture(recordId)
 }
 
 /**

@@ -68,7 +68,7 @@ private const val MinScale = 1f
 private const val MaxScale = 6f
 
 /**
- * Full-screen viewer for a note's photos, opened by tapping a tile in [AttachmentSection].
+ * Full-screen viewer for a note's photos, opened by tapping a picture block in the note.
  *
  * [loadAttachment] is the **one** place in this whole feature that reads
  * [AttachmentData.bytes] -- everywhere else (the rail, the note list, any future preview) reads
@@ -97,12 +97,9 @@ private const val MaxScale = 6f
  * This is the **only** `BackHandler` active while the viewer is showing: `SingleNoteScreen`
  * disables its own for exactly this reason (see that screen's `BackHandler(enabled = ...)`), the
  * one that closes the editor. Both exit paths -- back and the close button -- go through
- * [onClose], and deleting goes through [onDeleted] after a confirm dialog whose wording says the
- * thing that cannot be undone: attachments are not in Trash (`TrashEntryKind` is `{NOTE, FOLDER}`),
- * so unlike "Move to Trash" elsewhere in this app, this delete really is final, and a dialog that
- * implied otherwise would be worse than none (`docs/design/image-attachments.md` §8). The block
- * path is the exception: there the delete removes the picture's block, which Undo restores, and
- * [deleteIsUndoable] makes the dialog say that instead.
+ * [onClose], and deleting goes through [onDeleted] after a confirm dialog. [onDeleted] removes the
+ * picture's block from the note, an editor edit that Undo restores, and the dialog says so (see
+ * [pictureDeleteCopy]).
  */
 @Composable
 fun AttachmentViewerScreen(
@@ -111,11 +108,6 @@ fun AttachmentViewerScreen(
     loadAttachment: suspend (String) -> AttachmentData?,
     onClose: () -> Unit,
     onDeleted: (String) -> Unit,
-    /**
-     * True on the block path, where [onDeleted] removes the picture's block as an undoable editor
-     * edit rather than deleting the record; the dialog then says so (see [pictureDeleteCopy]).
-     */
-    deleteIsUndoable: Boolean = false,
 ) {
     BackHandler { onClose() }
 
@@ -216,7 +208,7 @@ fun AttachmentViewerScreen(
         // only if the pager scrolls under it, which it cannot -- but taking the id here keeps the
         // dialog and the button describing the same photo without a second piece of state.
         val targetId = ordered.getOrNull(pagerState.currentPage)?.id
-        val copy = pictureDeleteCopy(isDrawing = false, undoable = deleteIsUndoable)
+        val copy = pictureDeleteCopy(isDrawing = false)
         AlertDialog(
             containerColor = SurfaceDark,
             onDismissRequest = { confirmDelete = false },

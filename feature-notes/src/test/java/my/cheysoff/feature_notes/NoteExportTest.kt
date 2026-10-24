@@ -1,21 +1,16 @@
 package my.cheysoff.feature_notes
 
-import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.feature_notes.model.single.ChecklistItem
-import my.cheysoff.feature_notes.model.single.SingleNoteScreenState
 import my.cheysoff.feature_notes.model.single.buildNoteShareText
 import my.cheysoff.feature_notes.model.single.noteShareTitle
-import my.cheysoff.feature_notes.model.single.parseChecklist
-import my.cheysoff.feature_notes.ui.single.buildDuplicate
 import my.cheysoff.feature_notes.ui.single.duplicateTitle
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
 import org.junit.Test
 
 /**
- * The pure halves of the editor's overflow menu: the text a note leaves the app as, and the row a
- * "Duplicate" writes. Neither touches Android, so both are checked here rather than on a device.
+ * The pure halves of the editor's overflow menu: the text a note leaves the app as, and the title a
+ * "Duplicate" gives its copy. Neither touches Android, so both are checked here rather than on a
+ * device; the copy itself is written by the ViewModel (see `SingleNoteViewModelTest`).
  */
 class NoteExportTest {
 
@@ -114,70 +109,5 @@ class NoteExportTest {
     @Test
     fun `duplicating a duplicate doubles the suffix rather than guessing a number`() {
         assertEquals("Notes (copy) (copy)", duplicateTitle(duplicateTitle("Notes")))
-    }
-
-    @Test
-    fun `the copy carries body, format, checklist and folder`() {
-        val state = SingleNoteScreenState(
-            title = "Trip",
-            content = "<p>packing</p>",
-            contentFormat = NoteContentFormat.HTML,
-            checklist = listOf(item("socks", done = true), item("passport")),
-            folderId = "f1",
-        )
-
-        val copy = buildDuplicate(state, newId = "new-id")
-
-        assertEquals("new-id", copy.id)
-        assertEquals("Trip (copy)", copy.title)
-        assertEquals("<p>packing</p>", copy.content)
-        assertEquals(NoteContentFormat.HTML, copy.contentFormat)
-        assertEquals("f1", copy.folderId)
-        // Round-trips through the same serializer the autosave uses, so the copy's checklist reads
-        // back as the same items.
-        assertEquals(
-            listOf("socks" to true, "passport" to false),
-            parseChecklist(copy.checklist).map { it.text to it.isDone },
-        )
-    }
-
-    @Test
-    fun `a plain-text note keeps its plain marker when duplicated`() {
-        // The marker must travel with the same bytes it describes: labelling a legacy plain body
-        // as HTML would have it parsed on the next open and characters eaten.
-        val state = SingleNoteScreenState(
-            content = "Email John <john@example.com>",
-            contentFormat = NoteContentFormat.PLAIN,
-        )
-
-        val copy = buildDuplicate(state, newId = "new-id")
-
-        assertEquals(NoteContentFormat.PLAIN, copy.contentFormat)
-        assertEquals("Email John <john@example.com>", copy.content)
-    }
-
-    @Test
-    fun `the copy is neither pinned nor favorited`() {
-        val state = SingleNoteScreenState(title = "T", isPinned = true, isFavorite = true)
-
-        val copy = buildDuplicate(state, newId = "new-id")
-
-        assertFalse(copy.isPinned)
-        assertFalse(copy.isFavorite)
-    }
-
-    @Test
-    fun `the copy never reuses the original's id`() {
-        val state = SingleNoteScreenState(title = "T")
-
-        assertNotEquals("original", buildDuplicate(state, newId = "new-id").id)
-    }
-
-    @Test
-    fun `timestamps are left for the upsert to stamp`() {
-        val copy = buildDuplicate(SingleNoteScreenState(title = "T"), newId = "new-id")
-
-        assertEquals(0L, copy.createdAt)
-        assertEquals(0L, copy.updatedAt)
     }
 }

@@ -5,8 +5,8 @@ data class Note(
     val title: String,
     val content: String,
     // How `content` is encoded. Recorded, never guessed — see NoteContentFormat. New notes start
-    // out PLAIN (an empty body is identical either way) and are promoted to HTML the moment the
-    // rich-text editor writes to them.
+    // out PLAIN (an empty body is identical either way) and become BLOCKS the moment the block
+    // editor writes to them. HTML is only ever read: the pre-blocks editor wrote it.
     val contentFormat: NoteContentFormat = NoteContentFormat.PLAIN,
     val checklist: String = "",
     val isPinned: Boolean = false,

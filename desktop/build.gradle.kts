@@ -71,15 +71,9 @@ dependencies {
     // magnitude larger for the sake of glyphs this UI does not draw; the one icon it wants that
     // the core set lacks is the pin, and that is drawn by hand in PinGlyph.
     implementation(libs.compose.material.icons.core)
-    // 1.2.0, not the 1.1.0 the Android app is pinned to: 1.2.0 is the first release with a
-    // published `richeditor-compose-desktop` variant. The two agree on escaping (both emit a
-    // literal "." and escape only & < >), so HTML written on either platform round-trips. The
-    // version that does NOT agree is the 1.0.0-rc14 this project used to be on, whose
-    // entity-escaped bodies are still on disk; DesktopHtmlText reads those.
-    implementation(libs.richeditor.compose.desktop)
-    // richeditor's own HTML entity codec, declared explicitly because richeditor exposes it at
-    // RUNTIME only. Decoding rc14-era bodies with the library that encoded them is what makes the
-    // decode a guaranteed inverse rather than a hand-maintained entity table.
+    // The HTML entity codec the pre-blocks editor escaped note bodies with. DesktopHtmlText decodes
+    // HTML bodies still on disk (list snippets, search) with the same tables, so the decode is a
+    // guaranteed inverse rather than a hand-maintained entity table; see the toml entry.
     implementation(libs.ksoup.entities)
 
     // The record store. Plain SQLite over JDBC -- not SQLCipher: on desktop the confidentiality of

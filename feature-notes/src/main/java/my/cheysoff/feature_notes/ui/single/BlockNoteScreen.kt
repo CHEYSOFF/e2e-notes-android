@@ -118,10 +118,9 @@ import my.cheysoff.feature_notes.ui.folder.FolderRef
 import my.cheysoff.feature_notes.ui.sketch.SketchCanvasScreen
 
 /**
- * The note screen on the block path (`SingleNoteScreenState.blocksEditing`): the title over the
- * shared [BlockEditor], which holds the note's text, checklists, pictures and drawings in one
- * field. It replaces the legacy screen's rich-text field, checklist list, sketch strip and photo
- * rail; the top bar, folder chip, sketch canvas and photo viewer are the legacy screen's own.
+ * The note screen: the title over the shared [BlockEditor], which holds the note's text,
+ * checklists, pictures and drawings in one field, with the top bar ([EditorTopBar]), folder chip,
+ * sketch canvas and photo viewer around it.
  *
  * - **One note id, one document.** The editor gets the id and the document from the same
  *   [OpenedNoteDocument], and the controller is keyed on that id, so no document can reach the
@@ -170,8 +169,7 @@ internal fun BlockNoteScreen(
         contract = ActivityResultContracts.PickVisualMedia(),
     ) { uri -> if (uri != null) currentOnIntent(SingleNoteIntent.ImportAttachment(uri.toString())) }
 
-    // The same orientation lock as the legacy screen, for the same reason: a rotation would throw
-    // away a drawing in progress.
+    // Locked while the canvas is open: a rotation would throw away a drawing in progress.
     val isCanvasOpen = sketchTarget != null
     DisposableEffect(isCanvasOpen) {
         if (isCanvasOpen) activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
@@ -236,7 +234,6 @@ internal fun BlockNoteScreen(
                     sketchTarget = null
                 }
             },
-            deleteIsUndoable = true,
         )
         return
     }
@@ -253,7 +250,6 @@ internal fun BlockNoteScreen(
                 controller?.removePicture(deletedId)
                 viewingAttachmentId = null
             },
-            deleteIsUndoable = true,
         )
         return
     }

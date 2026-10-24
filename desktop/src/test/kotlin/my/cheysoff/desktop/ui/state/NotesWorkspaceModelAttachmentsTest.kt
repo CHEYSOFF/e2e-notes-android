@@ -139,26 +139,6 @@ class NotesWorkspaceModelAttachmentsTest {
     }
 
     @Test
-    fun `deleteAttachment drops the row immediately and calls through to the port`() = runTest {
-        val repository = InMemoryNotesRepository(notes = listOf(Note(id = "n1", title = "t", content = "")))
-        val fake = FakeAttachments(mapOf("n1" to listOf(attachment("a1", "n1"), attachment("a2", "n1"))))
-        val model = model(repository, fake)
-        advanceUntilIdle()
-        model.selectNote("n1")
-        advanceUntilIdle()
-
-        model.deleteAttachment("a1")
-
-        assertEquals(
-            "removed from state without waiting on the coroutine",
-            listOf("a2"),
-            model.state.value.attachments.map { it.id },
-        )
-        advanceUntilIdle()
-        assertEquals(listOf("a1"), fake.deletedIds)
-    }
-
-    @Test
     fun `pasteImage saves the image under the open note, anchored after its body`() = runTest {
         val repository = InMemoryNotesRepository(
             notes = listOf(Note(id = "n1", title = "t", content = "one\ntwo")),

@@ -31,7 +31,6 @@ import my.cheysoff.feature_notes.ui.single.SingleNoteEvent
 import my.cheysoff.feature_notes.ui.single.SingleNoteViewModel
 import my.cheysoff.feature_notes.ui.single.toPreview
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -39,7 +38,7 @@ import org.junit.Rule
 import org.junit.Test
 
 /**
- * The phone's block path (Task 15): the note screen's ViewModel assembles the block editor's
+ * The phone's note screen (Task 15): its ViewModel assembles the block editor's
  * document, saves the editor's edits as BLOCKS against the editor's base, and flushes on the way
  * out -- the same contract the desktop's `NotesWorkspaceModel` keeps (Task 14).
  */
@@ -54,7 +53,6 @@ class SingleNoteBlocksTest {
     private val attachmentRepo = FakeAttachmentsRepository()
     private var imageImporter: ImageImporter = FakeImageImporter()
     private val settingsRepo = FakeSettingsRepository()
-    private val logged = mutableListOf<String>()
 
     private companion object {
         const val NOTE_ID = "n1"
@@ -109,15 +107,13 @@ class SingleNoteBlocksTest {
         updatedAt = 1_000L,
     )
 
-    private fun viewModel(enabled: Boolean = true, isNew: Boolean = false): SingleNoteViewModel {
+    private fun viewModel(isNew: Boolean = false): SingleNoteViewModel {
         val args = buildMap<String, Any> {
             put("noteId", NOTE_ID)
             if (isNew) put("isNew", true)
         }
         return SingleNoteViewModel(
             repo, sketchRepo, attachmentRepo, imageImporter, settingsRepo, SavedStateHandle(args),
-            blocksWriteEnabled = enabled,
-            log = { logged += it },
         )
     }
 
@@ -157,11 +153,10 @@ class SingleNoteBlocksTest {
         )
         assertEquals(listOf("first", "second", "milk"), blocks.take(3).map { it.text })
         assertEquals(listOf("s1", "a1"), blocks.drop(3).map { it.ref })
-        assertTrue(vm.state.value.blocksEditing)
     }
 
     @Test
-    fun `edits save as BLOCKS when enabled`() = runTest {
+    fun `edits save as BLOCKS`() = runTest {
         repo.noteById.value = note(content = "hello")
         val vm = viewModel()
         runCurrent()
@@ -182,7 +177,7 @@ class SingleNoteBlocksTest {
     }
 
     @Test
-    fun `a remote emission reaches the editor document without a contentRevision bump`() = runTest {
+    fun `a remote emission reaches the editor document`() = runTest {
         repo.noteById.value = blocksNote("one")
         val vm = viewModel()
         runCurrent()
@@ -192,25 +187,9 @@ class SingleNoteBlocksTest {
         runCurrent()
 
         assertEquals(listOf("one", "two from the laptop"), vm.document().visible().map { it.text })
-        assertEquals(0, vm.state.value.contentRevision)
     }
 
     // ------------------------------------------------------------------ the switch
-
-    @Test
-    fun `with the flag off nothing is assembled and an edit is not saved`() = runTest {
-        repo.noteById.value = note(content = "hello")
-        val vm = viewModel(enabled = false)
-        runCurrent()
-        assertFalse(vm.state.value.blocksEditing)
-        assertNull(vm.state.value.blockDocument)
-
-        vm.onIntent(SingleNoteIntent.BlocksChanged(NOTE_ID, listOf(Block("x", BlockType.PARAGRAPH, text = "x")), BlockDocument(emptyList())))
-        advanceUntilIdle()
-
-        assertEquals(0, repo.upsertCount())
-        assertTrue(logged.single().contains("WRITE_ENABLED"))
-    }
 
     @Test
     fun `an edit of another note is ignored`() = runTest {
@@ -338,7 +317,6 @@ class SingleNoteBlocksTest {
         assertEquals(blocksNote("kept").content, saved.content)
         assertEquals(NoteContentFormat.BLOCKS, saved.contentFormat)
         assertNull(repo.savedBlocksBases.single())
-        assertFalse("the block path keeps no title history", vm.state.value.canUndo)
     }
 
     @Test

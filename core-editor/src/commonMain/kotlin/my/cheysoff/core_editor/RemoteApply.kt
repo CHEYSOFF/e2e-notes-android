@@ -33,9 +33,8 @@ import my.cheysoff.core_editor.LineEdits.Anchor
  *
  * **A block changed on both sides is held, however long that takes.** If the editor's version
  * and the incoming one both differ from [base], the editor holds text the merge has not seen yet:
- * the debounced save has not run, has failed or was skipped (saves are skipped while
- * `BlocksFormat.WRITE_ENABLED` is off), or its echo has not come back (an older emission can arrive
- * after the caret has moved on). Applying the incoming version, or its delete, would wipe that
+ * the debounced save has not run, has failed or was skipped, or its echo has not come back (an
+ * older emission can arrive after the caret has moved on). Applying the incoming version, or its delete, would wipe that
  * text, so the block keeps showing the user's version, typing or not, and [base] keeps its old
  * version (which makes the next save claim it). The hold ends only when:
  * - an incoming document has the block exactly as the editor shows it (the echo of our save, or

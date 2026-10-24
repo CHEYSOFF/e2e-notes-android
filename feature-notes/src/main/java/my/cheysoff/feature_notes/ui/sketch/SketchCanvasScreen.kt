@@ -120,11 +120,6 @@ fun SketchCanvasScreen(
     onDone: (Sketch) -> Unit,
     onCancel: () -> Unit,
     onDelete: (() -> Unit)? = null,
-    /**
-     * True on the block path, where [onDelete] removes the drawing's block as an undoable editor
-     * edit rather than deleting the record; the confirm dialog then says so.
-     */
-    deleteIsUndoable: Boolean = false,
 ) {
     var selectedColorArgb by remember { mutableStateOf(TitleGrey.toArgb().toLong()) }
     var showColorPicker by remember { mutableStateOf(false) }
@@ -298,10 +293,8 @@ fun SketchCanvasScreen(
     }
 
     if (showDeleteConfirm) {
-        // On the legacy path the same fact as the photo viewer's: drawings are not kept in Trash
-        // either, so this really is final. On the block path it removes a block, which Undo
-        // restores. See pictureDeleteCopy.
-        val copy = pictureDeleteCopy(isDrawing = true, undoable = deleteIsUndoable)
+        // The delete removes the drawing's block, which Undo restores. See pictureDeleteCopy.
+        val copy = pictureDeleteCopy(isDrawing = true)
         AlertDialog(
             containerColor = SurfaceDark,
             onDismissRequest = { showDeleteConfirm = false },

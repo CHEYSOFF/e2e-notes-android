@@ -12,7 +12,6 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.Note
-import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.core_domain.model.NotesSortOrder
 import my.cheysoff.desktop.ui.preview.InMemoryNotesRepository
 import org.junit.Assert.assertEquals
@@ -125,19 +124,6 @@ class NotesWorkspaceModelTest {
         model.setTitle("first second")
 
         assertEquals("first second", model.state.value.editor?.title)
-    }
-
-    @Test
-    fun `writing a body promotes the note to HTML and an empty body leaves it plain`() = runTest {
-        val repository = InMemoryNotesRepository(notes, folders)
-        val model = model(repository)
-        advanceUntilIdle()
-
-        model.setContent("<p>now with markup</p>")
-        assertEquals(NoteContentFormat.HTML, model.state.value.editor?.contentFormat)
-
-        model.setContent("")
-        assertEquals(NoteContentFormat.PLAIN, model.state.value.editor?.contentFormat)
     }
 
     @Test
@@ -260,38 +246,6 @@ class NotesWorkspaceModelTest {
         val stored = repository.getNotes(NotesSortOrder.RECENTLY_EDITED).first().first { it.id == "n1" }
         assertEquals("half-typed", stored.title)
         assertEquals("n2", model.state.value.selectedNoteId)
-    }
-
-    @Test
-    fun `a checklist edit survives the round trip through serialization`() = runTest {
-        val repository = InMemoryNotesRepository(notes, folders)
-        val model = model(repository)
-        advanceUntilIdle()
-
-        val itemId = model.addChecklistItem()
-        model.setChecklistItemText(itemId, "buy stamps")
-        model.toggleChecklistItem(itemId)
-        advanceUntilIdle()
-
-        val stored = repository.getNotes(NotesSortOrder.RECENTLY_EDITED).first().first { it.id == "n1" }
-        assertEquals("1buy stamps", stored.checklist)
-        assertEquals(1 to 1, checklistProgress(stored.checklist))
-    }
-
-    @Test
-    fun `a newline pasted into a checklist item cannot corrupt the serialized format`() = runTest {
-        val repository = InMemoryNotesRepository(notes, folders)
-        val model = model(repository)
-        advanceUntilIdle()
-
-        val itemId = model.addChecklistItem()
-        model.setChecklistItemText(itemId, "line one\nline two")
-        advanceUntilIdle()
-
-        val stored = repository.getNotes(NotesSortOrder.RECENTLY_EDITED).first().first { it.id == "n1" }
-        // One line, or the parse would come back with a second, phantom item.
-        assertEquals("0line one line two", stored.checklist)
-        assertEquals(1, parseChecklist(stored.checklist).size)
     }
 
     @Test

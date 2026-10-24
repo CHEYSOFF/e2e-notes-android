@@ -7,8 +7,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * Legacy bodies must open as blocks with nothing lost. The sample bodies are copied from
- * `RichEditorHtmlRoundTripTest` (an instrumented test that cannot run here): rc14 stores
+ * Legacy bodies must open as blocks with nothing lost. The sample bodies are copied from the
+ * deleted instrumented `RichEditorHtmlRoundTripTest` (the pre-blocks editor's own): rc14 stores
  * entity-escaped text, 1.1.0 stores it literally, and both must import to the same blocks.
  */
 class LegacyImportTest {
@@ -256,5 +256,60 @@ class LegacyImportTest {
     fun `legacy checklist parser matches the storage format`() {
         assertEquals(emptyList(), LegacyChecklist.parse(""))
         assertEquals(listOf("a" to true, "b" to false, "" to false), LegacyChecklist.parse("1a\n0b\n0"))
+    }
+
+    /**
+     * The 30 round-trip inputs of the deleted `RichEditorHtmlRoundTripTest` (the shapes the
+     * pre-blocks editor wrote and read back), each with the blocks it must open as. Its stored-output
+     * samples are in [samples] above; these cover the remaining tags, entities and whitespace.
+     */
+    @Test
+    fun `the pre-blocks editor's round-trip inputs import to the expected blocks`() {
+        fun t(type: BlockType, text: String, spans: List<StyleSpan> = emptyList()) = Triple(type, text, spans)
+        val b = InlineStyle.BOLD
+        val i = InlineStyle.ITALIC
+        val u = InlineStyle.UNDERLINE
+        val long = "word ".repeat(200).trim()
+        val cases = listOf(
+            "" to emptyList(),
+            "<p>Hello world</p>" to listOf(p("Hello world")),
+            "<p>First.</p><p>Second.</p>" to listOf(p("First."), p("Second.")),
+            "<p><b>bold</b></p>" to listOf(p("bold", listOf(StyleSpan(0, 4, b)))),
+            "<p><strong>bold</strong></p>" to listOf(p("bold", listOf(StyleSpan(0, 4, b)))),
+            "<p><i>italic</i></p>" to listOf(p("italic", listOf(StyleSpan(0, 6, i)))),
+            "<p><em>italic</em></p>" to listOf(p("italic", listOf(StyleSpan(0, 6, i)))),
+            "<p><u>underlined</u></p>" to listOf(p("underlined", listOf(StyleSpan(0, 10, u)))),
+            "<h1>Heading one</h1>" to listOf(t(BlockType.H1, "Heading one")),
+            "<h2>Heading two</h2>" to listOf(t(BlockType.H2, "Heading two")),
+            "<h3>Heading three</h3>" to listOf(t(BlockType.H3, "Heading three")),
+            "<h2>Title</h2><p>Body text.</p>" to listOf(t(BlockType.H2, "Title"), p("Body text.")),
+            "<ul><li>alpha</li><li>beta</li></ul>" to listOf(t(BlockType.BULLET, "alpha"), t(BlockType.BULLET, "beta")),
+            "<ol><li>one</li><li>two</li></ol>" to listOf(t(BlockType.NUMBER, "one"), t(BlockType.NUMBER, "two")),
+            "<ul><li>item</li></ul><p>after</p>" to listOf(t(BlockType.BULLET, "item"), p("after")),
+            "<p><b>bold and <i>also italic</i></b> then plain</p>" to
+                listOf(p("bold and also italic then plain", listOf(StyleSpan(0, 20, b), StyleSpan(9, 20, i)))),
+            "<p><b><i><u>all three</u></i></b></p>" to
+                listOf(p("all three", listOf(StyleSpan(0, 9, b), StyleSpan(0, 9, i), StyleSpan(0, 9, u)))),
+            "<p>Привет, мир — это заметка.</p>" to listOf(p("Привет, мир — это заметка.")),
+            "<p><b>Заголовок</b> и обычный текст</p>" to listOf(p("Заголовок и обычный текст", listOf(StyleSpan(0, 9, b)))),
+            "<p>ASCII, Кириллица, 日本語, emoji 🚀</p>" to listOf(p("ASCII, Кириллица, 日本語, emoji 🚀")),
+            "<p>a &lt; b &amp; c &gt; d</p>" to listOf(p("a < b & c > d")),
+            "<p>Tom &amp; Jerry</p>" to listOf(p("Tom & Jerry")),
+            "<p>He said &quot;hi&quot; &amp; left</p>" to listOf(p("He said \"hi\" & left")),
+            "<p>first<br>second</p>" to listOf(p("first"), p("second")),
+            "<p><span style=\"font-weight: bold;\">styled</span></p>" to listOf(p("styled")),
+            "<p>$long</p>" to listOf(p(long)),
+            "<p>a    b\tc</p>" to listOf(p("a    b\tc")),
+            "<p> padded </p>" to listOf(p(" padded ")),
+            "<p>Email John &lt;john@example.com&gt; about Q3</p>" to listOf(p("Email John <john@example.com> about Q3")),
+            russianSource to listOf(
+                t(BlockType.H1, "Планы на неделю"),
+                p("Купить молоко и хлеб.", listOf(StyleSpan(7, 13, b))),
+                t(BlockType.BULLET, "Позвонить маме"),
+                t(BlockType.BULLET, "Оплатить счёт"),
+            ),
+        )
+        assertEquals(30, cases.size)
+        for ((body, expected) in cases) assertEquals(expected, shape(html(body)), body)
     }
 }

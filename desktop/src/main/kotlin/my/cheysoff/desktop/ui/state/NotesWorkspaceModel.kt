@@ -25,7 +25,6 @@ import my.cheysoff.core_blocks.Block
 import my.cheysoff.core_blocks.BlockCodec
 import my.cheysoff.core_blocks.BlockDocument
 import my.cheysoff.core_blocks.BlockText
-import my.cheysoff.core_blocks.BlocksFormat
 import my.cheysoff.core_blocks.BlocksSave
 import my.cheysoff.core_blocks.OpenDocument
 import my.cheysoff.core_domain.model.AttachmentData
@@ -79,14 +78,6 @@ class NotesWorkspaceModel(
     /** Where a pasted image is decoded and re-encoded; injected so a test can keep it on its scheduler. */
     private val encodeDispatcher: CoroutineDispatcher = Dispatchers.Default,
     /**
-     * Whether the note body is edited by the shared block editor and saved as BLOCKS. Defaults to
-     * [BlocksFormat.WRITE_ENABLED], which stays off until both apps ship the block editor (Task 16):
-     * a laptop writing BLOCKS while the phone still ran a build that refuses them would hand it notes
-     * it cannot open. A constructor parameter, not a read of the constant, so tests can run both
-     * paths. Off, this model behaves exactly as it did before the block editor existed.
-     */
-    private val blocksWriteEnabled: Boolean = BlocksFormat.WRITE_ENABLED,
-    /**
      * The debounce between the block editor's last change and the save. Shorter than
      * [autosaveDelayMillis] because the editor reports finished blocks, not a field to re-serialise.
      */
@@ -133,9 +124,6 @@ class NotesWorkspaceModel(
 
     private class OpenedDocument(val noteId: String, val document: BlockDocument, val unreadableBody: String?)
 
-    /** Whether the pane shows the shared block editor (true) or the legacy rich-text editor. */
-    val blocksEditing: Boolean get() = blocksWriteEnabled
-
     init {
         scope.launch {
             combine(repository.getNotes(sortOrder), repository.getFolders()) { notes, folders ->
@@ -171,10 +159,8 @@ class NotesWorkspaceModel(
             }
         }
 
-        // Only on the block editor path: the legacy editor reads the draft's content instead.
-        if (blocksWriteEnabled) {
-            scope.launch { openedDocuments().collect(::attachDocument) }
-        }
+        // The open note's document for the block editor; see openedDocuments.
+        scope.launch { openedDocuments().collect(::attachDocument) }
     }
 
     // ---------------------------------------------------------------- list & folders
@@ -249,51 +235,20 @@ class NotesWorkspaceModel(
 
     fun setNoteFolder(folderId: String?) = mutateSelected { it.copy(folderId = folderId) }
 
-    // ---------------------------------------------------------------- sketches
-
-    /**
-     * Deletes one sketch. There is no undo and no Trash for a sketch (`TrashEntryKind` is
-     * `{NOTE, FOLDER}`), so the confirmation the caller shows before invoking this is the only
-     * safety net -- see [my.cheysoff.desktop.ui.notes.SketchSection].
-     *
-     * Removed from [WorkspaceUiState.sketches] immediately rather than waiting for the repository's
-     * own echo, the same optimism [deleteSelectedNote] applies to the note list -- the row the user
-     * just deleted must not still be on screen while the write is in flight.
-     */
-    fun deleteSketch(id: String) {
-        val port = sketches ?: return
-        _state.value = _state.value.copy(sketches = _state.value.sketches.filterNot { it.id == id })
-        scope.launch { port.deleteSketch(id) }
-    }
-
     // ---------------------------------------------------------------- attachments
-
-    /**
-     * Deletes one attachment. There is no undo and no Trash for an attachment (`TrashEntryKind` is
-     * `{NOTE, FOLDER}`), so the confirmation [my.cheysoff.desktop.ui.attachment.AttachmentViewer]
-     * shows before invoking this is the only safety net -- the exact mirror of [deleteSketch].
-     *
-     * Removed from [WorkspaceUiState.attachments] immediately rather than waiting for the
-     * repository's own echo, for the same reason [deleteSketch] does: the row the user just deleted
-     * must not still be on screen while the write is in flight.
-     */
-    fun deleteAttachment(id: String) {
-        val port = attachments ?: return
-        _state.value = _state.value.copy(attachments = _state.value.attachments.filterNot { it.id == id })
-        scope.launch { port.deleteAttachment(id) }
-    }
 
     /**
      * Attaches a pasted image to the open note, at the end of its body -- the same placement the
      * phone gives a picked photo: anchored at the note's current block count, next in order there.
      *
      * [encode] is the slow half (decode, downscale, JPEG) and is expected to have run off the UI
-     * thread already; this only stamps identity and placement and writes. Shown in the rail
-     * immediately, the same optimism [deleteAttachment] applies in the other direction.
+     * thread already; this only stamps identity and placement and writes. Added to
+     * [WorkspaceUiState.attachments] immediately rather than after the repository's echo.
      *
-     * On the block path the caller passes [onAttached], which gets the new record's id once the
-     * record is written, to place the picture block at the caret. Until then the record is kept
-     * out of the assembled document (see [picturesBeingPlaced]).
+     * The editor passes [onAttached], which gets the new record's id once the record is written, to
+     * place the picture block at the caret. Until then the record is kept out of the assembled
+     * document (see [picturesBeingPlaced]). Without it the record is only written, and the next
+     * assembly appends its picture at the end of the document (`OpenDocument.assemble`).
      */
     fun pasteImage(
         // First, so the encode stays the trailing lambda at every existing call site.
@@ -303,7 +258,7 @@ class NotesWorkspaceModel(
         val port = attachments ?: return null
         val noteId = _state.value.selectedNoteId ?: return null
         if (onAttached != null) {
-            // On the block path a picture is a block of the body. A read-only note has no editable
+            // A picture is a block of the body. A read-only note has no editable
             // body to put it in, and a note whose document has not been assembled yet has no editor
             // to insert it; either way a record written now would be a picture the user did not see
             // land, appended at the end on the next open. Refused before anything is written.
@@ -357,7 +312,7 @@ class NotesWorkspaceModel(
     }
 
     /**
-     * Moves the viewer [delta] photos along the rail's own order, or does nothing at either end.
+     * Moves the viewer [delta] photos along `orderedForDisplay`'s order, or does nothing at either end.
      *
      * Deliberately does not wrap. Paging off the last photo back to the first reads as the viewer
      * having jumped somewhere rather than as having reached the end, and there is no page indicator
@@ -383,64 +338,14 @@ class NotesWorkspaceModel(
     fun setTitle(title: String) = mutateSelected { it.copy(title = title) }
 
     /**
-     * The rich-text body, as HTML from the editor.
-     *
-     * Writing to the body promotes the row to [NoteContentFormat.HTML] — the same promotion the
-     * Android editor does, and for the same reason: the format is recorded, never guessed.
-     * A body that is still empty stays PLAIN, because an empty body is identical either way and
-     * an HTML-marked empty note would round-trip through a parser for nothing.
-     */
-    fun setContent(html: String) = mutateSelected {
-        it.copy(
-            content = html,
-            contentFormat = if (html.isEmpty()) NoteContentFormat.PLAIN else NoteContentFormat.HTML,
-        )
-    }
-
-    fun addChecklistItem(after: String? = null): String {
-        val id = newId()
-        mutateSelected { draft ->
-            val item = DesktopChecklistItem(id = id, text = "", isDone = false)
-            val at = draft.checklist.indexOfFirst { it.id == after }
-            val items = draft.checklist.toMutableList()
-            if (at >= 0) items.add(at + 1, item) else items.add(item)
-            draft.copy(checklist = items)
-        }
-        return id
-    }
-
-    fun setChecklistItemText(itemId: String, text: String) = mutateSelected { draft ->
-        draft.copy(
-            checklist = draft.checklist.map {
-                // Normalized on the way IN, not just on the way out: the format cannot hold a
-                // newline, so state that held one would not survive its own serialize/parse echo.
-                if (it.id == itemId) it.copy(text = normalizeChecklistText(text)) else it
-            }
-        )
-    }
-
-    fun toggleChecklistItem(itemId: String) = mutateSelected { draft ->
-        draft.copy(checklist = draft.checklist.map { if (it.id == itemId) it.copy(isDone = !it.isDone) else it })
-    }
-
-    fun removeChecklistItem(itemId: String) = mutateSelected { draft ->
-        draft.copy(checklist = draft.checklist.filterNot { it.id == itemId })
-    }
-
-    /**
      * The block editor's [blocks] for note [noteId] after a local edit, with the editor's [base]
      * at that moment (`BlockEditorController.base`). Saved after [blocksSaveDelayMillis] of quiet,
      * or at once by [flushPendingSave] when the user switches notes or closes the window.
      *
-     * Ignored when the block path is off (logged, so a stray call is visible), when [noteId] is not
-     * the open note (an edit cannot be saved over another note), and when the open note's body is
-     * unreadable (it is read-only; see [EditorDraft.unreadableBody]).
+     * Ignored when [noteId] is not the open note (an edit cannot be saved over another note), and
+     * when the open note's body is unreadable (it is read-only; see [EditorDraft.unreadableBody]).
      */
     fun onBlocksChanged(noteId: String, blocks: List<Block>, base: BlockDocument) {
-        if (!blocksWriteEnabled) {
-            log("NotesWorkspaceModel: block edit of note $noteId not saved: BlocksFormat.WRITE_ENABLED is off")
-            return
-        }
         val draft = _state.value.editor ?: return
         if (draft.id != noteId || draft.unreadableBody != null) return
         unsavedBlocks = UnsavedBlocks(noteId, blocks, base)
@@ -555,8 +460,8 @@ class NotesWorkspaceModel(
     /**
      * Writes [draft]. With block edits pending for it, the body is those blocks as BLOCKS, built
      * only by [BlocksSave.encodeForSave] and saved against the editor's base; the repository stamps
-     * and merges it (see `BlocksSave`). Without, the body is the draft's, which on the block path is
-     * the stored body as last emitted (the user never edits [EditorDraft.content] there), so a
+     * and merges it (see `BlocksSave`). Without, the body is the draft's, which is the stored body as
+     * last emitted (the user never edits [EditorDraft.content]; the editor reports blocks), so a
      * title-only save leaves the body as it is.
      */
     private fun persist(draft: EditorDraft) {
@@ -711,8 +616,6 @@ class NotesWorkspaceModel(
  */
 internal fun mergeIncoming(draft: EditorDraft, baseline: Note, incoming: Note): EditorDraft {
     val bodyUntouched = draft.content == baseline.content && draft.contentFormat == baseline.contentFormat
-    val bodyReplaced = bodyUntouched &&
-        (incoming.content != draft.content || incoming.contentFormat != draft.contentFormat)
     val checklistUntouched = draft.checklist.serializeChecklist() == baseline.checklist
     return draft.copy(
         title = if (draft.title == baseline.title) incoming.title else draft.title,
@@ -728,7 +631,6 @@ internal fun mergeIncoming(draft: EditorDraft, baseline: Note, incoming: Note): 
         isFavorite = if (draft.isFavorite == baseline.isFavorite) incoming.isFavorite else draft.isFavorite,
         folderId = if (draft.folderId == baseline.folderId) incoming.folderId else draft.folderId,
         updatedAt = maxOf(draft.updatedAt, incoming.updatedAt),
-        contentRevision = if (bodyReplaced) draft.contentRevision + 1 else draft.contentRevision,
     )
 }
 
