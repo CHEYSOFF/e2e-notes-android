@@ -1,5 +1,6 @@
 package my.cheysoff.core_editor
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.text.input.TextFieldBuffer
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -7,6 +8,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
 import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
@@ -112,24 +114,44 @@ class BlockHistory(private val model: EditorModel, private val now: () -> Long) 
         refresh()
     }
 
-    /** Steps back one entry. Returns false if there was nothing to undo. */
+    /**
+     * Steps back one entry. Returns false if there was nothing to undo.
+     *
+     * The entry moves to the redo stack only once it has been applied. If applying throws (a bug:
+     * every step is checked by [EditorModel.onEdited]), the stacks are left as they were, so the
+     * entry is not lost or duplicated. Steps already made stay made; each left the model
+     * consistent, since a failing [EditorModel.edit] reverts itself.
+     */
     fun undo(): Boolean {
-        val entry = undoStack.removeLastOrNull() ?: return false
-        entry.open = false
+        val entry = undoStack.lastOrNull() ?: return false
         apply(entry.changes.map { Target(it.id, it.before, it.moved) })
+        undoStack.removeAt(undoStack.lastIndex)
+        entry.open = false
         redoStack += entry
         refresh()
         return true
     }
 
-    /** Re-applies the last undone entry. Returns false if there was nothing to redo. */
+    /** Re-applies the last undone entry. Returns false if there was nothing to redo. Failure as in [undo]. */
     fun redo(): Boolean {
-        val entry = redoStack.removeLastOrNull() ?: return false
+        val entry = redoStack.lastOrNull() ?: return false
         apply(entry.changes.map { Target(it.id, it.after, it.moved) })
+        redoStack.removeAt(redoStack.lastIndex)
         undoStack += entry
         refresh()
         return true
     }
+
+    /**
+     * Empties the text field's own undo history. Called by [blockHistoryKeys] on every key press,
+     * before the field handles it, so no key mapping of the field's (Ctrl+Z, Alt+Backspace on
+     * Windows, whatever a future version adds) finds anything to replay.
+     */
+    @OptIn(ExperimentalFoundationApi::class) // undoState
+    internal fun clearPlatformUndo() = model.state.undoState.clearHistory()
+
+    /** Test hook: runs before each step of an undo/redo, named as in [apply]. Throwing aborts it. */
+    internal var beforeStep: ((String) -> Unit)? = null
 
     /** Forgets everything; for a freshly loaded document, whose blocks the entries no longer describe. */
     fun clear() {
@@ -256,6 +278,7 @@ class BlockHistory(private val model: EditorModel, private val now: () -> Long) 
         if (sameContent(current, block)) return false
         val k = model.ids.indexOf(id)
         val content = lineContent(block)
+        step("rewrite")
         model.edit {
             val line = lineRanges(asCharSequence())[k]
             if (asCharSequence().subSequence(line.start, line.end).toString() != content) {
@@ -270,6 +293,7 @@ class BlockHistory(private val model: EditorModel, private val now: () -> Long) 
     private fun insert(snap: Snap) {
         val block = snap.block
         val picture = Markers.isPictureType(block.type)
+        step("insert")
         if (picture) {
             model.stagePicture(block.id, block.type, block.ref ?: block.id.substringAfter(':'))
         } else {
@@ -297,6 +321,7 @@ class BlockHistory(private val model: EditorModel, private val now: () -> Long) 
             where == Anchor(k, after = false) ||
             (k == 0 && where == Anchor(-1, after = false))
         if (alreadyThere) return
+        step("move")
         model.edit {
             removeLine(this, k)
             insertLine(this, where, lineContent(snap.block))
@@ -323,16 +348,29 @@ class BlockHistory(private val model: EditorModel, private val now: () -> Long) 
             val bare = pictureTypeOf(text, next) == null &&
                 (next.start until next.end).all { Markers.isPrivateUse(text[it]) }
             if (bare) {
+                val carrier = model.ids[1]
+                step("placeholder")
                 model.edit { replace(next.end, next.end, PLACEHOLDER) }
-                model.edit { removeLine(this, 0) }
-                model.edit {
-                    val line = lineRanges(asCharSequence())[0]
-                    replace(line.end - PLACEHOLDER.length, line.end, "")
+                try {
+                    step("delete")
+                    model.edit { removeLine(this, 0) }
+                } finally {
+                    // Whether or not the first line went, the placeholder must not stay.
+                    val at = model.ids.indexOf(carrier)
+                    model.edit {
+                        val line = lineRanges(asCharSequence())[at]
+                        replace(line.end - PLACEHOLDER.length, line.end, "")
+                    }
                 }
                 return
             }
         }
+        step("delete")
         model.edit { removeLine(this, k) }
+    }
+
+    private fun step(name: String) {
+        beforeStep?.invoke(name)
     }
 
     /** Where a line goes: after line [line] if [after], else before it. `(-1, false)` is the top. */
@@ -402,16 +440,23 @@ class BlockHistory(private val model: EditorModel, private val now: () -> Long) 
 }
 
 /**
- * Sends Ctrl+Z to [history]'s undo and Ctrl+Shift+Z / Ctrl+Y to its redo (Cmd instead of Ctrl on
- * macOS), and consumes them, before the text field's own key handling sees them. Put it on the
- * editor's `BasicTextField`. Without it the field's built-in undo would replay text behind the
- * [EditorModel]'s back; see [BlockHistory]. Key-ups of these chords are consumed too, so nothing
- * downstream sees half a shortcut.
+ * Sends the undo keys to [history] and keeps the text field's own undo from ever running. Put it
+ * on the editor's `BasicTextField`. The field's built-in undo would replay text behind the
+ * [EditorModel]'s back (see [BlockHistory]), and the field maps more keys to it than Ctrl+Z: on
+ * Windows/Linux desktop, Alt+Backspace too. So:
+ * - Every key press first empties the field's undo history, in this preview pass, before the field
+ *   sees the key. Whatever the field's key mapping calls undo then finds nothing to replay.
+ * - Ctrl+Z (Cmd+Z), and Alt+Backspace where the field treats it as undo ([altBackspaceIsUndo]: not
+ *   on macOS, where it deletes a word), go to [BlockHistory.undo]. Ctrl+Shift+Z (Cmd+Shift+Z) and
+ *   Ctrl+Y (Cmd+Y) go to [BlockHistory.redo]. These are consumed, key-ups included, so nothing
+ *   downstream sees half a shortcut.
  */
 fun Modifier.blockHistoryKeys(history: BlockHistory): Modifier = onPreviewKeyEvent { e ->
-    if (!(e.isCtrlPressed || e.isMetaPressed)) return@onPreviewKeyEvent false
-    val redo = (e.key == Key.Z && e.isShiftPressed) || e.key == Key.Y
-    val undo = e.key == Key.Z && !e.isShiftPressed
+    if (e.type == KeyEventType.KeyDown) history.clearPlatformUndo()
+    val command = e.isCtrlPressed || e.isMetaPressed
+    val redo = command && ((e.key == Key.Z && e.isShiftPressed) || e.key == Key.Y)
+    val undo = (command && e.key == Key.Z && !e.isShiftPressed) ||
+        (altBackspaceIsUndo && e.isAltPressed && !command && e.key == Key.Backspace)
     if (!redo && !undo) return@onPreviewKeyEvent false
     if (e.type == KeyEventType.KeyDown) {
         if (redo) history.redo() else history.undo()

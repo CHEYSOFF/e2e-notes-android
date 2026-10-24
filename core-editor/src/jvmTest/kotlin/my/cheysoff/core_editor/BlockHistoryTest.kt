@@ -14,6 +14,7 @@ import my.cheysoff.core_blocks.StyleSpan
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -358,5 +359,44 @@ class BlockHistoryTest {
         model.type(0, "c")
         EditorCommands.setType(model, BlockType.H1)
         assertFalse(model.state.undoState.canUndo)
+    }
+
+    // --- Failure safety ------------------------------------------------------------------------
+
+    @Test
+    fun `an undo that fails midway keeps the stacks and leaves no placeholder`() {
+        val (model, history) = setup(check("a", ""))
+        model.commit(0, "\n")
+        val text = model.text()
+        val ids = model.ids
+        history.beforeStep = { if (it == "delete") throw IllegalStateException("injected") }
+        assertFailsWith<IllegalStateException> { history.undo() }
+        assertEquals(text, model.text(), "placeholder taken out again")
+        assertEquals(ids, model.ids)
+        model.assertConsistent()
+        assertTrue(history.canUndo)
+        assertFalse(history.canRedo)
+
+        history.beforeStep = null
+        assertTrue(history.undo())
+        assertEquals(listOf("a"), model.ids)
+        assertTrue(history.canRedo)
+    }
+
+    @Test
+    fun `a redo that fails keeps the entry on the redo stack`() {
+        val (model, history) = setup(p("a", "x"), pic("r1"), p("b", "y"))
+        model.deleteRange(3, 4)
+        history.undo()
+        history.beforeStep = { if (it == "delete") throw IllegalStateException("injected") }
+        assertFailsWith<IllegalStateException> { history.redo() }
+        assertTrue(history.canRedo)
+        assertFalse(history.canUndo)
+        model.assertConsistent()
+
+        history.beforeStep = null
+        assertTrue(history.redo())
+        assertEquals(listOf("a", "b"), model.ids)
+        assertFalse(history.canRedo)
     }
 }
