@@ -100,7 +100,9 @@ private const val MaxScale = 6f
  * [onClose], and deleting goes through [onDeleted] after a confirm dialog whose wording says the
  * thing that cannot be undone: attachments are not in Trash (`TrashEntryKind` is `{NOTE, FOLDER}`),
  * so unlike "Move to Trash" elsewhere in this app, this delete really is final, and a dialog that
- * implied otherwise would be worse than none (`docs/design/image-attachments.md` §8).
+ * implied otherwise would be worse than none (`docs/design/image-attachments.md` §8). The block
+ * path is the exception: there the delete removes the picture's block, which Undo restores, and
+ * [deleteIsUndoable] makes the dialog say that instead.
  */
 @Composable
 fun AttachmentViewerScreen(
@@ -109,6 +111,11 @@ fun AttachmentViewerScreen(
     loadAttachment: suspend (String) -> AttachmentData?,
     onClose: () -> Unit,
     onDeleted: (String) -> Unit,
+    /**
+     * True on the block path, where [onDeleted] removes the picture's block as an undoable editor
+     * edit rather than deleting the record; the dialog then says so (see [pictureDeleteCopy]).
+     */
+    deleteIsUndoable: Boolean = false,
 ) {
     BackHandler { onClose() }
 
@@ -209,21 +216,17 @@ fun AttachmentViewerScreen(
         // only if the pager scrolls under it, which it cannot -- but taking the id here keeps the
         // dialog and the button describing the same photo without a second piece of state.
         val targetId = ordered.getOrNull(pagerState.currentPage)?.id
+        val copy = pictureDeleteCopy(isDrawing = false, undoable = deleteIsUndoable)
         AlertDialog(
             containerColor = SurfaceDark,
             onDismissRequest = { confirmDelete = false },
-            title = { Text("Delete this photo?", color = TitleGrey) },
-            text = {
-                Text(
-                    "This can't be undone. Photos aren't kept in Trash.",
-                    color = BodyGrey,
-                )
-            },
+            title = { Text(copy.title, color = TitleGrey) },
+            text = { Text(copy.body, color = BodyGrey) },
             confirmButton = {
                 TextButton(onClick = {
                     confirmDelete = false
                     targetId?.let(onDeleted)
-                }) { Text("Delete", color = AccentIndigo) }
+                }) { Text(copy.confirm, color = AccentIndigo) }
             },
             dismissButton = {
                 TextButton(onClick = { confirmDelete = false }) { Text("Cancel", color = BodyGrey) }

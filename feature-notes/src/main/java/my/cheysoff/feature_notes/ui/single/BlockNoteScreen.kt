@@ -236,6 +236,7 @@ internal fun BlockNoteScreen(
                     sketchTarget = null
                 }
             },
+            deleteIsUndoable = true,
         )
         return
     }
@@ -252,6 +253,7 @@ internal fun BlockNoteScreen(
                 controller?.removePicture(deletedId)
                 viewingAttachmentId = null
             },
+            deleteIsUndoable = true,
         )
         return
     }

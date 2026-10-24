@@ -12,6 +12,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -77,6 +78,13 @@ sealed class SingleNoteEvent {
      * (`docs/design/image-attachments.md` §7).
      */
     data class AttachmentImportFailed(val tooLarge: Boolean) : SingleNoteEvent()
+
+    /**
+     * Block path: a new drawing ([isDrawing]) or picture was not added, because the note has no
+     * editable body to put it in (it is read-only, or its document has not opened yet). Reported
+     * rather than dropped: a drawing in particular is minutes of work the user believes was saved.
+     */
+    data class PictureRefused(val isDrawing: Boolean) : SingleNoteEvent()
 }
 
 /**
@@ -431,12 +439,11 @@ class SingleNoteViewModel internal constructor(
     // encode that produces the AttachmentData being written -- but it is a real, felt difference
     // from the sketch path and not an oversight.
     //
-    // A single slot, so a second concurrent import would overwrite this reference and leave the
-    // first ungoverned by the guard. Unreachable today: the picker is a separate activity, and the
-    // toolbar replaces its icon with a progress spinner (state.isImportingAttachment) before a
-    // second tap could launch it again. sketchSaveJob has the exact same single-slot shape for the
-    // exact same reason.
-    private var attachmentSaveJob: Job? = null
+    // A set, not a single slot: on the block path a keyboard can commit several images at once
+    // (each its own import), and a slot would let a later import overwrite the reference to an
+    // earlier one still running, leaving it ungoverned by the guard. Each job leaves the set when
+    // it completes; BackClicked joins all of them.
+    private val attachmentSaveJobs = mutableSetOf<Job>()
 
     // Serializes DB writes so an older/delayed save can't run concurrently with a newer one.
     private val saveMutex = Mutex()
@@ -797,7 +804,7 @@ class SingleNoteViewModel internal constructor(
                     // picked image saved just before back can still be mid-flight (or written but
                     // not yet re-emitted into _state) when current.attachments is read below, and
                     // the note gets purged with the image orphaned under it.
-                    attachmentSaveJob?.join()
+                    attachmentSaveJobs.toList().joinAll()
                     if (blocksWriteEnabled) {
                         leaveBlocksNote()
                         _events.send(SingleNoteEvent.NavigateBack)
@@ -903,7 +910,10 @@ class SingleNoteViewModel internal constructor(
             val existing = editingId?.let { eid -> current.sketches.find { it.id == eid } }
             // On the block path a new drawing is a block of the body: refused, before anything is
             // written, where there is no editable body to put it in (see canPlacePicture).
-            if (existing == null && blocksWriteEnabled && !canPlacePicture()) return@launch
+            if (existing == null && blocksWriteEnabled && !canPlacePicture()) {
+                _events.send(SingleNoteEvent.PictureRefused(isDrawing = true))
+                return@launch
+            }
             val data = existing?.copy(strokes = encoded, updatedAt = now) ?: run {
                 val anchor = NoteBlocks.count(current.content, current.contentFormat)
                 SketchData(
@@ -957,7 +967,10 @@ class SingleNoteViewModel internal constructor(
         // to put it in, and one whose document is not assembled yet has no editor to insert it;
         // either way a record written now would be a picture the user did not see land. Refused
         // before anything is imported, as on the desktop.
-        if (blocksWriteEnabled && !canPlacePicture()) return
+        if (blocksWriteEnabled && !canPlacePicture()) {
+            viewModelScope.launch { _events.send(SingleNoteEvent.PictureRefused(isDrawing = false)) }
+            return
+        }
         _state.update { it.copy(isImportingAttachment = true) }
         val job = viewModelScope.launch {
             when (val result = imageImporter.import(uri)) {
@@ -983,7 +996,7 @@ class SingleNoteViewModel internal constructor(
                     attachmentsRepository.saveAttachment(attachment)
                     // Mirror the write into `_state` right here, for the exact reason saveSketch
                     // does: BackClicked's blank-note guard reads current.attachments immediately
-                    // after joining this job (attachmentSaveJob), and the repository's own Flow
+                    // after joining this job (attachmentSaveJobs), and the repository's own Flow
                     // echo runs on its own dispatcher -- without this, the guard could observe an
                     // empty list for an attachment that has, in fact, just been durably saved.
                     _state.update {
@@ -1012,7 +1025,8 @@ class SingleNoteViewModel internal constructor(
                 }
             }
         }
-        attachmentSaveJob = job
+        attachmentSaveJobs += job
+        job.invokeOnCompletion { attachmentSaveJobs -= job }
     }
 
     /**

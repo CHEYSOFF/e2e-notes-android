@@ -129,11 +129,12 @@ class BlocksSaveTest {
 
         // The editor's Note still carries the old checklist it was opened with; OpenDocument has
         // already folded those items into the body as check blocks.
-        val save = edited(
-            para("p1", "body", "a0"), check("c1", "milk", false, "a1"), check("c2", "eggs", true, "a2"),
-            checklist = "0milk\n1eggs",
-        )
-        repository.saveNote(save)
+        val opened = listOf(para("p1", "body", "a0"), check("c1", "milk", false, "a1"), check("c2", "eggs", true, "a2"))
+        val save = edited(*opened.toTypedArray(), checklist = "0milk\n1eggs")
+        // An editor save carries the editor's base: the document the items were folded into. Only
+        // such a save clears the field (see BlocksSave.Write).
+        val base = BlockCodec.encode(BlockDocument(opened))
+        repository.saveNote(save, base)
 
         assertEquals("", row().checklist)
         assertEquals("clearing the field is a change, so it claims a clock", row().rowHlc(), fieldClock(FieldClocks.CHECKLIST))
@@ -141,11 +142,26 @@ class BlocksSaveTest {
 
         val checklistClock = fieldClock(FieldClocks.CHECKLIST)
         val contentClock = fieldClock(FieldClocks.CONTENT)
-        repository.saveNote(save)
+        // The editor's base after the first save's echo: the stored document, clocks and all.
+        repository.saveNote(save, BlockCodec.encode(storedDoc()))
 
         assertEquals("an unchanged empty checklist claims nothing", checklistClock, fieldClock(FieldClocks.CHECKLIST))
         assertEquals("an unchanged body claims nothing", contentClock, fieldClock(FieldClocks.CONTENT))
         assertTrue(row().rowHlc() > checklistClock)
+    }
+
+    @Test
+    fun `a save without the editor's base keeps a leftover checklist`() = runTest {
+        repository.saveNote(Note(id = "n1", title = "t", content = "body", checklist = "0milk"))
+        val body = BlocksSave.encodeForSave(listOf(para("p1", "body", "")))
+        // No base: a title-only save, or one made before the editor loaded. The checklist items are
+        // only in the editor's assembled copy, never in this body, so clearing the field loses them.
+        repository.saveNote(Note(id = "n1", title = "renamed", content = body, contentFormat = NoteContentFormat.BLOCKS, checklist = "0milk"))
+        assertEquals("0milk", row().checklist)
+        // A second title-only save of the now-BLOCKS note keeps it too.
+        repository.saveNote(Note(id = "n1", title = "again", content = row().content, contentFormat = NoteContentFormat.BLOCKS, checklist = "0milk"))
+        assertEquals("again", row().title)
+        assertEquals("0milk", row().checklist)
     }
 
     @Test

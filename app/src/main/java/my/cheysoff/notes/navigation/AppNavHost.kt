@@ -183,6 +183,22 @@ fun AppNavHost(
                                 )
                                 .show()
                         }
+
+                        // Block path only: the note is read-only (or not open yet), so a new
+                        // picture or drawing had nowhere to go and was not saved.
+                        is SingleNoteEvent.PictureRefused -> {
+                            Toast
+                                .makeText(
+                                    context,
+                                    if (event.isDrawing) {
+                                        "This note can't be edited here, so the drawing wasn't added"
+                                    } else {
+                                        "This note can't be edited here, so the picture wasn't added"
+                                    },
+                                    Toast.LENGTH_LONG,
+                                )
+                                .show()
+                        }
                     }
                 }
             }

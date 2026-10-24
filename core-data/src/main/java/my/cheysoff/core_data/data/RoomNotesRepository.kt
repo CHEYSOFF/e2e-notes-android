@@ -173,7 +173,7 @@ class RoomNotesRepository @Inject constructor(
     /**
      * A BLOCKS note's body is stamped per block against the editor's base ([blocksBase], else the
      * stored body) with this save's clock and merged into the stored body, its checklist field is
-     * cleared, and its pictures and drawings follow the saved blocks -- see [blocksBody] and
+     * cleared when the save carries the editor's base (else kept; see `BlocksSave.Write`), and its pictures and drawings follow the saved blocks -- see [blocksBody] and
      * [reconcilePictures]. All of it is one transaction. The desktop's
      * `RecordNotesRepository.saveNote` does the same, through the same `BlocksSave` and
      * `PictureLifecycle`, so the two devices store the same body for the same save.
@@ -209,8 +209,9 @@ class RoomNotesRepository @Inject constructor(
 
     /**
      * What a BLOCKS save stores, decided by `BlocksSave` (shared with the desktop so both decide
-     * alike): the stamped-and-merged body and an empty checklist, whose items `OpenDocument` already put into
-     * the body. [BlocksBody.saved] is null when the stored body is kept instead -- it is a BLOCKS
+     * alike): the stamped-and-merged body, and the checklist `BlocksSave.Write.checklistToStore` picks --
+     * empty only when the save carried the editor's base, whose document `OpenDocument` folded the
+     * items into; the stored one otherwise, so a title-only save cannot destroy a leftover checklist. [BlocksBody.saved] is null when the stored body is kept instead -- it is a BLOCKS
      * body this build cannot read -- and then the checklist is kept too, since nothing else holds
      * its items, and no picture is reconciled against a document that was not written.
      */
@@ -224,7 +225,9 @@ class RoomNotesRepository @Inject constructor(
         )) {
             is BlocksSave.Write -> {
                 out.warning?.let { Log.w(TAG, "Note ${note.id}: $it") }
-                BlocksBody(note.copy(content = out.content, checklist = ""), out.doc, out.base, keptFormat = null)
+                // The checklist is cleared only by a save carrying the editor's base; see BlocksSave.Write.
+                val checklist = out.checklistToStore(prior = prior?.checklist, incoming = note.checklist)
+                BlocksBody(note.copy(content = out.content, checklist = checklist), out.doc, out.base, keptFormat = null)
             }
             is BlocksSave.Keep -> {
                 // Keep is only ever returned when a row exists; see BlocksSave.prepare.

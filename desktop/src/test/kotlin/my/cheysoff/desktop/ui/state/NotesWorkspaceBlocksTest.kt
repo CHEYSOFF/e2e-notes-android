@@ -28,7 +28,12 @@ import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.core_domain.model.SketchData
 import my.cheysoff.core_domain.repository.NotesRepository
+import kotlinx.coroutines.flow.first
+import my.cheysoff.core_crypto.sync.AccountRootKey
+import my.cheysoff.core_sync_codec.RecordCodec
 import my.cheysoff.desktop.store.DesktopAttachments
+import my.cheysoff.desktop.store.RecordNotesRepository
+import my.cheysoff.desktop.store.RecordStore
 import my.cheysoff.desktop.store.DesktopSketches
 import my.cheysoff.desktop.ui.attachment.DesktopImportResult
 import my.cheysoff.desktop.ui.preview.InMemoryNotesRepository
@@ -137,6 +142,34 @@ class NotesWorkspaceBlocksTest {
             encodeDispatcher = StandardTestDispatcher(testScheduler),
             blocksWriteEnabled = writeEnabled,
         )
+    }
+
+    @Test
+    fun `a title edit of a BLOCKS note keeps its leftover checklist`() = runTest {
+        // The real repository, because the rule lives in its save (BlocksSave.Write): a save with
+        // no editor base must not clear a checklist whose items are only in the editor's copy.
+        val store = RecordStore.inMemory("title-${java.util.UUID.randomUUID()}")
+        try {
+            val repository = RecordNotesRepository.load(
+                store, RecordCodec(AccountRootKey.derive(AccountRootKey.generateArk())), node = "abcd1234",
+            ) { 1_000_000L }
+            repository.saveNote(note("n1", content = "body", checklist = "0milk"))
+            val body = BlocksSave.encodeForSave(listOf(Block("p", BlockType.PARAGRAPH, text = "body")))
+            repository.saveNote(note("n1", content = body, format = NoteContentFormat.BLOCKS, checklist = "0milk"))
+            val model = model(repository, repository, repository, writeEnabled = true)
+            advanceUntilIdle()
+            model.selectNote("n1")
+            advanceUntilIdle()
+
+            model.setTitle("Renamed")
+            advanceUntilIdle()
+
+            val stored = repository.getNoteById("n1").first()!!
+            assertEquals("Renamed", stored.title)
+            assertEquals("0milk", stored.checklist)
+        } finally {
+            store.close()
+        }
     }
 
     @Test

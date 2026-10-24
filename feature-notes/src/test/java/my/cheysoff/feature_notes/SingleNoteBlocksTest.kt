@@ -1,6 +1,7 @@
 package my.cheysoff.feature_notes
 
 import androidx.lifecycle.SavedStateHandle
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -24,6 +25,8 @@ import my.cheysoff.core_domain.sketch.Sketch
 import my.cheysoff.core_domain.sketch.Stroke
 import my.cheysoff.core_domain.sketch.StrokeCodec
 import my.cheysoff.feature_notes.model.single.SingleNoteIntent
+import my.cheysoff.feature_notes.ui.attachment.ImageImporter
+import my.cheysoff.feature_notes.ui.attachment.ImportResult
 import my.cheysoff.feature_notes.ui.single.SingleNoteEvent
 import my.cheysoff.feature_notes.ui.single.SingleNoteViewModel
 import my.cheysoff.feature_notes.ui.single.toPreview
@@ -49,7 +52,7 @@ class SingleNoteBlocksTest {
     private val repo = FakeNotesRepository()
     private val sketchRepo = FakeSketchesRepository()
     private val attachmentRepo = FakeAttachmentsRepository()
-    private val imageImporter = FakeImageImporter()
+    private var imageImporter: ImageImporter = FakeImageImporter()
     private val settingsRepo = FakeSettingsRepository()
     private val logged = mutableListOf<String>()
 
@@ -236,7 +239,7 @@ class SingleNoteBlocksTest {
         advanceUntilIdle()
 
         assertTrue(repo.savedNotes.none { it.contentFormat == NoteContentFormat.BLOCKS && it.content.contains("typed anyway") })
-        assertTrue(imageImporter.requested.isEmpty())
+        assertTrue((imageImporter as FakeImageImporter).requested.isEmpty())
         assertTrue(sketchRepo.saved.isEmpty())
     }
 
@@ -338,7 +341,71 @@ class SingleNoteBlocksTest {
         assertFalse("the block path keeps no title history", vm.state.value.canUndo)
     }
 
+    @Test
+    fun `a title-only save of a BLOCKS note sends its leftover checklist unchanged and no base`() = runTest {
+        // With no base the repository keeps the stored checklist (BlocksSave.Write); the ViewModel's
+        // part is to send no base and the stored checklist, never an emptied one.
+        repo.noteById.value = blocksNote("kept").copy(checklist = "0milk")
+        val vm = viewModel()
+        runCurrent()
+
+        vm.onIntent(SingleNoteIntent.TitleChanged("Renamed"))
+        advanceUntilIdle()
+
+        assertEquals("0milk", repo.savedNotes.single().checklist)
+        assertNull(repo.savedBlocksBases.single())
+    }
+
     // ------------------------------------------------------------------ pictures and drawings
+
+    @Test
+    fun `back waits for every picture import, not only the last one`() = runTest {
+        val gates = mapOf("content://one" to CompletableDeferred<Unit>(), "content://two" to CompletableDeferred())
+        val template = (FakeImageImporter().result as ImportResult.Imported).attachment
+        imageImporter = object : ImageImporter {
+            override suspend fun import(uri: String): ImportResult {
+                gates.getValue(uri).await()
+                return ImportResult.Imported(template)
+            }
+        }
+        repo.noteById.value = note()
+        val vm = viewModel(isNew = true)
+        val events = collectEvents(vm)
+        runCurrent()
+
+        vm.onIntent(SingleNoteIntent.ImportAttachment("content://one"))
+        vm.onIntent(SingleNoteIntent.ImportAttachment("content://two"))
+        gates.getValue("content://two").complete(Unit)
+        runCurrent()
+        vm.onIntent(SingleNoteIntent.BackClicked)
+        runCurrent()
+        assertTrue("back must still be waiting for the first import", events.isEmpty())
+
+        gates.getValue("content://one").complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(2, attachmentRepo.saved.size)
+        assertTrue(repo.callsNamed("purgeNote").isEmpty())
+        assertEquals(listOf(SingleNoteEvent.NavigateBack), events)
+    }
+
+    @Test
+    fun `a drawing refused on a read-only note is reported, not dropped silently`() = runTest {
+        repo.noteById.value = note(content = "{\"v\":99", contentFormat = NoteContentFormat.BLOCKS)
+        val vm = viewModel()
+        val events = collectEvents(vm)
+        runCurrent()
+
+        vm.onIntent(SingleNoteIntent.SketchSaved(null, Sketch(10, 10, emptyList())))
+        vm.onIntent(SingleNoteIntent.ImportAttachment("content://photo"))
+        advanceUntilIdle()
+
+        assertEquals(
+            listOf(SingleNoteEvent.PictureRefused(isDrawing = true), SingleNoteEvent.PictureRefused(isDrawing = false)),
+            events,
+        )
+        assertTrue(sketchRepo.saved.isEmpty())
+    }
 
     @Test
     fun `an imported picture stays out of the document until the editor places it`() = runTest {

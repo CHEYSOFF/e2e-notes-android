@@ -357,7 +357,8 @@ class RecordNotesRepository private constructor(
      * the stored values. `createdAt` is preserved unless it is the legacy 0 sentinel.
      *
      * A BLOCKS note's body is stamped per block against the editor's base ([blocksBase], else the
-     * stored body) and merged into the stored body, its checklist field is cleared, and its
+     * stored body) and merged into the stored body, its checklist field is cleared when the save
+     * carries the editor's base (else kept; see `BlocksSave.Write`), and its
      * pictures and drawings follow the saved blocks -- see [blocksBody] and [reconcilePictures].
      * The phone's `RoomNotesRepository.saveNote` does the same, through the
      * same `BlocksSave` and `PictureLifecycle`.
@@ -394,8 +395,10 @@ class RecordNotesRepository private constructor(
 
     /**
      * What a BLOCKS save stores -- the port of `RoomNotesRepository.blocksBody`, deciding through
-     * the same shared `BlocksSave`: the stamped-and-merged body and an empty checklist, whose items
-     * `OpenDocument` already put into the body. [BlocksBody.saved] is null when the stored body is
+     * the same shared `BlocksSave`: the stamped-and-merged body, and the checklist
+     * `BlocksSave.Write.checklistToStore` picks -- empty only when the save carried the editor's base,
+     * whose document `OpenDocument` folded the items into; the stored one otherwise, so a title-only
+     * save cannot destroy a leftover checklist. [BlocksBody.saved] is null when the stored body is
      * kept because it is a BLOCKS body this build cannot read; the checklist is kept with it, since
      * nothing else holds its items, and no picture is reconciled against a document not written.
      */
@@ -403,7 +406,9 @@ class RecordNotesRepository private constructor(
         when (val out = BlocksSave.prepare(prior?.contentFormat, prior?.content.orEmpty(), note.content, stamp, blocksBase)) {
             is BlocksSave.Write -> {
                 out.warning?.let { System.err.println("RecordNotesRepository: note ${note.id}: $it") }
-                BlocksBody(note.copy(content = out.content, checklist = ""), out.doc, out.base)
+                // The checklist is cleared only by a save carrying the editor's base; see BlocksSave.Write.
+                val checklist = out.checklistToStore(prior = prior?.checklist, incoming = note.checklist)
+                BlocksBody(note.copy(content = out.content, checklist = checklist), out.doc, out.base)
             }
             is BlocksSave.Keep -> {
                 // Keep is only ever returned when a note exists; see BlocksSave.prepare.

@@ -42,18 +42,35 @@ object BlocksSave {
     sealed interface Outcome
 
     /**
-     * Store [content], which is `BlockCodec.encode(doc)`, and an empty checklist.
+     * Store [content], which is `BlockCodec.encode(doc)`, and the checklist [checklistToStore]
+     * returns.
      *
      * [base] is the document [doc] was stamped against (null for no base), which [PictureLifecycle]
      * needs to tell a removed picture from one the editor never saw. [warning] is non-null when
      * something was repaired rather than refused, for the caller's log.
+     *
+     * **The checklist rule.** [clearsChecklist] is true only when the save carried the editor's
+     * knowledge (a `blocksBase`). A leftover legacy checklist lives in the stored checklist field
+     * and nowhere else: `OpenDocument.assemble` folds its items into the editor's document, so only
+     * a save of that document has written them into the body and may empty the field. A save with
+     * no base (a title-only save, a save before the editor loaded) never saw those items; clearing
+     * the field there would destroy them, and the field's clock would make the loss win on every
+     * device. Both repositories store [checklistToStore], so they cannot decide differently.
      */
     data class Write(
         val content: String,
         val doc: BlockDocument,
         val base: BlockDocument?,
         val warning: String? = null,
-    ) : Outcome
+        val clearsChecklist: Boolean = false,
+    ) : Outcome {
+        /**
+         * The checklist field to store with this body: empty when [clearsChecklist], else the
+         * [prior] stored checklist unchanged, or the [incoming] note's when there is no stored note.
+         */
+        fun checklistToStore(prior: String?, incoming: String): String =
+            if (clearsChecklist) "" else prior ?: incoming
+    }
 
     /** Leave the stored body (and checklist) as they are; [reason] is for the log. */
     data class Keep(val reason: String) : Outcome
@@ -110,6 +127,6 @@ object BlocksSave {
         val base = blocksBase?.let(BlockCodec::decode) ?: stored
         val stamped = BlockStamping.stamp(base, edited, clock)
         val doc = if (stored != null) BlockMerge.mergeDocs(stamped, stored) else stamped
-        return Write(BlockCodec.encode(doc), doc, base, warning)
+        return Write(BlockCodec.encode(doc), doc, base, warning, clearsChecklist = blocksBase != null)
     }
 }
