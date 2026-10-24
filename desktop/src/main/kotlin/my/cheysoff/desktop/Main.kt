@@ -11,6 +11,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import my.cheysoff.core_editor.EditorFlags
 import my.cheysoff.desktop.app.AppController
 import my.cheysoff.desktop.app.DesktopSyncState
 import my.cheysoff.desktop.keychain.CredentialStores
@@ -44,6 +45,8 @@ import java.nio.file.Paths
  * it gets a separate, equally real vault at that path.
  */
 fun main(args: Array<String>) {
+    // Before any composition: the block editor relies on Compose 1.12 styled text fields.
+    EditorFlags.enable()
     val directory = vaultDirectoryFrom(args)
     installCrashLog(directory)
     val vault = DesktopVault(

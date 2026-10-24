@@ -62,6 +62,8 @@ dependencies {
     implementation(project(":core-sync-net"))
     // BlockMerge, handed to the sync engine so BLOCKS bodies merge block by block.
     implementation(project(":core-blocks"))
+    // The shared block editor; Main.kt switches on its styled-text flag before the first window.
+    implementation(project(":core-editor"))
 
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)

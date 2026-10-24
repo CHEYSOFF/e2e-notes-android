@@ -82,6 +82,9 @@ include(":core-sync-codec")
 // apps and the merge layer read and write one byte-identical format.
 include(":core-blocks")
 
+// The shared block-based note editor, written once in Compose Multiplatform and used by both apps.
+include(":core-editor")
+
 // The Compose Desktop app. Plain Kotlin/JVM -- it is the same binary on Windows, macOS and
 // Linux, and jpackage builds whichever installer the host OS supports.
 include(":desktop")

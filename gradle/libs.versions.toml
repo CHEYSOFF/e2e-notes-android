@@ -23,7 +23,12 @@ espressoCore = "3.5.1"
 kotlinGradlePlugin = "2.3.21"
 lifecycleRuntimeKtx = "2.10.0"
 activityCompose = "1.13.0"
-composeBom = "2026.05.01"
+# 2026.09.00 (Compose 1.12). The block editor in :core-editor needs 1.12's styled editable text --
+# TextFieldBuffer.addStyle behind ComposeFoundationFlags.isBasicTextFieldStyledTextEnabled -- and the
+# desktop side already gets it from Compose Multiplatform 1.12.0, so the Android BOM has to be on the
+# same foundation line or the two platforms would run different text-field engines. 2026.08.00 is the
+# floor; 2026.09.00 is the newest the Google mirror serves.
+composeBom = "2026.09.00"
 appcompat = "1.7.1"
 material = "1.14.0"
 # 2.60.1, not 2.59.2, because of the richeditor 1.1.0 bump below. richeditor 1.1.0 is built with

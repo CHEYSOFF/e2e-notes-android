@@ -72,6 +72,7 @@ dependencies {
     implementation(project(":core-sync-codec"))
     // BlockMerge, handed to the sync engine so BLOCKS bodies merge block by block.
     implementation(project(":core-blocks"))
+    implementation(project(":core-editor"))
 
     implementation(libs.androidx.core.ktx)
     // The sync server address is a preference, stored the same way every other preference in this

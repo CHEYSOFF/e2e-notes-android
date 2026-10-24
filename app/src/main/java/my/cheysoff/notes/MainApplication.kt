@@ -9,6 +9,7 @@ import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import my.cheysoff.core_crypto.SecureUnlockManager
+import my.cheysoff.core_editor.EditorFlags
 import my.cheysoff.notes.sync.ApplicationScope
 import my.cheysoff.notes.sync.PeriodicSync
 import my.cheysoff.notes.sync.SyncOnUnlock
@@ -51,6 +52,8 @@ class MainApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Before any composition: the block editor relies on Compose 1.12 styled text fields.
+        EditorFlags.enable()
         // The whole app is an encrypted database — if SQLCipher's native lib can't load there's
         // no graceful degradation. Fail fast with a clear cause instead of letting Room crash
         // later at DB-open with a confusing error.
