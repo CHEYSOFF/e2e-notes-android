@@ -3,7 +3,9 @@ package my.cheysoff.desktop.ui.state
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
@@ -11,6 +13,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import my.cheysoff.core_blocks.Block
@@ -325,5 +328,115 @@ class NotesWorkspaceBlocksTest {
         val saved = attachments.rows.value.single()
         assertEquals(saved.id, insertedId)
         assertTrue("the record exists before the block that points at it", savedWhenInserted)
+    }
+
+    /** A repository whose writes take [writeMillis] of virtual time, or never finish when [hang]. */
+    private class SlowRepository(
+        val inner: InMemoryNotesRepository,
+        private val writeMillis: Long = 500L,
+        private val hang: Boolean = false,
+    ) : NotesRepository by inner {
+        val finished = mutableListOf<Pair<Note, String?>>()
+
+        override suspend fun saveNote(note: Note, blocksBase: String?) {
+            if (hang) CompletableDeferred<Unit>().await()
+            delay(writeMillis)
+            inner.saveNote(note, blocksBase)
+            finished += note to blocksBase
+        }
+    }
+
+    @Test
+    fun `typing followed by an immediate lock persists the text first`() = runTest {
+        val repository = SlowRepository(InMemoryNotesRepository(listOf(note("n1"))))
+        val model = model(repository, writeEnabled = true)
+        advanceUntilIdle()
+        model.selectNote("n1")
+        advanceUntilIdle()
+        val base = model.state.value.editor!!.blocks!!
+        val edited = base.visible().map { it.copy(text = "typed just before locking") }
+        var savedAtLock: List<Note>? = null
+
+        model.onBlocksChanged("n1", edited, base) // still inside the 400 ms debounce
+        model.flushThen { savedAtLock = repository.finished.map { it.first } }
+        advanceUntilIdle()
+
+        val saved = savedAtLock!!.single()
+        assertEquals(NoteContentFormat.BLOCKS, saved.contentFormat)
+        assertEquals(BlocksSave.encodeForSave(edited), saved.content)
+    }
+
+    @Test
+    fun `the legacy path also persists pending typing before a lock`() = runTest {
+        val repository = SlowRepository(InMemoryNotesRepository(listOf(note("n1"))))
+        val model = model(repository, writeEnabled = false)
+        advanceUntilIdle()
+        model.selectNote("n1")
+        advanceUntilIdle()
+        var savedAtLock: List<Note>? = null
+
+        model.setContent("<p>typed</p>")
+        model.flushThen { savedAtLock = repository.finished.map { it.first } }
+        advanceUntilIdle()
+
+        assertEquals("<p>typed</p>", savedAtLock!!.single().content)
+    }
+
+    @Test
+    fun `a hung save does not hang the lock past the timeout`() = runTest {
+        val repository = SlowRepository(InMemoryNotesRepository(listOf(note("n1"))), hang = true)
+        val model = model(repository, writeEnabled = false)
+        advanceUntilIdle()
+        model.selectNote("n1")
+        advanceUntilIdle()
+        var lockedAt: Long? = null
+        val start = currentTime
+
+        model.setContent("<p>typed</p>")
+        model.flushThen { lockedAt = currentTime }
+        advanceTimeBy(NotesWorkspaceModel.FLUSH_TIMEOUT_MILLIS + 1)
+        runCurrent()
+
+        assertEquals(start + NotesWorkspaceModel.FLUSH_TIMEOUT_MILLIS, lockedAt)
+    }
+
+    @Test
+    fun `an image paste into a read-only note is refused before any record is written`() = runTest {
+        val attachments = FakeAttachments()
+        val raw = "{\"v\":99}"
+        val model = model(
+            RecordingRepository(InMemoryNotesRepository(listOf(note("n1", content = raw, format = NoteContentFormat.BLOCKS)))),
+            attachments,
+            writeEnabled = true,
+        )
+        advanceUntilIdle()
+        model.selectNote("n1")
+        advanceUntilIdle()
+        var placed = false
+
+        val job = model.pasteImage(onAttached = { placed = true }) { DesktopImportResult.Imported(attachment("x", "x")) }
+        advanceUntilIdle()
+
+        assertNull(job)
+        assertTrue(attachments.rows.value.isEmpty())
+        assertFalse(placed)
+    }
+
+    @Test
+    fun `an image paste before the document is assembled is refused`() = runTest {
+        val attachments = FakeAttachments()
+        val model = model(RecordingRepository(InMemoryNotesRepository(listOf(note("n1"), note("n2")))), attachments, writeEnabled = true)
+        advanceUntilIdle()
+        model.selectNote("n1")
+        advanceUntilIdle()
+        model.selectNote("n2") // the draft exists; its document has not been assembled yet
+        assertEquals("n2", model.state.value.editor!!.id)
+        assertNull(model.state.value.editor!!.blocks)
+
+        val job = model.pasteImage(onAttached = {}) { DesktopImportResult.Imported(attachment("x", "x")) }
+        advanceUntilIdle()
+
+        assertNull(job)
+        assertTrue(attachments.rows.value.isEmpty())
     }
 }

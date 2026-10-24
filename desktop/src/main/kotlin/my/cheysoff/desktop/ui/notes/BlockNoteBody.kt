@@ -3,6 +3,9 @@ package my.cheysoff.desktop.ui.notes
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -24,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -68,6 +72,8 @@ internal fun BlockNoteBody(
     onDismissPasteFailure: () -> Unit,
     onBlocksChange: (noteId: String, blocks: List<Block>, base: BlockDocument) -> Unit,
     onInsertPicture: () -> Unit,
+    /** A click on a picture: opens the full-screen viewer on its record. */
+    onOpenPicture: (AttachmentData) -> Unit,
 ) {
     val unreadable = draft.unreadableBody
     if (unreadable != null) {
@@ -91,7 +97,7 @@ internal fun BlockNoteBody(
         noteId = noteId,
         document = document,
         onChange = { blocks -> onBlocksChange(noteId, blocks, controller.base) },
-        pictureContent = { recordId, kind -> NotePicture(recordId, kind, attachments, sketches) },
+        pictureContent = { recordId, kind -> NotePicture(recordId, kind, attachments, sketches, onOpenPicture) },
         modifier = Modifier.fillMaxWidth(),
         controller = controller,
         selectionAccent = accent,
@@ -180,6 +186,7 @@ private fun NotePicture(
     kind: BlockType,
     attachments: List<AttachmentData>,
     sketches: List<DisplaySketch>,
+    onOpen: (AttachmentData) -> Unit,
 ) {
     Box(
         modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(14.dp)).background(Color(0xFF1C1C22)),
@@ -201,15 +208,48 @@ private fun NotePicture(
                 val bitmap = remember(attachment.id, attachment.bytes.contentHashCode(), attachment.thumbBytes.contentHashCode()) {
                     decodeAttachmentImage(attachment.bytes) ?: decodeAttachmentImage(attachment.thumbBytes)
                 }
-                if (bitmap == null) {
-                    PicturePlaceholder("Can't display this picture")
-                } else {
-                    Image(bitmap = bitmap, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+                Box(Modifier.fillMaxSize().openOnClick(attachment, onOpen), contentAlignment = Alignment.Center) {
+                    if (bitmap == null) {
+                        PicturePlaceholder("Can't display this picture")
+                    } else {
+                        Image(bitmap = bitmap, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+                    }
                 }
             }
         }
     }
 }
+
+/**
+ * Calls [onOpen] on a click that stays a click. Deliberately not `clickable`/`detectTapGestures`:
+ * those consume the press, and the editor's own overlay around this content needs it too -- its tap
+ * selects the picture (so Delete acts on it) and its drag moves it. This only watches: it fires when
+ * the press is released without the drag having consumed the movement
+ * ([waitForUpOrCancellation] returns null once anything consumed a change), so moving a picture
+ * never opens the viewer.
+ */
+private fun Modifier.openOnClick(attachment: AttachmentData, onOpen: (AttachmentData) -> Unit): Modifier =
+    pointerInput(attachment.id) {
+        awaitEachGesture {
+            awaitFirstDown(requireUnconsumed = false)
+            if (waitForUpOrCancellation() != null) onOpen(attachment)
+        }
+    }
+
+/**
+ * Whether this controller has opened its note. [BlockEditorController.base] is documented to throw
+ * until then, and that is the only public signal of it; a picture inserted before it would have no
+ * editor to land in.
+ */
+internal fun BlockEditorController.isLoaded(): Boolean = runCatching { base }.isSuccess
+
+/**
+ * Whether an image may be attached to [draft] as a picture block now: the body is editable (not
+ * [EditorDraft.unreadableBody]), its document is assembled, and the editor has loaded it. Otherwise
+ * the paste is refused before any record is written.
+ */
+internal fun BlockEditorController.canPlacePicture(draft: EditorDraft): Boolean =
+    draft.unreadableBody == null && draft.blocks != null && noteId == draft.id && isLoaded()
 
 @Composable
 private fun PicturePlaceholder(text: String) {

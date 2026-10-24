@@ -6,6 +6,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -99,6 +101,9 @@ class NotesWorkspaceModel(
     private var latestFolders: List<Folder> = emptyList()
 
     private var autosaveJob: Job? = null
+
+    /** Saves launched and not yet finished; [flushAndAwait] joins them. Completion may run off-thread. */
+    private val savesInFlight = HashSet<Job>()
 
     /** The stored row the open draft was last reconciled with. See [mergeIncoming]. */
     private var editorBaseline: Note? = null
@@ -297,6 +302,14 @@ class NotesWorkspaceModel(
     ): Job? {
         val port = attachments ?: return null
         val noteId = _state.value.selectedNoteId ?: return null
+        if (onAttached != null) {
+            // On the block path a picture is a block of the body. A read-only note has no editable
+            // body to put it in, and a note whose document has not been assembled yet has no editor
+            // to insert it; either way a record written now would be a picture the user did not see
+            // land, appended at the end on the next open. Refused before anything is written.
+            val draft = _state.value.editor?.takeIf { it.id == noteId } ?: return null
+            if (draft.unreadableBody != null || draft.blocks == null) return null
+        }
         return scope.launch {
             val result = withContext(encodeDispatcher) { encode() }
             if (result !is DesktopImportResult.Imported) {
@@ -501,6 +514,32 @@ class NotesWorkspaceModel(
         persist(draft)
     }
 
+    /**
+     * [flushPendingSave], then waits until every save already handed to the repository has
+     * finished, for at most [timeoutMillis]. Returns false on timeout.
+     *
+     * For the moments the store is about to go away -- a lock closes it, a window close ends the
+     * process -- where a save that was merely launched would be lost: the debounced keystrokes, or
+     * a write still in flight. The timeout keeps a hung save from hanging the lock or the exit;
+     * losing the last second of typing is better than a window that will not close.
+     */
+    suspend fun flushAndAwait(timeoutMillis: Long = FLUSH_TIMEOUT_MILLIS): Boolean {
+        flushPendingSave()
+        val pending = synchronized(savesInFlight) { savesInFlight.toList() }
+        val done = withTimeoutOrNull(timeoutMillis) { pending.joinAll() } != null
+        if (!done) log("NotesWorkspaceModel: a save did not finish within $timeoutMillis ms; continuing")
+        return done
+    }
+
+    /**
+     * Runs [action] once [flushAndAwait] returns. What the lock button and the window's close
+     * request go through, so neither closes the store under a pending save.
+     */
+    fun flushThen(action: () -> Unit): Job = scope.launch {
+        flushAndAwait()
+        action()
+    }
+
     private fun scheduleSave(draft: EditorDraft, delayMillis: Long = autosaveDelayMillis) {
         autosaveJob?.cancel()
         _state.value = _state.value.copy(saveStatus = SaveStatus.Pending)
@@ -534,7 +573,9 @@ class NotesWorkspaceModel(
         // whole debounce behind the editor.
         latestNotes = latestNotes.map { if (it.id == note.id) note else it }
         _state.value = recompute(_state.value.copy(saveStatus = SaveStatus.Saved(note.updatedAt)))
-        scope.launch { repository.saveNote(note, blocksBase) }
+        val save = scope.launch { repository.saveNote(note, blocksBase) }
+        synchronized(savesInFlight) { savesInFlight += save }
+        save.invokeOnCompletion { synchronized(savesInFlight) { savesInFlight -= save } }
     }
 
     // ---------------------------------------------------------------- internals
@@ -651,6 +692,11 @@ class NotesWorkspaceModel(
             search = search,
             loaded = loaded,
         )
+    }
+
+    companion object {
+        /** How long a lock or a window close waits for pending saves; see [flushAndAwait]. */
+        const val FLUSH_TIMEOUT_MILLIS = 2_000L
     }
 }
 

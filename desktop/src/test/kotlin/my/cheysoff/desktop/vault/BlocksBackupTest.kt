@@ -41,7 +41,7 @@ class BlocksBackupTest {
         val dir = vault()
         val events = mutableListOf<String>()
 
-        val opened = BlocksBackup.beforeOpening(dir, now = { at }) {
+        val opened = BlocksBackup.beforeOpening(dir, writeEnabled = true, now = { at }) {
             // What the store would see the moment it opens: the copy is complete and marked.
             events += "open"
             assertTrue(Files.exists(dir.resolve(BlocksBackup.MARKER)))
@@ -58,7 +58,7 @@ class BlocksBackupTest {
         assertFalse("the marker is written after the copy, so the copy never holds it", Files.exists(copy.resolve(BlocksBackup.MARKER)))
 
         // A second launch, a minute later: the marker says it is done.
-        BlocksBackup.beforeOpening(dir, now = { at.plusMinutes(1) }) { events += "open" }
+        BlocksBackup.beforeOpening(dir, writeEnabled = true, now = { at.plusMinutes(1) }) { events += "open" }
         assertEquals(listOf(copy), backups())
         assertEquals(listOf("open", "open"), events)
     }
@@ -70,23 +70,57 @@ class BlocksBackupTest {
 
         val opened = BlocksBackup.beforeOpening(
             dir,
+            writeEnabled = true,
             now = { at },
-            copy = { _, _ -> throw IOException("disk full") },
+            copy = { _, to ->
+                // Half a copy, then the failure.
+                Files.createDirectories(to.resolve("sub"))
+                Files.writeString(to.resolve("records.db"), "rec")
+                throw IOException("disk full")
+            },
             log = { logged += it },
         ) { "store" }
 
         assertEquals("store", opened)
         assertFalse(Files.exists(dir.resolve(BlocksBackup.MARKER)))
         assertTrue(logged.single().contains("disk full"))
+        assertTrue("the partial copy is removed", backups().isEmpty())
     }
 
     @Test
     fun `no vault directory yet means nothing to back up`() {
         val dir = temp.root.toPath().resolve("absent")
 
-        assertNull(BlocksBackup.ensure(dir, now = { at }))
+        assertNull(BlocksBackup.ensure(dir, writeEnabled = true, now = { at }))
 
         assertFalse(Files.exists(dir))
         assertTrue(backups().isEmpty())
+    }
+
+    @Test
+    fun `with BLOCKS writes off nothing is copied and no marker is written`() {
+        val dir = vault()
+
+        val opened = BlocksBackup.beforeOpening(dir, writeEnabled = false, now = { at }) { "store" }
+
+        assertEquals("store", opened)
+        assertTrue(backups().isEmpty())
+        assertFalse(Files.exists(dir.resolve(BlocksBackup.MARKER)))
+
+        // The first launch with writes on still takes it.
+        BlocksBackup.beforeOpening(dir, writeEnabled = true, now = { at }) { }
+        assertEquals(1, backups().size)
+    }
+
+    @Test
+    fun `a marker under the old unversioned name does not suppress the backup`() {
+        val dir = vault()
+        Files.writeString(dir.resolve(".blocks-backup-done"), "from an unflagged dev build")
+
+        BlocksBackup.beforeOpening(dir, writeEnabled = true, now = { at }) { }
+
+        assertEquals(1, backups().size)
+        assertTrue(Files.exists(dir.resolve(BlocksBackup.MARKER)))
+        assertEquals(".blocks-backup-done-v1", BlocksBackup.MARKER)
     }
 }

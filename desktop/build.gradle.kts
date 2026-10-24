@@ -99,6 +99,8 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    // Compose UI tests of the editor pane (the picture click), the same harness :core-editor uses.
+    testImplementation(compose.desktop.uiTestJUnit4)
 }
 
 tasks.withType<Test>().configureEach {

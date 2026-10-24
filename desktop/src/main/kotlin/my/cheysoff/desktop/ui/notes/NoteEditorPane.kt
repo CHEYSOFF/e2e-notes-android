@@ -189,6 +189,9 @@ fun NoteEditorPane(
                 .onPreviewKeyEvent { event ->
                     if (event.type != KeyEventType.KeyDown || !event.isPaste()) return@onPreviewKeyEvent false
                     val image = clipboardImage() ?: return@onPreviewKeyEvent false
+                    // Refused (and swallowed: there is nothing for the image to go into) while the
+                    // note is read-only or its editor has not loaded; see canPlacePicture.
+                    if (blockController != null && !blockController.canPlacePicture(draft)) return@onPreviewKeyEvent true
                     onPasteImage(image, placePicture)
                     true
                 }
@@ -225,7 +228,10 @@ fun NoteEditorPane(
                     pasteFailure = pasteFailure,
                     onDismissPasteFailure = onDismissPasteFailure,
                     onBlocksChange = onBlocksChange,
-                    onInsertPicture = { pickImageFile()?.let { onPasteImage(it, placePicture) } },
+                    onInsertPicture = {
+                        if (blockController.canPlacePicture(draft)) pickImageFile()?.let { onPasteImage(it, placePicture) }
+                    },
+                    onOpenPicture = onAttachmentTapped,
                 )
             } else {
                 LegacyNoteBody(
