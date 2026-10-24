@@ -6,12 +6,16 @@ import androidx.compose.foundation.text.input.insert
 import androidx.compose.ui.text.TextRange
 import my.cheysoff.core_blocks.Block
 import my.cheysoff.core_blocks.BlockDocument
+import my.cheysoff.core_blocks.BlockStamping
 import my.cheysoff.core_blocks.BlockType
 import my.cheysoff.core_blocks.InlineStyle
 import my.cheysoff.core_blocks.StyleSpan
+import my.cheysoff.core_blocks.Tombstone
+import my.cheysoff.core_domain.sync.Hlc
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -74,6 +78,11 @@ class RemoteApplyTest {
         remote.tick(lastLocalEditAt)
     }
 
+    private fun hlc(ms: Long, node: String = "phone") = Hlc(ms, 0, node)
+
+    /** What a save of the editor stamps (and, merged with nothing newer, what storage echoes back). */
+    private fun Editor.saved(clock: Hlc) = BlockStamping.stamp(remote.base, model.blocks(), clock)
+
     private fun Editor.assertConsistent() {
         assertEquals(text().split('\n').size, model.ids.size, "one id per line in ${text()}")
         assertEquals(model.ids.size, model.ids.toSet().size, "ids are unique: ${model.ids}")
@@ -88,8 +97,8 @@ class RemoteApplyTest {
         e.type(e.lineEnd("p"), " world")
         val textBefore = e.model.state.text
         val selectionBefore = e.model.state.selection
-        // What the save writes (and storage emits back): the editor's own blocks.
-        val echo = BlockDocument(e.model.blocks().mapIndexed { i, b -> b.copy(pos = "b$i") })
+        // What the save writes (and storage emits back): the editor's blocks stamped against the base.
+        val echo = e.saved(hlc(20))
 
         e.receive(echo)
         clock += 5_000
@@ -129,7 +138,7 @@ class RemoteApplyTest {
         assertEquals("hello wor", e.block("p").text, "not while typing")
         assertEquals(caret, e.model.state.selection)
         assertTrue(e.remote.hasPending)
-        assertSame(loaded, e.remote.base, "base stays at the last fully applied doc")
+        assertEquals(loaded, e.remote.base, "nothing else changed, so the base still reads as loaded")
 
         clock += RemoteApply.QUIET_MS - 1
         e.remote.tick(e.lastLocalEditAt)
@@ -349,6 +358,159 @@ class RemoteApplyTest {
         e2.receive(doc(p("a", "one"), p("n", "new")))
         assertEquals("one!\nnew", e2.text())
         assertEquals(caret2, e2.model.state.selection)
+    }
+
+    // --- Fix round 1: blocks changed on both sides, the composite base -----------------------------
+
+    /** Presses Enter at the end of line [id] and types [more] on the new line. */
+    private fun Editor.enterAndType(id: String, more: String) {
+        type(lineEnd(id), "\n")
+        val newLine = model.ids[model.ids.indexOf(id) + 1]
+        type(lineEnd(newLine), more)
+    }
+
+    @Test
+    fun `typing that moved on to a new line is not wiped by a remote edit of the previous line`() {
+        val e = open(p("a", "one"), p("b", "two"))
+        e.type(e.lineEnd("a"), " local")
+        e.enterAndType("a", "more")
+        val newLine = e.model.ids[1]
+
+        e.receive(doc(p("a", "one remote"), p("b", "two")))
+        assertEquals("one local", e.block("a").text, "changed on both sides: held while typing")
+        assertTrue(e.remote.hasPending)
+
+        // The debounced save runs; its echo (local text, newer clock) supersedes the remote doc.
+        e.receive(e.saved(hlc(30)))
+        clock += RemoteApply.QUIET_MS
+        e.remote.tick(e.lastLocalEditAt)
+        assertEquals("one local", e.block("a").text)
+        assertEquals("more", e.block(newLine).text)
+        assertFalse(e.remote.hasPending)
+        e.assertConsistent()
+    }
+
+    @Test
+    fun `a remote edit of a block changed on both sides applies after the pause`() {
+        val e = open(p("a", "one"), p("b", "two"))
+        e.type(e.lineEnd("a"), " local")
+        e.enterAndType("a", "more")
+        e.receive(doc(p("a", "one remote"), p("b", "two")))
+        assertEquals("one local", e.block("a").text)
+        clock += RemoteApply.QUIET_MS
+        e.remote.tick(e.lastLocalEditAt)
+        assertEquals("one remote", e.block("a").text, "still different after the pause: the stored merge wins")
+    }
+
+    @Test
+    fun `typing that moved on to a new line is not wiped by a remote delete of the previous line`() {
+        val e = open(p("a", "one"), p("b", "two"))
+        e.type(e.lineEnd("a"), " local")
+        e.enterAndType("a", "more")
+        val newLine = e.model.ids[1]
+
+        e.receive(doc(p("b", "two")))
+        assertEquals(listOf("a", newLine, "b"), e.model.ids, "not deleted while typing")
+        assertEquals("one local", e.block("a").text)
+
+        clock += RemoteApply.QUIET_MS
+        e.remote.tick(e.lastLocalEditAt)
+        assertEquals(listOf(newLine, "b"), e.model.ids, "deleted after the pause")
+        e.assertConsistent()
+    }
+
+    @Test
+    fun `an older echo arriving after the caret left the block does not revert it`() {
+        val opened = doc(p("a", "one"), p("b", "two"))
+        val e = open(p("a", "one"), p("b", "two"))
+        e.type(e.lineEnd("a"), "!")
+        e.receive(e.saved(hlc(30))) // echo of "one!"
+        assertEquals("one!", e.remote.base.blocks.first { it.id == "a" }.text)
+        e.type(e.lineEnd("a"), "!")
+        e.type(e.lineEnd("b"), "x") // the caret is now in b
+        clock += 100
+
+        e.receive(opened) // a stale emission from before the first save
+        assertEquals("one!!", e.block("a").text)
+        assertEquals("twox", e.block("b").text)
+    }
+
+    @Test
+    fun `base after a partial apply holds the incoming applied block and the old deferred one`() {
+        val e = open(p("x", "x"), p("y", "y"))
+        val loaded = e.remote.base
+        e.type(e.lineEnd("y"), "!")
+        val incoming = BlockDocument(
+            listOf(
+                p("x", "x remote").copy(pos = "aa", clock = hlc(10), posClock = hlc(10)),
+                p("y", "y remote").copy(pos = "ab", clock = hlc(10), posClock = hlc(10)),
+            ),
+        )
+        e.receive(incoming)
+        assertEquals("x remote", e.block("x").text)
+        assertEquals("y!", e.block("y").text)
+
+        val base = e.remote.base.blocks.associateBy { it.id }
+        assertEquals(incoming.blocks[0], base["x"], "X as it came in, clocks included")
+        assertEquals(loaded.blocks[1], base["y"], "Y as the editor still shows it")
+
+        // A save now claims only Y, the block the user changed; X keeps the other device's clock.
+        val stamped = e.saved(hlc(50)).blocks.associateBy { it.id }
+        assertEquals(hlc(10), stamped.getValue("x").clock)
+        assertEquals(hlc(10), stamped.getValue("x").posClock)
+        assertEquals(hlc(50), stamped.getValue("y").clock)
+
+        clock += RemoteApply.QUIET_MS
+        e.remote.tick(e.lastLocalEditAt)
+        assertSame(incoming, e.remote.base, "nothing deferred any more: the base is the incoming doc")
+    }
+
+    @Test
+    fun `base keeps a deferred delete and drops its tombstone`() {
+        val e = open(p("a", "keep"), p("p", "typing"))
+        val loaded = e.remote.base
+        e.type(e.lineEnd("p"), "!")
+        val incoming = BlockDocument(listOf(p("a", "keep").copy(pos = "aa")), listOf(Tombstone("p", hlc(10))))
+        e.receive(incoming)
+        assertEquals(listOf("a", "p"), e.model.ids)
+        assertEquals(loaded.blocks, e.remote.base.blocks)
+        assertTrue(e.remote.base.gone.isEmpty())
+
+        clock += RemoteApply.QUIET_MS
+        e.remote.tick(e.lastLocalEditAt)
+        assertSame(incoming, e.remote.base)
+    }
+
+    @Test
+    fun `a remote text reorder is not shown and the next save does not undo it`() {
+        val e = open(p("a", "one"), p("b", "two"), p("c", "three"))
+        val loaded = e.remote.base
+        e.receive(
+            BlockDocument(
+                listOf(
+                    p("b", "two").copy(pos = "aa", posClock = hlc(10)),
+                    p("a", "one").copy(pos = "ab", posClock = hlc(10)),
+                    p("c", "three").copy(pos = "ad"),
+                ),
+            ),
+        )
+        assertEquals(listOf("a", "b", "c"), e.model.ids, "text is not reordered")
+        assertEquals(loaded.blocks.map { it.pos }, e.remote.base.blocks.map { it.pos })
+        val stamped = e.saved(hlc(50))
+        assertTrue(stamped.blocks.none { it.posClock == hlc(50) }, "the save claims no move: ${stamped.blocks}")
+    }
+
+    @Test
+    fun `base and tick require noteLoaded first`() {
+        val model = EditorModel(doc(p("a", "one")))
+        val remote = RemoteApply(model, { clock })
+        assertFailsWith<IllegalStateException> { remote.base }
+        remote.offer(doc(p("a", "two")))
+        assertFailsWith<IllegalStateException> { remote.tick(Long.MIN_VALUE) }
+        assertEquals("one", model.blocks().single().text)
+        remote.noteLoaded(doc(p("a", "one")))
+        remote.tick(Long.MIN_VALUE)
+        assertEquals("one", model.blocks().single().text, "the pending doc of before the load was dropped")
     }
 
     // --- IME composition ---------------------------------------------------------------------------

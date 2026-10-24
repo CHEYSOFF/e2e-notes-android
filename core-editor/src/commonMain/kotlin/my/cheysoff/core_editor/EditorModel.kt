@@ -140,7 +140,7 @@ class EditorModel(initial: BlockDocument) {
         for (b in doc.visible()) {
             if (Markers.isPictureType(b.type)) {
                 if (!seen.add(b.id)) continue
-                out += ProjectedLine(Block(b.id, b.type, ref = b.ref), b)
+                out += ProjectedLine(Block(b.id, b.type, ref = b.ref), b, b.id)
                 continue
             }
             val first = seen.add(b.id)
@@ -157,10 +157,10 @@ class EditorModel(initial: BlockDocument) {
                 } else {
                     Block(nameId("$blockId/line/$i").also { seen += it }, BlockType.PARAGRAPH, piece.text, piece.spans)
                 }
-                out += ProjectedLine(line, if (i == 0 && first) b else null)
+                out += ProjectedLine(line, if (i == 0 && first) b else null, b.id)
             }
         }
-        if (out.isEmpty()) out += ProjectedLine(Block(nameId("empty-document"), BlockType.PARAGRAPH), null)
+        if (out.isEmpty()) out += ProjectedLine(Block(nameId("empty-document"), BlockType.PARAGRAPH), null, null)
         return out
     }
 
@@ -507,8 +507,12 @@ private class Derived(
 
 private class PictureInfo(val type: BlockType, val ref: String?)
 
-/** One line as [EditorModel.project] makes it; [source] is the block as given, for the line that keeps its id. */
-internal class ProjectedLine(val block: Block, val source: Block?)
+/**
+ * One line as [EditorModel.project] makes it. [source] is the block as given, for the line that
+ * keeps its id; [originId] is the id of the block the line came from (null for the line of an
+ * empty document), shared by every line a block was split into.
+ */
+internal class ProjectedLine(val block: Block, val source: Block?, val originId: String?)
 
 private class Change(val oStart: Int, val oEnd: Int, val nStart: Int, val nEnd: Int) {
     val delta get() = (nEnd - nStart) - (oEnd - oStart)
