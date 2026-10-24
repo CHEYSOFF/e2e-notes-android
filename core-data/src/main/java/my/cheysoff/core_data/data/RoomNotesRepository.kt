@@ -171,20 +171,21 @@ class RoomNotesRepository @Inject constructor(
     }
 
     /**
-     * A BLOCKS note's body is stamped per block against the stored one with this save's clock, its
-     * checklist field is cleared, and its pictures and drawings follow the saved blocks -- see
-     * [blocksBody] and [reconcilePictures]. All of it is one transaction. The desktop's
+     * A BLOCKS note's body is stamped per block against the editor's base ([blocksBase], else the
+     * stored body) with this save's clock and merged into the stored body, its checklist field is
+     * cleared, and its pictures and drawings follow the saved blocks -- see [blocksBody] and
+     * [reconcilePictures]. All of it is one transaction. The desktop's
      * `RecordNotesRepository.saveNote` does the same, through the same `BlocksSave` and
      * `PictureLifecycle`, so the two devices store the same body for the same save.
      */
-    override suspend fun saveNote(note: Note) {
+    override suspend fun saveNote(note: Note, blocksBase: String?) {
         val stamp = stamp()
         // The upsert itself is still one statement and still preserves/initializes createdAt; the
         // transaction is here because the field clocks are read-modify-write and the read must not
         // be able to see a different row than the write updates.
         database.withTransaction {
             val prior = noteDao.noteRow(note.id)
-            val body = if (note.contentFormat == NoteContentFormat.BLOCKS) blocksBody(prior, note, stamp) else null
+            val body = if (note.contentFormat == NoteContentFormat.BLOCKS) blocksBody(prior, note, blocksBase, stamp) else null
             val stored = body?.note ?: note
             noteDao.upsertNote(
                 id = stored.id,
@@ -202,26 +203,29 @@ class RoomNotesRepository @Inject constructor(
                 hlcNode = stamp.hlc.node,
                 fieldHlc = noteFieldHlc(prior?.clocks(), savedNoteFields(prior, stored, body?.keptFormat), stamp),
             )
-            body?.saved?.let { reconcilePictures(note.id, body.prior, it, stamp) }
+            body?.saved?.let { reconcilePictures(note.id, body.base, it, stamp) }
         }
     }
 
     /**
      * What a BLOCKS save stores, decided by `BlocksSave` (shared with the desktop so both decide
-     * alike): the stamped body and an empty checklist, whose items `OpenDocument` already put into
+     * alike): the stamped-and-merged body and an empty checklist, whose items `OpenDocument` already put into
      * the body. [BlocksBody.saved] is null when the stored body is kept instead -- it is a BLOCKS
      * body this build cannot read -- and then the checklist is kept too, since nothing else holds
      * its items, and no picture is reconciled against a document that was not written.
      */
-    private fun blocksBody(prior: NoteEntity?, note: Note, stamp: SyncStamp): BlocksBody =
+    private fun blocksBody(prior: NoteEntity?, note: Note, blocksBase: String?, stamp: SyncStamp): BlocksBody =
         when (val out = BlocksSave.prepare(
             priorFormat = prior?.let { NoteContentFormat.fromStorage(it.contentFormat) },
             priorContent = prior?.content.orEmpty(),
             incoming = note.content,
             clock = stamp.hlc,
+            blocksBase = blocksBase,
         )) {
-            is BlocksSave.Write ->
-                BlocksBody(note.copy(content = out.content, checklist = ""), out.doc, out.prior, keptFormat = null)
+            is BlocksSave.Write -> {
+                out.warning?.let { Log.w(TAG, "Note ${note.id}: $it") }
+                BlocksBody(note.copy(content = out.content, checklist = ""), out.doc, out.base, keptFormat = null)
+            }
             is BlocksSave.Keep -> {
                 // Keep is only ever returned when a row exists; see BlocksSave.prepare.
                 val kept = prior!!
@@ -234,14 +238,14 @@ class RoomNotesRepository @Inject constructor(
     private class BlocksBody(
         val note: Note,
         val saved: BlockDocument?,
-        val prior: BlockDocument?,
+        val base: BlockDocument?,
         val keptFormat: String?,
     )
 
     /**
-     * Soft-deletes the note's pictures and drawings that [prior] showed and [saved] no longer does,
-     * and undeletes the ones [saved] shows again -- `PictureLifecycle` decides which, and why a
-     * record [prior] never showed is left alone. Inside [saveNote]'s transaction, so
+     * Soft-deletes the note's pictures and drawings that the editor's [base] showed and the final
+     * [saved] document no longer does, and undeletes the ones [saved] shows again --
+     * `PictureLifecycle` decides which, and why a record [base] never showed is left alone. Inside [saveNote]'s transaction, so
      * the body and the records it refers to can never be seen out of step.
      *
      * Through the same statements [deleteAttachment], `RoomSketchesRepository.deleteSketch` and
@@ -250,11 +254,11 @@ class RoomNotesRepository @Inject constructor(
      * tombstones share the note save's `deletedAt`, as [deleteNote]'s do -- one gesture, one
      * instant. Walked in id order so a save is the same sequence of writes every time.
      */
-    private suspend fun reconcilePictures(noteId: String, prior: BlockDocument?, saved: BlockDocument, stamp: SyncStamp) {
+    private suspend fun reconcilePictures(noteId: String, base: BlockDocument?, saved: BlockDocument, stamp: SyncStamp) {
         val attachments = attachmentDao.attachmentStatesForNote(noteId).sortedBy { it.uuid }
         val sketches = sketchDao.sketchesForNote(noteId).sortedBy { it.uuid }
         val changes = PictureLifecycle.reconcileStates(
-            prior,
+            base,
             saved,
             pictures = attachments.map { PictureLifecycle.RecordState(it.uuid, it.isDeleted) },
             drawings = sketches.map { PictureLifecycle.RecordState(it.uuid, it.isDeleted) },

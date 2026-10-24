@@ -12,7 +12,13 @@ interface NotesRepository {
     /** Emits null for an unknown id AND for a soft-deleted one — Trash rows are not editable. */
     fun getNoteById(id: String): Flow<Note?>
 
-    suspend fun saveNote(note: Note)
+    /**
+     * @param blocksBase for a BLOCKS save, the encoded document the editor last loaded or applied:
+     *   what the editor knows. The edits are stamped against it and then merged into the stored
+     *   body. Without a base, everything synced in while the editor was open would look deleted by
+     *   the user. Null uses the stored body as the base. Ignored for PLAIN/HTML saves.
+     */
+    suspend fun saveNote(note: Note, blocksBase: String? = null)
 
     /** Moves the note to Trash (soft delete). Restorable until [purgeExpiredTrash] takes it. */
     suspend fun deleteNote(id: String)

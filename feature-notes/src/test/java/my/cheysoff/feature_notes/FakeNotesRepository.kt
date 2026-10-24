@@ -95,7 +95,7 @@ internal class FakeNotesRepository : NotesRepository {
 
     override fun getNoteById(id: String): Flow<Note?> = noteById
 
-    override suspend fun saveNote(note: Note) {
+    override suspend fun saveNote(note: Note, blocksBase: String?) {
         calls += "saveNote(${note.id})"
         savedNotes += note
         gated("saveNote")

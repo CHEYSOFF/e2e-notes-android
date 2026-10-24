@@ -356,16 +356,17 @@ class RecordNotesRepository private constructor(
      * out of what the editor is holding, so those fields arrive at their defaults and would wipe
      * the stored values. `createdAt` is preserved unless it is the legacy 0 sentinel.
      *
-     * A BLOCKS note's body is stamped per block against the stored one, its checklist field is
-     * cleared, and its pictures and drawings follow the saved blocks -- see [blocksBody] and
-     * [reconcilePictures]. The phone's `RoomNotesRepository.saveNote` does the same, through the
+     * A BLOCKS note's body is stamped per block against the editor's base ([blocksBase], else the
+     * stored body) and merged into the stored body, its checklist field is cleared, and its
+     * pictures and drawings follow the saved blocks -- see [blocksBody] and [reconcilePictures].
+     * The phone's `RoomNotesRepository.saveNote` does the same, through the
      * same `BlocksSave` and `PictureLifecycle`.
      */
-    override suspend fun saveNote(note: Note): Unit = write { snapshot ->
+    override suspend fun saveNote(note: Note, blocksBase: String?): Unit = write { snapshot ->
         val now = clock()
         val stamp = hlc.next(now)
         val existing = snapshot.notes[note.id]
-        val body = if (note.contentFormat == NoteContentFormat.BLOCKS) blocksBody(existing?.note, note, stamp) else null
+        val body = if (note.contentFormat == NoteContentFormat.BLOCKS) blocksBody(existing?.note, note, blocksBase, stamp) else null
         val incoming = body?.note ?: note
         val updated = if (existing == null) {
             incoming.copy(
@@ -388,19 +389,22 @@ class RecordNotesRepository private constructor(
             )
         }
         val next = snapshot.putNote(existing, updated, stamp, savedNoteFields(existing?.note, updated))
-        body?.saved?.let { next.reconcilePictures(note.id, body.prior, it, now) } ?: next
+        body?.saved?.let { next.reconcilePictures(note.id, body.base, it, now) } ?: next
     }
 
     /**
      * What a BLOCKS save stores -- the port of `RoomNotesRepository.blocksBody`, deciding through
-     * the same shared `BlocksSave`: the stamped body and an empty checklist, whose items
+     * the same shared `BlocksSave`: the stamped-and-merged body and an empty checklist, whose items
      * `OpenDocument` already put into the body. [BlocksBody.saved] is null when the stored body is
      * kept because it is a BLOCKS body this build cannot read; the checklist is kept with it, since
      * nothing else holds its items, and no picture is reconciled against a document not written.
      */
-    private fun blocksBody(prior: Note?, note: Note, stamp: Hlc): BlocksBody =
-        when (val out = BlocksSave.prepare(prior?.contentFormat, prior?.content.orEmpty(), note.content, stamp)) {
-            is BlocksSave.Write -> BlocksBody(note.copy(content = out.content, checklist = ""), out.doc, out.prior)
+    private fun blocksBody(prior: Note?, note: Note, blocksBase: String?, stamp: Hlc): BlocksBody =
+        when (val out = BlocksSave.prepare(prior?.contentFormat, prior?.content.orEmpty(), note.content, stamp, blocksBase)) {
+            is BlocksSave.Write -> {
+                out.warning?.let { System.err.println("RecordNotesRepository: note ${note.id}: $it") }
+                BlocksBody(note.copy(content = out.content, checklist = ""), out.doc, out.base)
+            }
             is BlocksSave.Keep -> {
                 // Keep is only ever returned when a note exists; see BlocksSave.prepare.
                 val kept = prior!!
@@ -408,16 +412,16 @@ class RecordNotesRepository private constructor(
                 BlocksBody(
                     note.copy(content = kept.content, contentFormat = kept.contentFormat, checklist = kept.checklist),
                     saved = null,
-                    prior = null,
+                    base = null,
                 )
             }
         }
 
-    private class BlocksBody(val note: Note, val saved: BlockDocument?, val prior: BlockDocument?)
+    private class BlocksBody(val note: Note, val saved: BlockDocument?, val base: BlockDocument?)
 
     /**
-     * Soft-deletes the note's pictures and drawings that [prior] showed and [saved] no longer does,
-     * and undeletes the ones [saved] shows again -- the port of
+     * Soft-deletes the note's pictures and drawings that the editor's [base] showed and the final
+     * [saved] document no longer does, and undeletes the ones [saved] shows again -- the port of
      * `RoomNotesRepository.reconcilePictures`, inside the same [write] as the note so the body and
      * its records are never published out of step.
      *
@@ -425,10 +429,10 @@ class RecordNotesRepository private constructor(
      * [deleteSketch] write them; `deletedAt` is the save's own instant. Walked in id order so a save
      * is the same sequence of writes every time.
      */
-    private fun Snapshot.reconcilePictures(noteId: String, prior: BlockDocument?, saved: BlockDocument, now: Long): Snapshot {
+    private fun Snapshot.reconcilePictures(noteId: String, base: BlockDocument?, saved: BlockDocument, now: Long): Snapshot {
         val ownAttachments = attachments.values.filter { it.attachment.noteId == noteId }.sortedBy { it.attachment.id }
         val ownSketches = sketches.values.filter { it.sketch.noteId == noteId }.sortedBy { it.sketch.id }
-        val changes = PictureLifecycle.reconcile(prior, saved, ownAttachments.map { it.attachment }, ownSketches.map { it.sketch })
+        val changes = PictureLifecycle.reconcile(base, saved, ownAttachments.map { it.attachment }, ownSketches.map { it.sketch })
         var next = this
         for (row in ownAttachments) {
             val id = row.attachment.id

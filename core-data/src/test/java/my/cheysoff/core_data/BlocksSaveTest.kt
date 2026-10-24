@@ -182,7 +182,10 @@ class BlocksSaveTest {
         assertNull(stored.deletedAt)
         assertTrue(stored.dirty)
         assertEquals(listOf(BlockIds.forPicture("a1")), storedDoc().blocks.filter { it.type == BlockType.PICTURE }.map { it.id })
-        assertFalse(storedDoc().gone.any { it.id == BlockIds.forPicture("a1") })
+        // The revived block keeps its tombstone (the merge's canonical form); its newer content
+        // clock is what makes it live.
+        val revived = storedDoc().blocks.single { it.id == BlockIds.forPicture("a1") }
+        assertTrue(storedDoc().gone.filter { it.id == revived.id }.all { it.clock < revived.clock })
     }
 
     @Test
@@ -307,5 +310,45 @@ class BlocksSaveTest {
         repository.saveNote(edited().copy(content = BlocksSave.encodeForSave(visible)))
 
         assertEquals(listOf("zz", "mm", "aa"), storedDoc().blocks.map { it.id })
+    }
+
+    // -- fix round 2: saving against the editor's base ----------------------------------------
+
+    @Test
+    fun `a picture that arrived with its block after the base keeps both`() = runTest {
+        repository.saveNote(edited(para("p1", "one", "a0")))
+        val base = row().content
+        // The other device's picture, block and record, merged in while the editor was open.
+        repository.saveAttachment(attachment("X"))
+        repository.saveNote(edited(para("p1", "one", "a0"), picture("X", "a1")))
+
+        repository.saveNote(edited(para("p1", "one, edited", "a0")), blocksBase = base)
+
+        assertEquals(listOf("p1", BlockIds.forPicture("X")), storedDoc().blocks.map { it.id })
+        assertEquals("one, edited", storedDoc().blocks.first().text)
+        assertNotNull(repository.attachment("X"))
+    }
+
+    @Test
+    fun `a remote paragraph and a remote edit after the base survive an edit to another paragraph`() = runTest {
+        repository.saveNote(edited(para("p1", "one", "a0"), para("p2", "two", "a1")))
+        val base = row().content
+        repository.saveNote(edited(para("p1", "one", "a0"), para("p2", "two, remote", "a1"), para("p3", "three", "a2")))
+
+        repository.saveNote(edited(para("p1", "one, local", "a0"), para("p2", "two", "a1")), blocksBase = base)
+
+        assertEquals(listOf("one, local", "two, remote", "three"), storedDoc().blocks.map { it.text })
+    }
+
+    @Test
+    fun `a block the user deleted from the base is tombstoned and its record deleted`() = runTest {
+        repository.saveAttachment(attachment("a1"))
+        repository.saveNote(edited(para("p1", "x", "a0"), picture("a1", "a1")))
+        val base = row().content
+
+        repository.saveNote(edited(para("p1", "x", "a0")), blocksBase = base)
+
+        assertEquals(listOf(BlockIds.forPicture("a1")), storedDoc().gone.map { it.id })
+        assertNull(repository.attachment("a1"))
     }
 }

@@ -178,4 +178,88 @@ class PictureLifecycleTest {
         val stamped = assertIs<BlocksSave.Write>(BlocksSave.prepare(null, "", BlocksSave.encodeForSave(visible), t1))
         assertEquals(listOf("first", "second", "third"), stamped.doc.blocks.map { it.text })
     }
+
+    // -- fix round 2: stamping against the editor's base, then merging the stored body ------
+
+    private val t3 = Hlc(300, 0, "b")
+    private val t4 = Hlc(400, 0, "a")
+
+    private fun live(text: String, id: String, pos: String, c: Hlc) =
+        Block(id, BlockType.PARAGRAPH, text = text, pos = pos, clock = c, posClock = c)
+
+    @Test
+    fun `a picture block that arrived after the base is kept, and so is its record`() {
+        val base = BlockDocument(listOf(live("one", "p1", "a0", t1)))
+        // Sync merged the other device's picture in while the editor was open.
+        val stored = BlockDocument(listOf(live("one", "p1", "a0", t1), pictureBlock("X", "a5").copy(clock = t3, posClock = t3)))
+
+        val out = assertIs<BlocksSave.Write>(
+            BlocksSave.prepare(
+                NoteContentFormat.BLOCKS, BlockCodec.encode(stored),
+                BlocksSave.encodeForSave(listOf(Block("p1", BlockType.PARAGRAPH, text = "one, edited"))),
+                t4, blocksBase = BlockCodec.encode(base),
+            ),
+        )
+
+        assertEquals(listOf("p1", BlockIds.forPicture("X")), out.doc.blocks.map { it.id })
+        assertTrue(out.doc.gone.isEmpty())
+        assertEquals(emptySet(), PictureLifecycle.reconcile(out.base, out.doc, listOf(picture("X")), emptyList()).delete)
+    }
+
+    @Test
+    fun `a remote paragraph and a remote edit survive a save that touched another paragraph`() {
+        val base = BlockDocument(listOf(live("one", "p1", "a0", t1), live("two", "p2", "a1", t1)))
+        val stored = BlockDocument(
+            listOf(live("one", "p1", "a0", t1), live("two, remote", "p2", "a1", t3), live("three", "p3", "a2", t3)),
+        )
+
+        val out = assertIs<BlocksSave.Write>(
+            BlocksSave.prepare(
+                NoteContentFormat.BLOCKS, BlockCodec.encode(stored),
+                BlocksSave.encodeForSave(base.blocks.map { if (it.id == "p1") it.copy(text = "one, local") else it }),
+                t4, blocksBase = BlockCodec.encode(base),
+            ),
+        )
+
+        assertEquals(listOf("one, local", "two, remote", "three"), out.doc.blocks.map { it.text })
+        assertEquals(t4, out.doc.blocks.first().clock)
+    }
+
+    @Test
+    fun `a block the user deleted from the base is tombstoned and its record deleted`() {
+        val base = BlockDocument(listOf(live("one", "p1", "a0", t1), pictureBlock("a1", "a1")))
+
+        val out = assertIs<BlocksSave.Write>(
+            BlocksSave.prepare(
+                NoteContentFormat.BLOCKS, BlockCodec.encode(base),
+                BlocksSave.encodeForSave(listOf(base.blocks.first())),
+                t4, blocksBase = BlockCodec.encode(base),
+            ),
+        )
+
+        assertEquals(listOf("p1"), out.doc.blocks.map { it.id })
+        assertEquals(listOf(BlockIds.forPicture("a1")), out.doc.gone.map { it.id })
+        assertEquals(setOf("a1"), PictureLifecycle.reconcile(out.base, out.doc, listOf(picture("a1")), emptyList()).delete)
+    }
+
+    @Test
+    fun `without a base the stored body is the base`() {
+        val stored = BlockDocument(listOf(live("one", "p1", "a0", t1), live("two", "p2", "a1", t1)))
+        val incoming = BlocksSave.encodeForSave(listOf(stored.blocks[0]))
+
+        val withNull = assertIs<BlocksSave.Write>(BlocksSave.prepare(NoteContentFormat.BLOCKS, BlockCodec.encode(stored), incoming, t4))
+        val withStored = assertIs<BlocksSave.Write>(
+            BlocksSave.prepare(NoteContentFormat.BLOCKS, BlockCodec.encode(stored), incoming, t4, BlockCodec.encode(stored)),
+        )
+
+        assertEquals(withStored.content, withNull.content)
+        assertEquals(listOf("p2"), withNull.doc.gone.map { it.id })
+    }
+
+    @Test
+    fun `an undecodable editor body replaced by an empty document says so`() {
+        val out = assertIs<BlocksSave.Write>(BlocksSave.prepare(null, "", "{garbage", t1))
+        assertTrue(out.warning != null)
+        assertEquals(null, assertIs<BlocksSave.Write>(BlocksSave.prepare(null, "", "", t1)).warning)
+    }
 }
