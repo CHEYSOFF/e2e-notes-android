@@ -12,6 +12,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.test.click
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.Clipboard
@@ -135,6 +137,33 @@ class BlockEditorUiTest {
         }
         waitForIdle()
         onNodeWithTag(BlockEditorPlaceholderTag).assertDoesNotExist()
+    }
+
+    @Test
+    fun `a checklist item's text starts a gap after its box, and a tap in that gap ticks it`() = runComposeUiTest {
+        EditorFlags.enable()
+        val controller = BlockEditorController("n1")
+        setContent {
+            BlockEditor(
+                "n1", doc(check), {}, { _, _ -> },
+                Modifier.width(400.dp).testTag("editor"), controller,
+            )
+        }
+        waitForIdle()
+        val layout = assertNotNull(controller.layout)
+        val px = density.density
+        val textStart = (layout.getHorizontalPosition(1, true) / px).dp
+        assertTrue(textStart >= CheckBoxSize + CheckGap, "text starts at $textStart")
+
+        val editor = onNodeWithTag("editor").getBoundsInRoot()
+        val target = onNodeWithTag("check-c").getBoundsInRoot()
+        // A finger landing between the box and the text: still the checkbox, not the text.
+        assertTrue(target.right >= editor.left + textStart - 2.dp, "tap area ends at ${target.right}")
+        onNodeWithTag("check-c").performMouseInput {
+            click(Offset(((CheckBoxSize + CheckGap / 2) * px).value, centerY))
+        }
+        waitForIdle()
+        assertTrue(controller.model.blocks().single().done)
     }
 
     @Test

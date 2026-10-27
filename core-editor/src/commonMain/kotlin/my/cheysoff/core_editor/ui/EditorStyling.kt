@@ -8,6 +8,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import my.cheysoff.core_blocks.BlockType
 import my.cheysoff.core_editor.Markers
@@ -24,8 +25,9 @@ import my.cheysoff.core_editor.lineRanges
  * changes only what is drawn and leaves offsets alone, which the overlays rely on: they find
  * each marker in the layout by its offset in the field.
  *
- * - Markers are transparent; the overlays draw the checkbox, bullet or number over them. A list
- *   marker gets [MarkerSpacing] of letter spacing so the drawn checkbox has room before the text.
+ * - Markers are transparent; the overlays draw the checkbox, bullet or number over them. A bullet
+ *   or number marker gets [MarkerSpacing] of letter spacing; a checklist marker gets room for the
+ *   [CheckBoxSize] box plus a [CheckGap] before its text.
  * - A picture or drawing line is its one marker, sized to make the line [pictureHeight] tall,
  *   which is where the overlay draws the picture.
  * - Headings are sized and bold.
@@ -57,7 +59,7 @@ internal class EditorStyling(
                     if (line.end > markerEnd) addStyle(heading(type), markerEnd, line.end)
                 }
                 BlockType.CHECK, BlockType.BULLET, BlockType.NUMBER -> {
-                    addStyle(listMarker, line.start, markerEnd)
+                    addStyle(if (type == BlockType.CHECK) checkMarker else listMarker, line.start, markerEnd)
                     if (done && line.end > markerEnd) addStyle(doneText, markerEnd, line.end)
                 }
                 // A stray marker in front of text (mid-edit only, see Markers.typeOf): hide it.
@@ -77,6 +79,12 @@ internal class EditorStyling(
 
     private val listMarker = SpanStyle(color = Color.Transparent, letterSpacing = MarkerSpacing)
 
+    // The checkbox is drawn in dp, so its room is too: divided by the font scale like the picture.
+    private val checkMarker = SpanStyle(
+        color = Color.Transparent,
+        letterSpacing = ((CheckBoxSize.value + CheckGap.value) / fontScale).sp,
+    )
+
     private val doneText = SpanStyle(color = doneColor, textDecoration = TextDecoration.LineThrough)
 
     private fun heading(type: BlockType) = when (type) {
@@ -92,3 +100,9 @@ internal class EditorStyling(
         const val LineFactor = 1.17f
     }
 }
+
+/** The drawn checkbox's side. */
+internal val CheckBoxSize = 18.dp
+
+/** Space between a checkbox and its item's text. */
+internal val CheckGap = 10.dp

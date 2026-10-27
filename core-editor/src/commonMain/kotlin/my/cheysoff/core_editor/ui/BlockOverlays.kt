@@ -87,24 +87,37 @@ internal fun BlockOverlays(
                 }
                 marker == Markers.CHECK_OPEN || marker == Markers.CHECK_DONE -> {
                     val done = marker == Markers.CHECK_DONE
-                    val boxSize = 18.dp
+                    // The visible box sits at the line's start; the tap target around it spans
+                    // the item's line from a little left of the box up to the text, so a tap near
+                    // the box ticks it instead of putting the cursor in the item.
+                    val touchLeft = (box.left - with(density) { CheckTouchSlop.toPx() }).coerceAtLeast(0f)
+                    val (touchWidth, touchHeight) = with(density) {
+                        (textX - touchLeft).toDp().coerceAtLeast(CheckBoxSize) to
+                            (box.bottom - box.top).toDp().coerceAtLeast(CheckBoxSize)
+                    }
                     Box(
                         Modifier.offset {
-                            IntOffset(box.left.roundToInt(), (centreY - boxSize.toPx() / 2).roundToInt())
-                        }.size(boxSize).clip(RoundedCornerShape(5.dp))
-                            .background(if (done) accent else Color.Transparent)
-                            .border(1.5.dp, accent, RoundedCornerShape(5.dp))
-                            .clickable {
+                            IntOffset(touchLeft.roundToInt(), (centreY - touchHeight.toPx() / 2).roundToInt())
+                        }.size(touchWidth, touchHeight)
+                            .clickable(interactionSource = null, indication = null) {
                                 // By id: the line may have moved since this layout.
                                 controller.model.ids.indexOf(id).takeIf { it >= 0 }?.let(controller::toggleCheck)
                             }
                             .testTag("check-$id"),
-                        contentAlignment = Alignment.Center,
+                        contentAlignment = Alignment.CenterStart,
                     ) {
-                        if (done) Canvas(Modifier.size(10.dp)) {
-                            val w = 2.dp.toPx()
-                            drawLine(Color.White, Offset(0f, size.height * .55f), Offset(size.width * .4f, size.height), w)
-                            drawLine(Color.White, Offset(size.width * .4f, size.height), Offset(size.width, 0f), w)
+                        Box(
+                            Modifier.offset { IntOffset((box.left - touchLeft).roundToInt(), 0) }
+                                .size(CheckBoxSize).clip(RoundedCornerShape(5.dp))
+                                .background(if (done) accent else Color.Transparent)
+                                .border(1.5.dp, accent, RoundedCornerShape(5.dp)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (done) Canvas(Modifier.size(10.dp)) {
+                                val w = 2.dp.toPx()
+                                drawLine(Color.White, Offset(0f, size.height * .55f), Offset(size.width * .4f, size.height), w)
+                                drawLine(Color.White, Offset(size.width * .4f, size.height), Offset(size.width, 0f), w)
+                            }
                         }
                     }
                 }
@@ -210,3 +223,6 @@ internal class LaidOutText(
     val ids: List<String>,
     val refs: Map<String, String>,
 )
+
+/** How far left of the checkbox a tap still ticks it. */
+private val CheckTouchSlop = 8.dp
