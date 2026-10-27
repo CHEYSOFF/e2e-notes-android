@@ -167,6 +167,18 @@ class BlockEditorUiTest {
     }
 
     @Test
+    fun `selecting a checklist item's first word starts the selection at the text, not the box`() = runComposeUiTest {
+        EditorFlags.enable()
+        val controller = BlockEditorController("n1")
+        setContent { BlockEditor("n1", doc(text, check), {}, { _, _ -> }, Modifier.width(400.dp), controller) }
+        waitForIdle()
+        val start = lineStart(controller, 1)
+        controller.model.state.edit { selection = TextRange(start, start + 4) } // marker + "buy"
+        waitForIdle()
+        assertEquals(TextRange(start + 1, start + 4), controller.model.state.selection)
+    }
+
+    @Test
     fun `picture overlay sits on the placeholder line`() = runComposeUiTest {
         EditorFlags.enable()
         val controller = BlockEditorController("n1")
@@ -253,12 +265,14 @@ class BlockEditorUiTest {
         waitForIdle()
         val field = onNodeWithTag(BlockEditorFieldTag)
         field.requestFocus()
-        // From the start of the checklist line, marker included, to its end.
+        // From the start of the checklist line to its end: on one line the selection starts after
+        // the marker (selectionPastMarker), so the cut takes the text and leaves an empty item.
         controller.model.state.edit { selection = TextRange(6, length) }
+        waitForIdle()
         field.performKeyInput { withKeyDown(Key.CtrlLeft) { pressKey(Key.X) } }
         waitForIdle()
-        assertEquals("☐ buy milk", runBlocking { clipboard.entry?.plainText() })
-        assertEquals("Intro\n", controller.model.state.text.toString())
+        assertEquals("buy milk", runBlocking { clipboard.entry?.plainText() })
+        assertEquals("Intro\n${Markers.CHECK_OPEN}", controller.model.state.text.toString())
         assertTrue(changes.isNotEmpty())
     }
 

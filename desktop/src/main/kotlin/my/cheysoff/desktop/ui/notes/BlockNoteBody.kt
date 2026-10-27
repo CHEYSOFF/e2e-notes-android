@@ -8,6 +8,8 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -102,6 +104,7 @@ internal fun BlockNoteBody(
         controller = controller,
         selectionAccent = accent,
         textStyle = MaterialTheme.typography.bodyMedium.copy(color = EditorBodyGrey),
+        pictureHeight = 400.dp,
         placeholder = { Text("Start writing…", style = MaterialTheme.typography.bodyMedium, color = PlaceholderGrey) },
     )
 }
@@ -189,35 +192,44 @@ private fun NotePicture(
     sketches: List<DisplaySketch>,
     onOpen: (AttachmentData) -> Unit,
 ) {
-    Box(
-        modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(14.dp)).background(Color(0xFF1C1C22)),
-        contentAlignment = Alignment.Center,
-    ) {
-        if (kind == BlockType.DRAWING) {
+    // A photo sits at the left at its own shape, rounded, on no backdrop; a drawing (a canvas of its
+    // own) and the placeholders keep the dark card.
+    val card = Modifier.fillMaxSize().clip(RoundedCornerShape(14.dp)).background(Color(0xFF1C1C22))
+    if (kind == BlockType.DRAWING) {
+        Box(card, contentAlignment = Alignment.Center) {
             when (val row = sketches.firstOrNull { it.id == recordId }) {
                 is DisplaySketch.Drawing -> SketchCanvas(row.sketch, Modifier.fillMaxSize())
                 is DisplaySketch.Undecodable -> PicturePlaceholder("Can't display this drawing")
                 null -> PicturePlaceholder("Loading drawing…")
             }
-        } else {
-            val attachment = attachments.firstOrNull { it.id == recordId }
-            if (attachment == null) {
-                PicturePlaceholder("Loading picture…")
-            } else {
-                // Keyed on a content hash, not the arrays: ByteArray equality is identity, and
-                // every recomposition would otherwise decode the picture again.
-                val bitmap = remember(attachment.id, attachment.bytes.contentHashCode(), attachment.thumbBytes.contentHashCode()) {
-                    decodeAttachmentImage(attachment.bytes) ?: decodeAttachmentImage(attachment.thumbBytes)
-                }
-                Box(Modifier.fillMaxSize().openOnClick(attachment, onOpen), contentAlignment = Alignment.Center) {
-                    if (bitmap == null) {
-                        PicturePlaceholder("Can't display this picture")
-                    } else {
-                        Image(bitmap = bitmap, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
-                    }
-                }
-            }
         }
+        return
+    }
+    val attachment = attachments.firstOrNull { it.id == recordId }
+    if (attachment == null) {
+        Box(card, contentAlignment = Alignment.Center) { PicturePlaceholder("Loading picture…") }
+        return
+    }
+    // Keyed on a content hash, not the arrays: ByteArray equality is identity, and every
+    // recomposition would otherwise decode the picture again.
+    val bitmap = remember(attachment.id, attachment.bytes.contentHashCode(), attachment.thumbBytes.contentHashCode()) {
+        decodeAttachmentImage(attachment.bytes) ?: decodeAttachmentImage(attachment.thumbBytes)
+    }
+    if (bitmap == null || bitmap.width == 0 || bitmap.height == 0) {
+        Box(card.openOnClick(attachment, onOpen), contentAlignment = Alignment.Center) {
+            PicturePlaceholder("Can't display this picture")
+        }
+        return
+    }
+    BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
+        val ratio = bitmap.width.toFloat() / bitmap.height
+        val height = minOf(maxHeight, maxWidth / ratio)
+        Image(
+            bitmap = bitmap,
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.size(height * ratio, height).clip(RoundedCornerShape(14.dp)).openOnClick(attachment, onOpen),
+        )
     }
 }
 

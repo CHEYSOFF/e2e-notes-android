@@ -14,6 +14,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -32,6 +33,7 @@ import my.cheysoff.core_blocks.BlockType
 import my.cheysoff.core_editor.EditingRules
 import my.cheysoff.core_editor.RemoteApply
 import my.cheysoff.core_editor.blockHistoryKeys
+import my.cheysoff.core_editor.selectionPastMarker
 
 /** Test tag of the editor's text field. */
 const val BlockEditorFieldTag = "block-editor-field"
@@ -83,6 +85,14 @@ fun BlockEditor(
 
     // Every emission: the first of a note opens it, the rest are synced changes of it.
     LaunchedEffect(controller, noteId, document) { controller.receive(noteId, document) }
+
+    // A selection on one list line starts at its text, never under the checkbox; see selectionPastMarker.
+    LaunchedEffect(controller) {
+        snapshotFlow { controller.model.state.selection }.collect { sel ->
+            val state = controller.model.state
+            selectionPastMarker(state.text, sel)?.let { state.edit { selection = it } }
+        }
+    }
 
     // A change held back for the user's typing is retried once the pause has passed, and again
     // after each later local edit; never in a loop. Changes held because both sides edited a
