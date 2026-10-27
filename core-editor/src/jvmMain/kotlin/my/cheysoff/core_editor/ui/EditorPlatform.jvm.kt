@@ -50,3 +50,7 @@ internal actual fun Modifier.pictureDragGesture(
         onDrag(amount)
     }
 }
+
+/** Desktop: the context menu has only Cut, Copy, Paste and Select all; nothing to add. */
+@androidx.compose.runtime.Composable
+internal actual fun Modifier.editorMenuPlatformItems(selectedPlain: () -> String): Modifier = this

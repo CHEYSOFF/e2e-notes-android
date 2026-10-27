@@ -53,11 +53,12 @@ object BlockText {
     /**
      * The plain text of a stored note body, or null when [format] is not BLOCKS so the caller keeps
      * its own PLAIN/HTML path. A body that does not decode comes back as its raw text, as PLAIN
-     * would show it: a reader must never crash on, or silently hide, a body it cannot parse.
+     * would show it, minus private-use characters: a reader must never crash on, or silently hide,
+     * a body it cannot parse, and its text may be copied or shared.
      */
     fun bodyPlain(content: String, format: NoteContentFormat): String? {
         if (format != NoteContentFormat.BLOCKS) return null
-        val doc = BlockCodec.decode(content) ?: return content.trim()
+        val doc = BlockCodec.decode(content) ?: return content.withoutPrivateUse().trim()
         return plain(doc.visible()).trim()
     }
 

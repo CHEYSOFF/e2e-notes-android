@@ -69,6 +69,12 @@ class BlockTextTest {
     }
 
     @Test
+    fun `an undecodable blocks body is shown without private-use characters`() {
+        val raw = " broken body "
+        assertEquals("broken body", BlockText.bodyPlain(raw, NoteContentFormat.BLOCKS))
+    }
+
+    @Test
     fun `bodyIsBlank is null for other formats and true for an empty blocks body`() {
         val empty = BlockCodec.encode(BlockDocument(listOf(b(BlockType.PARAGRAPH, ""))))
         assertEquals(true, BlockText.bodyIsBlank(empty, NoteContentFormat.BLOCKS))

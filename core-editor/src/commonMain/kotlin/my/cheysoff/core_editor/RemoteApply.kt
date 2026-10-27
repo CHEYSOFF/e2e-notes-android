@@ -42,7 +42,10 @@ import my.cheysoff.core_editor.LineEdits.Anchor
  * - [base] catches up with the editor's version, or
  * - the user undoes or retypes the block back to its [base] version; then the incoming change is
  *   an ordinary remote edit again.
- * The save path settles the block by clock. The [quietMs] pause below governs only the caret's
+ * Because [base] keeps the old version, every save re-claims the block, so while the note is open
+ * local wins for a block typed on both devices at once: the other device's simultaneous edit to
+ * that block is overwritten (accepted: no local words are lost, and the devices still converge on
+ * one version). The [quietMs] pause below governs only the caret's
  * block when the editor still shows its [base] version.
  *
  * **Where.** An added block goes right after the nearest block that precedes it in the incoming

@@ -60,6 +60,40 @@ class RemovePictureTest {
     }
 
     @Test
+    fun `removing a picture that is the only line leaves a paragraph with a fresh id`() {
+        for (only in listOf(picture, drawing)) {
+            val (controller, changes) = loaded(only)
+
+            assertTrue(controller.removePicture(only.ref!!))
+
+            val left = controller.model.blocks().single()
+            assertEquals(BlockType.PARAGRAPH, left.type)
+            assertEquals("", left.text)
+            assertFalse(left.id.startsWith("pic:") || left.id.startsWith("drw:"), "left line carries ${left.id}")
+            assertTrue(controller.model.refs.isEmpty())
+            assertFalse(changes.last().any { it.id.startsWith("pic:") || it.id.startsWith("drw:") })
+
+            controller.undo()
+            assertEquals(listOf(only.id), controller.model.ids, "undo brings the picture back")
+            assertEquals(only.type, controller.model.blocks().single().type)
+        }
+    }
+
+    @Test
+    fun `removePicture finds a picture or drawing block that has no ref by its id`() {
+        val refLessPicture = Block("pic:r9", BlockType.PICTURE, pos = "b")
+        val refLessDrawing = Block("drw:s9", BlockType.DRAWING, pos = "c")
+        val (controller, changes) = loaded(text, refLessPicture, refLessDrawing, after)
+
+        assertTrue(controller.removePicture("r9"))
+        assertEquals(listOf("t", "drw:s9", "u"), controller.model.ids)
+        assertTrue(controller.removePicture("s9"))
+        assertEquals(listOf("t", "u"), controller.model.ids)
+        assertEquals(2, changes.size)
+        assertFalse(controller.removePicture("t"), "a text block is never a picture")
+    }
+
+    @Test
     fun `removePicture of a record no line shows changes nothing`() {
         val (controller, changes) = loaded(text, picture)
 

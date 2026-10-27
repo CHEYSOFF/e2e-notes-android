@@ -2,6 +2,7 @@ package my.cheysoff.core_editor
 
 import androidx.compose.foundation.text.input.TextFieldBuffer
 import androidx.compose.ui.text.TextRange
+import my.cheysoff.core_blocks.BlockIds
 import my.cheysoff.core_blocks.BlockType
 import my.cheysoff.core_blocks.InlineStyle
 import my.cheysoff.core_blocks.StyleSpan
@@ -193,7 +194,12 @@ object EditorCommands {
      * neighbouring lines' ids where a plain text cut could hand a marker's id to the wrong line.
      */
     fun removePicture(model: EditorModel, recordId: String): Boolean {
-        val id = model.refs.entries.firstOrNull { it.value == recordId }?.key ?: return false
+        // A block without a ref is still the picture of the record its id names.
+        val id = model.refs.entries.firstOrNull { it.value == recordId }?.key
+            ?: listOf(BlockIds.forPicture(recordId), BlockIds.forDrawing(recordId)).firstOrNull { candidate ->
+                model.blocks().any { it.id == candidate && Markers.isPictureType(it.type) }
+            }
+            ?: return false
         val history = model.history
         val before = model.blocks()
         LineEdits(model).delete(id)

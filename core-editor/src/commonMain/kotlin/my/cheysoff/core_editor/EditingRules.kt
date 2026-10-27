@@ -34,7 +34,7 @@ import androidx.compose.ui.text.TextRange
  *    This is Backspace at the start of the text line below a picture, or Delete at the end of the
  *    text line above it. Merging the text into the picture line instead would make it a paragraph
  *    and lose the picture. If the joined line is empty, only that empty line goes and the picture
- *    stays.
+ *    stays. An empty list item or heading (a line holding only its marker) counts as empty.
  * 4. **A picture stays alone on its line.**
  *    - Text typed before or after its marker moves to a new line after it.
  *    - Surviving text that a wider delete joined to it is split off and keeps its side.
@@ -133,16 +133,28 @@ class EditingRules(private val model: EditorModel) : InputTransformation {
         val old = originalText
         val o = e.oStart
         val n = e.nStart
-        val lineBelowHasText = o + 1 < old.length && old[o + 1] != '\n'
-        val lineAboveHasText = o > 0 && old[o - 1] != '\n'
-        val above = lineBelowHasText && o >= 1 && isPictureChar(old[o - 1]) && (o == 1 || old[o - 2] == '\n')
-        val below = lineAboveHasText && o + 1 < old.length && isPictureChar(old[o + 1]) &&
+        val pictureAbove = o >= 1 && isPictureChar(old[o - 1]) && (o == 1 || old[o - 2] == '\n')
+        val pictureBelow = o + 1 < old.length && isPictureChar(old[o + 1]) &&
             (o + 2 == old.length || old[o + 2] == '\n')
+        // A line holding only a list or heading marker is an empty item: it has no text.
+        val lineBelowIsLoneMarker = o + 1 < old.length && isLoneMarker(old, o + 1)
+        val lineAboveIsLoneMarker = o > 0 && isLoneMarker(old, lineStart(old, o - 1))
+        val lineBelowHasText = o + 1 < old.length && old[o + 1] != '\n' && !lineBelowIsLoneMarker
+        val lineAboveHasText = o > 0 && old[o - 1] != '\n' && !lineAboveIsLoneMarker
         when {
-            above -> edit(n - 1, n, "", caret)
-            below -> edit(n, n + 1, "", caret)
+            pictureAbove && lineBelowHasText -> edit(n - 1, n, "", caret)
+            pictureBelow && lineAboveHasText -> edit(n, n + 1, "", caret)
+            // An empty item joined to a picture: only the item goes. Its marker left beside the
+            // picture would otherwise be split back onto its own line by rule 4.
+            pictureAbove && lineBelowIsLoneMarker -> edit(n, n + 1, "", caret)
+            pictureBelow && lineAboveIsLoneMarker -> edit(n - 1, n, "", caret)
         }
     }
+
+    /** True if the line starting at [start] is exactly one non-picture marker (an empty item). */
+    private fun isLoneMarker(text: CharSequence, start: Int): Boolean =
+        start < text.length && Markers.isPrivateUse(text[start]) && !isPictureChar(text[start]) &&
+            (start + 1 == text.length || text[start + 1] == '\n')
 
     /** Rule 4, on the lines this edit touched, right to left so earlier offsets stay valid. */
     private fun TextFieldBuffer.isolatePictures(caret: Caret) {

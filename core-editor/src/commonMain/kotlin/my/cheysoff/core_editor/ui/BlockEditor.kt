@@ -106,6 +106,13 @@ fun BlockEditor(
     val drag = remember(controller, controller.loadedNote) { PictureDrag() }
     val outerClipboard = LocalClipboard.current
     val clipboard = remember(outerClipboard) { EditorClipboard(outerClipboard) }
+    // Read at the moment a menu item is built or clicked, never captured: the selection moves.
+    val selectedPlain = remember(controller) {
+        {
+            val state = controller.model.state
+            selectedPlainText(state.text, state.selection.start, state.selection.end)
+        }
+    }
     val selectionColors = remember(selectionAccent) {
         TextSelectionColors(handleColor = selectionAccent, backgroundColor = selectionAccent.copy(alpha = 0.3f))
     }
@@ -114,7 +121,9 @@ fun BlockEditor(
         Box(modifier) {
             BasicTextField(
                 state = controller.model.state,
-                modifier = Modifier.fillMaxWidth().blockHistoryKeys(controller.history).testTag(BlockEditorFieldTag),
+                modifier = Modifier.fillMaxWidth().blockHistoryKeys(controller.history)
+                    .editorTextMenu(selectedPlain)
+                    .testTag(BlockEditorFieldTag),
                 inputTransformation = input,
                 outputTransformation = styling,
                 textStyle = textStyle,

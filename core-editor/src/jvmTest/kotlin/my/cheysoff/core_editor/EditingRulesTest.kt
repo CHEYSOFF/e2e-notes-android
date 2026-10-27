@@ -174,6 +174,30 @@ class EditingRulesTest {
     }
 
     @Test
+    fun `Backspace joining an empty checklist item below a picture keeps the picture`() {
+        val model = EditorModel(doc(p("a", "one"), pic("r1"), check("c", ""), p("b", "two")))
+        assertEquals("one\n${Markers.PICTURE}\n${Markers.CHECK_OPEN}\ntwo", model.text())
+        model.deleteRange(5, 6) // Backspace at the very start of the empty item
+        assertEquals("one\n${Markers.PICTURE}\ntwo", model.text(), "only the empty item goes")
+        assertEquals(listOf("a", "pic:r1", "b"), model.ids)
+        assertEquals(mapOf("pic:r1" to "r1"), model.refs)
+        assertEquals(TextRange(5), model.caret())
+        model.assertConsistent()
+    }
+
+    @Test
+    fun `Delete joining an empty bullet item above a picture keeps the picture`() {
+        val model = EditorModel(doc(p("a", "one"), Block("b", BlockType.BULLET, ""), pic("r1"), p("d", "two")))
+        assertEquals("one\n${Markers.BULLET}\n${Markers.PICTURE}\ntwo", model.text())
+        model.deleteRange(5, 6) // Delete at the end of the empty item
+        assertEquals("one\n${Markers.PICTURE}\ntwo", model.text(), "only the empty item goes")
+        assertEquals(listOf("a", "pic:r1", "d"), model.ids)
+        assertEquals(mapOf("pic:r1" to "r1"), model.refs)
+        assertEquals(TextRange(4), model.caret())
+        model.assertConsistent()
+    }
+
+    @Test
     fun `Backspace on an empty line below a picture keeps the picture when text follows`() {
         val model = EditorModel(doc(pic("r1"), p("e", ""), p("b", "two")))
         model.deleteRange(1, 2)
