@@ -6,6 +6,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.Clipboard
 import androidx.compose.ui.platform.asAwtTransferable
 import java.awt.datatransfer.DataFlavor
 import java.awt.datatransfer.StringSelection
@@ -28,6 +29,8 @@ internal actual suspend fun ClipEntry.plainText(): String? {
         null
     }
 }
+
+internal actual fun editorClipboard(delegate: Clipboard): Clipboard = EditorClipboard(delegate)
 
 /** A [StringSelection]: plain text only, so no styled or HTML flavour can carry the markers along. */
 @OptIn(ExperimentalComposeUiApi::class)

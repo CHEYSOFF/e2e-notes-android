@@ -63,6 +63,12 @@ internal class EditorClipboard(private val delegate: Clipboard) : Clipboard {
     }
 }
 
+/**
+ * [EditorClipboard] around [delegate], in the shape the platform's text field accepts: Android's
+ * text toolbar reads the native clipboard through `AndroidClipboard` and crashes on anything else.
+ */
+internal expect fun editorClipboard(delegate: Clipboard): Clipboard
+
 /** The plain text a clipboard entry carries, or null if it has none. */
 internal expect suspend fun ClipEntry.plainText(): String?
 

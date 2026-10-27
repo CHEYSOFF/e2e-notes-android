@@ -105,7 +105,7 @@ fun BlockEditor(
     val input = remember(controller) { EditingRules(controller.model).then(ReportLocalEdits(controller)) }
     val drag = remember(controller, controller.loadedNote) { PictureDrag() }
     val outerClipboard = LocalClipboard.current
-    val clipboard = remember(outerClipboard) { EditorClipboard(outerClipboard) }
+    val clipboard = remember(outerClipboard) { editorClipboard(outerClipboard) }
     // Read at the moment a menu item is built or clicked, never captured: the selection moves.
     val selectedPlain = remember(controller) {
         {

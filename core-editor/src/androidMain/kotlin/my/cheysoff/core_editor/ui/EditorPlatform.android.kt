@@ -10,7 +10,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
+import android.content.ClipboardManager
+import androidx.compose.ui.platform.AndroidClipboard
 import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.Clipboard
+import androidx.compose.ui.platform.nativeClipboardManager
 import androidx.compose.ui.platform.toClipEntry
 
 internal actual fun currentTimeMillis(): Long = System.currentTimeMillis()
@@ -19,6 +23,22 @@ internal actual suspend fun ClipEntry.plainText(): String? {
     val clip = clipData
     if (clip.itemCount == 0) return null
     return (0 until clip.itemCount).mapNotNull { clip.getItemAt(it).text?.toString() }.joinToString("").ifEmpty { null }
+}
+
+/**
+ * Android: foundation reads the native clipboard (paste availability for the text toolbar) via
+ * `Clipboard.nativeClipboardManager`, which throws unless the clipboard is an [AndroidClipboard].
+ * Writes still go through [EditorClipboard]; the native manager is the real clipboard's.
+ */
+internal actual fun editorClipboard(delegate: Clipboard): Clipboard =
+    AndroidEditorClipboard(EditorClipboard(delegate), delegate.nativeClipboardManager)
+
+private class AndroidEditorClipboard(
+    private val inner: EditorClipboard,
+    override val clipboardManager: ClipboardManager,
+) : AndroidClipboard {
+    override suspend fun getClipEntry(): ClipEntry? = inner.getClipEntry()
+    override suspend fun setClipEntry(clipEntry: ClipEntry?) = inner.setClipEntry(clipEntry)
 }
 
 /** Plain text only (`newPlainText`), so no HTML item can carry the markers along. */
