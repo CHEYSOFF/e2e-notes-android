@@ -100,6 +100,44 @@ class BlockEditorUiTest {
     }
 
     @Test
+    fun `an empty note shows the placeholder until the first character is typed`() = runComposeUiTest {
+        EditorFlags.enable()
+        val controller = BlockEditorController("n1")
+        setContent {
+            BlockEditor(
+                "n1", BlockDocument(emptyList()), {}, { _, _ -> },
+                Modifier.width(400.dp), controller,
+                placeholder = { BasicText("Start writing…") },
+            )
+        }
+        waitForIdle()
+        onNodeWithText("Start writing…").assertIsDisplayed()
+        val field = onNodeWithTag(BlockEditorFieldTag)
+        field.requestFocus()
+        field.performTextInput("H")
+        waitForIdle()
+        onNodeWithTag(BlockEditorPlaceholderTag).assertDoesNotExist()
+        field.performKeyInput { pressKey(Key.Backspace) }
+        waitForIdle()
+        onNodeWithText("Start writing…").assertIsDisplayed()
+    }
+
+    @Test
+    fun `a note with text shows no placeholder`() = runComposeUiTest {
+        EditorFlags.enable()
+        val controller = BlockEditorController("n1")
+        setContent {
+            BlockEditor(
+                "n1", doc(text), {}, { _, _ -> },
+                Modifier.width(400.dp), controller,
+                placeholder = { BasicText("Start writing…") },
+            )
+        }
+        waitForIdle()
+        onNodeWithTag(BlockEditorPlaceholderTag).assertDoesNotExist()
+    }
+
+    @Test
     fun `picture overlay sits on the placeholder line`() = runComposeUiTest {
         EditorFlags.enable()
         val controller = BlockEditorController("n1")

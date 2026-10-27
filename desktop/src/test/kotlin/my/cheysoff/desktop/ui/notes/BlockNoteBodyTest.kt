@@ -2,11 +2,16 @@ package my.cheysoff.desktop.ui.notes
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.click
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.v2.runComposeUiTest
@@ -55,13 +60,14 @@ class BlockNoteBodyTest {
     private fun androidx.compose.ui.test.ComposeUiTest.showBody(
         opened: MutableList<String>,
         changes: MutableList<List<Block>> = mutableListOf(),
+        blocks: BlockDocument = document,
     ): BlockEditorController {
         EditorFlags.enable()
         val controller = BlockEditorController("n1")
         setContent {
             Column(Modifier.width(400.dp)) {
                 BlockNoteBody(
-                    draft = draft(),
+                    draft = draft(blocks),
                     controller = controller,
                     accent = Color.Blue,
                     attachments = listOf(photo),
@@ -76,6 +82,29 @@ class BlockNoteBodyTest {
         }
         waitForIdle()
         return controller
+    }
+
+    @Test
+    fun `a new note shows the Start writing hint, and a note with text does not`() = runComposeUiTest {
+        var blocks by mutableStateOf(BlockDocument(emptyList()))
+        EditorFlags.enable()
+        val controller = BlockEditorController("n1")
+        setContent {
+            Column(Modifier.width(400.dp)) {
+                BlockNoteBody(
+                    draft = draft(blocks), controller = controller, accent = Color.Blue,
+                    attachments = emptyList(), sketches = emptyList(), pasteFailure = null,
+                    onDismissPasteFailure = {}, onBlocksChange = { _, _, _ -> }, onInsertPicture = {},
+                    onOpenPicture = {},
+                )
+            }
+        }
+        waitForIdle()
+        onNodeWithText("Start writing…").assertIsDisplayed()
+
+        blocks = document
+        waitForIdle()
+        onNodeWithText("Start writing…").assertDoesNotExist()
     }
 
     @Test

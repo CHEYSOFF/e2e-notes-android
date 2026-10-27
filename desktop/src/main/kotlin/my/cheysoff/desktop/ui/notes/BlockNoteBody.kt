@@ -102,6 +102,7 @@ internal fun BlockNoteBody(
         controller = controller,
         selectionAccent = accent,
         textStyle = MaterialTheme.typography.bodyMedium.copy(color = EditorBodyGrey),
+        placeholder = { Text("Start writing…", style = MaterialTheme.typography.bodyMedium, color = PlaceholderGrey) },
     )
 }
 

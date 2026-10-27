@@ -36,6 +36,9 @@ import my.cheysoff.core_editor.blockHistoryKeys
 /** Test tag of the editor's text field. */
 const val BlockEditorFieldTag = "block-editor-field"
 
+/** Test tag around the placeholder shown while the note body is empty. */
+const val BlockEditorPlaceholderTag = "block-editor-placeholder"
+
 /** The default accent: Manana's violet. Both apps pass their theme's primary instead. */
 val DefaultEditorAccent = Color(0xFF7C5CFF)
 
@@ -74,6 +77,7 @@ fun BlockEditor(
     selectionAccent: Color = DefaultEditorAccent,
     textStyle: TextStyle = TextStyle(color = Color(0xFF1F1D2B), fontSize = 16.sp),
     pictureHeight: Dp = 200.dp,
+    placeholder: (@Composable () -> Unit)? = null,
 ) {
     SideEffect { controller.onChange = onChange }
 
@@ -129,6 +133,13 @@ fun BlockEditor(
                 textStyle = textStyle,
                 cursorBrush = SolidColor(selectionAccent),
                 onTextLayout = { result -> controller.laidOut(result()) },
+                decorator = { inner ->
+                    // A new or emptied note: the hint sits under the cursor until the first character.
+                    if (placeholder != null && controller.model.state.text.isEmpty()) {
+                        Box(Modifier.testTag(BlockEditorPlaceholderTag)) { placeholder() }
+                    }
+                    inner()
+                },
             )
             controller.laidOut?.let { view ->
                 BlockOverlays(controller, view, drag, selectionAccent, textColor, pictureContent)

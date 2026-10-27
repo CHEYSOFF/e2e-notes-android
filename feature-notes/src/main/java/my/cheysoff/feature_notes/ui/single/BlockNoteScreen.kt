@@ -444,6 +444,7 @@ private fun BlockNoteBody(
                 controller = controller,
                 selectionAccent = accent,
                 textStyle = bodyStyle.copy(color = Color(0xFFB9B9BD)),
+                placeholder = { Text("Start writing…", style = bodyStyle, color = Color(0xFF4A4A50)) },
             )
         }
 
