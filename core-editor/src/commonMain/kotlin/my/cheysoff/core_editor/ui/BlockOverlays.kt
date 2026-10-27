@@ -108,9 +108,9 @@ internal fun BlockOverlays(
                     ) {
                         Box(
                             Modifier.offset { IntOffset((box.left - touchLeft).roundToInt(), 0) }
-                                .size(CheckBoxSize).clip(RoundedCornerShape(5.dp))
+                                .size(CheckBoxSize).clip(CircleShape)
                                 .background(if (done) accent else Color.Transparent)
-                                .border(1.5.dp, accent, RoundedCornerShape(5.dp)),
+                                .border(1.5.dp, accent, CircleShape),
                             contentAlignment = Alignment.Center,
                         ) {
                             if (done) Canvas(Modifier.size(10.dp)) {

@@ -108,6 +108,9 @@ dependencies {
     androidTestImplementation(libs.androidx.room.ktx)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    // ui-test-junit4 drives touches through espresso-core; the version it brings by default calls
+    // InputManager.getInstance, which Android 17 (SDK 37) no longer has. Pinned to one that works.
+    androidTestImplementation(libs.androidx.espresso.core)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
