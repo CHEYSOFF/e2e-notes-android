@@ -69,6 +69,7 @@ import my.cheysoff.core_domain.sketch.Sketch
 import my.cheysoff.core_ui.sketch.RenderedStroke
 import my.cheysoff.core_ui.sketch.SketchRenderer
 import my.cheysoff.feature_notes.model.single.SingleNoteIntent
+import my.cheysoff.core_editor.ui.BlockEditorController
 import my.cheysoff.feature_notes.model.single.SingleNoteScreenState
 import my.cheysoff.feature_notes.model.single.noteShareTitle
 import my.cheysoff.feature_notes.ui.sketch.SketchCanvasScreen
@@ -94,8 +95,10 @@ fun SingleNoteScreen(
     // it is showing.
     loadAttachment: suspend (String) -> AttachmentData?,
     onColorMixed: (Long) -> Unit,
+    // SingleNoteViewModel.editorController: the editor's controller outlives a rotation there.
+    editorController: (noteId: String) -> BlockEditorController,
 ) {
-    BlockNoteScreen(state, onIntent, loadAttachment, onColorMixed)
+    BlockNoteScreen(state, onIntent, loadAttachment, onColorMixed, editorController)
 }
 
 

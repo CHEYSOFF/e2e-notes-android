@@ -170,9 +170,10 @@ class BlockEditorController internal constructor(
 
     /**
      * Opens [doc] if nothing, or another note, is loaded; else offers it as a synced change of the
-     * loaded note and applies what it can now.
+     * loaded note and applies what it can now. [BlockEditor] calls this with every document it is
+     * given; public so a host's integration test can drive the same path without a UI.
      */
-    internal fun receive(noteId: String, doc: BlockDocument) {
+    fun receive(noteId: String, doc: BlockDocument) {
         if (noteId != loadedNote) {
             // First document, or another note's: open it. noteLoaded -> EditorModel.load clears
             // the undo history and drops any pending document of the previous note.

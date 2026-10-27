@@ -199,6 +199,18 @@ fun AppNavHost(
                                 )
                                 .show()
                         }
+
+                        // The stored body can't be read, so no copy was written (it would not
+                        // hold the user's text).
+                        SingleNoteEvent.DuplicateRefused -> {
+                            Toast
+                                .makeText(
+                                    context,
+                                    "This note can't be read here, so it wasn't duplicated",
+                                    Toast.LENGTH_LONG,
+                                )
+                                .show()
+                        }
                     }
                 }
             }
@@ -208,6 +220,7 @@ fun AppNavHost(
                 onIntent = { intent -> viewModel.onIntent(intent) },
                 loadAttachment = { id -> viewModel.attachment(id) },
                 onColorMixed = { argb -> viewModel.onSketchColorMixed(argb) },
+                editorController = viewModel::editorController,
             )
         }
 

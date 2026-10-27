@@ -32,6 +32,7 @@ import my.cheysoff.core_blocks.BlockText
 import my.cheysoff.core_blocks.BlockType
 import my.cheysoff.core_blocks.BlocksSave
 import my.cheysoff.core_blocks.OpenDocument
+import my.cheysoff.core_editor.ui.BlockEditorController
 import my.cheysoff.core_domain.attachment.sortAttachments
 import my.cheysoff.core_domain.model.AttachmentData
 import my.cheysoff.core_domain.model.AttachmentPreview
@@ -82,6 +83,13 @@ sealed class SingleNoteEvent {
      * rather than dropped: a drawing in particular is minutes of work the user believes was saved.
      */
     data class PictureRefused(val isDrawing: Boolean) : SingleNoteEvent()
+
+    /**
+     * Duplicate was refused because the note's stored BLOCKS body cannot be read (corrupt, or from
+     * a newer version). Copying it would store a body this build cannot read back, or an empty
+     * document, while the user believes the copy holds their text.
+     */
+    data object DuplicateRefused : SingleNoteEvent()
 }
 
 /**
@@ -401,6 +409,22 @@ class SingleNoteViewModel internal constructor(
     // Serializes DB writes so an older/delayed save can't run concurrently with a newer one.
     private val saveMutex = Mutex()
 
+    /** See [editorController]. */
+    private var heldEditorController: BlockEditorController? = null
+
+    /**
+     * The block editor's controller for note [noteId], held here so it survives a configuration
+     * change (rotation recreates the screen's composition, not this ViewModel). A `remember` in the
+     * screen would make a new one: the undo history gone, and the text the editor showed replaced
+     * by the last saved body, losing whatever was typed inside the save debounce.
+     *
+     * Still fresh per note, as `rememberBlockEditorController(noteId)` guarantees: a different
+     * [noteId] gets a new controller with nothing of the previous note's state. Main thread only.
+     */
+    fun editorController(noteId: String): BlockEditorController =
+        heldEditorController?.takeIf { it.noteId == noteId }
+            ?: BlockEditorController(noteId).also { heldEditorController = it }
+
     // What the stored row is known to hold for the fields this editor owns — moved by both the load
     // flow (what the DB told us) and every write path (what we told the DB). Null until the first
     // row arrives. See EditorBaseline / mergeIncomingNote: this is what lets an emission be
@@ -653,7 +677,14 @@ class SingleNoteViewModel internal constructor(
         // closes on tap, so this is a guard against a double tap, not an expected path.
         if (duplicateJob?.isActive == true) return
         duplicateJob = viewModelScope.launch {
-            val copy = blocksDuplicate() ?: return@launch
+            val copy = when (val result = blocksDuplicate()) {
+                null -> return@launch
+                DuplicateResult.Unreadable -> {
+                    _events.send(SingleNoteEvent.DuplicateRefused)
+                    return@launch
+                }
+                is DuplicateResult.Copy -> result.note
+            }
             saveMutex.withLock { notesRepository.saveNote(copy) }
             _events.send(SingleNoteEvent.NoteDuplicated(copy.title))
         }
@@ -978,15 +1009,19 @@ class SingleNoteViewModel internal constructor(
      * pinned card with a near-identical title reads as a glitch in the list's pinned pager. The
      * copy is never a favorite either (the repository's insert writes isFavorite = false).
      */
-    private suspend fun blocksDuplicate(): Note? {
+    private suspend fun blocksDuplicate(): DuplicateResult? {
         val id = noteId ?: return null
         flushBlocksSave()?.join()
         val stored = notesRepository.getNoteById(id).first() ?: return null
-        val doc = if (stored.contentFormat == NoteContentFormat.BLOCKS) BlockCodec.decode(stored.content) else null
+        val doc = if (stored.contentFormat == NoteContentFormat.BLOCKS) {
+            BlockCodec.decode(stored.content) ?: return DuplicateResult.Unreadable
+        } else {
+            null
+        }
         val content = doc?.let { d ->
             BlocksSave.encodeForSave(d.visible().filter { it.type != BlockType.PICTURE && it.type != BlockType.DRAWING })
         } ?: stored.content
-        return Note(
+        return DuplicateResult.Copy(Note(
             id = UUID.randomUUID().toString(),
             title = duplicateTitle(_state.value.title),
             content = content,
@@ -995,7 +1030,12 @@ class SingleNoteViewModel internal constructor(
             isPinned = false,
             isFavorite = false,
             folderId = _state.value.folderId,
-        )
+        ))
+    }
+
+    private sealed interface DuplicateResult {
+        data class Copy(val note: Note) : DuplicateResult
+        data object Unreadable : DuplicateResult
     }
 
     /**

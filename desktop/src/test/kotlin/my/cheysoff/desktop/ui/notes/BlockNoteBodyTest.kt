@@ -7,7 +7,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.click
-import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.v2.runComposeUiTest
@@ -95,13 +94,18 @@ class BlockNoteBodyTest {
         val opened = mutableListOf<String>()
         showBody(opened)
         val overlay = onNodeWithTag("picture-pic:r1")
-        val h = overlay.getBoundsInRoot().let { it.bottom - it.top }
 
+        // The whole drag stays inside the picture and goes well past touch slop, so only the drag
+        // detection (not leaving the bounds) can be what keeps the click from firing.
         overlay.performMouseInput {
-            moveTo(center)
+            val start = Offset(centerX, height * 0.1f)
+            val end = Offset(centerX, height * 0.8f)
+            assertTrue("drag must pass touch slop", end.y - start.y > viewConfiguration.touchSlop * 2)
+            moveTo(start)
             press()
-            moveBy(Offset(0f, 10f))
-            moveBy(Offset(0f, (h.value * density) * 0.9f))
+            moveBy(Offset(0f, viewConfiguration.touchSlop + 1f))
+            moveTo(end)
+            assertTrue("release is inside the picture", end.y < height)
             release()
         }
         waitForIdle()

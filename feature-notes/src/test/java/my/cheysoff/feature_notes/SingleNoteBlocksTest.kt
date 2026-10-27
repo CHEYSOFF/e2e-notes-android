@@ -30,7 +30,11 @@ import my.cheysoff.feature_notes.ui.attachment.ImportResult
 import my.cheysoff.feature_notes.ui.single.SingleNoteEvent
 import my.cheysoff.feature_notes.ui.single.SingleNoteViewModel
 import my.cheysoff.feature_notes.ui.single.toPreview
+import my.cheysoff.core_editor.EditorFlags
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -469,6 +473,48 @@ class SingleNoteBlocksTest {
         advanceUntilIdle()
 
         assertTrue(repo.callsNamed("purgeNote").isEmpty())
+    }
+
+    @Test
+    fun `duplicating a note whose blocks body cannot be read is refused with a message`() = runTest {
+        repo.noteById.value = note(content = "{\"v\":99,\"from\":\"the future\"}", contentFormat = NoteContentFormat.BLOCKS)
+        val vm = viewModel()
+        val events = collectEvents(vm)
+        advanceUntilIdle()
+
+        vm.onIntent(SingleNoteIntent.DuplicateNote)
+        advanceUntilIdle()
+
+        assertTrue("no copy may be written", repo.savedNotes.isEmpty())
+        assertEquals(listOf<SingleNoteEvent>(SingleNoteEvent.DuplicateRefused), events)
+    }
+
+    @Test
+    fun `the editor controller survives a recreated screen with its undo history`() = runTest {
+        EditorFlags.enable()
+        repo.noteById.value = blocksNote("one")
+        val vm = viewModel()
+        advanceUntilIdle()
+
+        // First composition: the screen takes the controller and the editor opens the note in it.
+        val first = vm.editorController(NOTE_ID)
+        first.receive(NOTE_ID, vm.document())
+        first.insertPicture("r1", BlockType.PICTURE)
+        assertTrue(first.canUndo)
+
+        // Rotation: the composition is recreated, the ViewModel is not. The screen asks again.
+        val again = vm.editorController(NOTE_ID)
+        assertSame(first, again)
+        assertTrue("undo history survives", again.canUndo)
+        assertTrue(again.blocks.any { it.id == "pic:r1" })
+        again.undo()
+        assertEquals(listOf("one"), again.blocks.map { it.text })
+
+        // Still fresh per note.
+        val other = vm.editorController("n2")
+        assertNotSame(first, other)
+        assertFalse(other.canUndo)
+        assertTrue(other.blocks.isEmpty())
     }
 
     private fun <T : Any> assertNotNullAndGet(value: T?): T {

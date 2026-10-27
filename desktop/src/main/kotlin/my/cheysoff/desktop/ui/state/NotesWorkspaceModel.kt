@@ -19,7 +19,10 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import my.cheysoff.core_blocks.Block
 import my.cheysoff.core_blocks.BlockCodec
@@ -95,6 +98,9 @@ class NotesWorkspaceModel(
 
     /** Saves launched and not yet finished; [flushAndAwait] joins them. Completion may run off-thread. */
     private val savesInFlight = HashSet<Job>()
+
+    /** Serializes saves; see [persist]. */
+    private val saveMutex = Mutex()
 
     /** The stored row the open draft was last reconciled with. See [mergeIncoming]. */
     private var editorBaseline: Note? = null
@@ -210,10 +216,17 @@ class NotesWorkspaceModel(
 
     fun deleteSelectedNote() {
         val id = _state.value.selectedNoteId ?: return
-        autosaveJob?.cancel()
         val draft = _state.value.editor
         val typed = unsavedBlocks?.takeIf { it.noteId == id }
+        // Typed blocks still waiting for their debounce are written first, so Trash (and Undo out
+        // of it) holds what was on screen, not the body of the last save.
+        if (typed != null && draft != null && draft.id == id && autosaveJob?.isActive == true) {
+            autosaveJob?.cancel()
+            persist(draft)
+        }
+        autosaveJob?.cancel()
         unsavedBlocks = null
+        val savesBefore = synchronized(savesInFlight) { savesInFlight.toList() }
         // A pasted photo or a sketch is content too, even with no text beside it. Read before the
         // selection is cleared, which empties both lists.
         val hasMedia = _state.value.attachments.isNotEmpty() || _state.value.sketches.isNotEmpty()
@@ -222,6 +235,9 @@ class NotesWorkspaceModel(
             _state.value.copy(selectedNoteId = null, saveStatus = SaveStatus.Idle, viewingAttachmentId = null),
         )
         scope.launch {
+            // After every save already launched, the flush above included, or the delete could
+            // land first and the save would write the note back over it.
+            savesBefore.joinAll()
             // A note that was created and left blank must never reach Trash — it would be a row
             // the user has to clean up for having pressed Ctrl+N by accident.
             val blank = draft != null && draft.isBlank() && (typed == null || BlockText.isEmpty(typed.blocks))
@@ -460,9 +476,14 @@ class NotesWorkspaceModel(
     /**
      * Writes [draft]. With block edits pending for it, the body is those blocks as BLOCKS, built
      * only by [BlocksSave.encodeForSave] and saved against the editor's base; the repository stamps
-     * and merges it (see `BlocksSave`). Without, the body is the draft's, which is the stored body as
-     * last emitted (the user never edits [EditorDraft.content]; the editor reports blocks), so a
-     * title-only save leaves the body as it is.
+     * and merges it (see `BlocksSave`). Without, it is a title/metadata save: the stored row is read
+     * fresh, under [saveMutex], and only the title, pin, favorite and folder are applied to it, as
+     * the phone does. The draft's body is the stored body as last EMITTED, and a block the store
+     * merged in since (a sync, or an earlier save's merge) would be reverted or, sent without a
+     * base, tombstoned by writing it back.
+     *
+     * Every save goes through [saveMutex], so a title save can never read the row before an
+     * earlier block save of the same note has written it.
      */
     private fun persist(draft: EditorDraft) {
         val typed = unsavedBlocks?.takeIf { it.noteId == draft.id && draft.unreadableBody == null }
@@ -478,7 +499,23 @@ class NotesWorkspaceModel(
         // whole debounce behind the editor.
         latestNotes = latestNotes.map { if (it.id == note.id) note else it }
         _state.value = recompute(_state.value.copy(saveStatus = SaveStatus.Saved(note.updatedAt)))
-        val save = scope.launch { repository.saveNote(note, blocksBase) }
+        val save = scope.launch {
+            saveMutex.withLock {
+                val toSave = if (typed != null) {
+                    note
+                } else {
+                    val stored = repository.getNoteById(note.id).first() ?: note
+                    stored.copy(
+                        title = note.title,
+                        isPinned = note.isPinned,
+                        isFavorite = note.isFavorite,
+                        folderId = note.folderId,
+                        updatedAt = note.updatedAt,
+                    )
+                }
+                repository.saveNote(toSave, blocksBase)
+            }
+        }
         synchronized(savesInFlight) { savesInFlight += save }
         save.invokeOnCompletion { synchronized(savesInFlight) { savesInFlight -= save } }
     }

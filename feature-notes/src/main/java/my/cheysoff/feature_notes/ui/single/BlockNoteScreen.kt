@@ -100,7 +100,6 @@ import my.cheysoff.core_domain.sketch.Sketch
 import my.cheysoff.core_domain.sketch.sketchesForDisplay
 import my.cheysoff.core_editor.ui.BlockEditor
 import my.cheysoff.core_editor.ui.BlockEditorController
-import my.cheysoff.core_editor.ui.rememberBlockEditorController
 import my.cheysoff.core_ui.attachment.AttachmentThumbnail
 import my.cheysoff.core_ui.sketch.SketchRenderer
 import my.cheysoff.core_ui.theme.AppBlack
@@ -144,6 +143,7 @@ internal fun BlockNoteScreen(
     onIntent: (SingleNoteIntent) -> Unit,
     loadAttachment: suspend (String) -> AttachmentData?,
     onColorMixed: (Long) -> Unit,
+    editorController: (noteId: String) -> BlockEditorController,
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
@@ -153,9 +153,10 @@ internal fun BlockNoteScreen(
     val currentOnIntent by rememberUpdatedState(onIntent)
 
     val opened = state.blockDocument
-    // One controller per note, keyed on its id. Held here, above the canvas and viewer branches
-    // below (each returns and so unmounts the editor), because both delete through it.
-    val controller = opened?.let { rememberBlockEditorController(it.noteId) }
+    // One controller per note, keyed on its id, from the ViewModel so it survives rotation (undo
+    // history and unsaved typing kept). Taken here, above the canvas and viewer branches below
+    // (each returns and so unmounts the editor), because both delete through it.
+    val controller = opened?.let { remember(it.noteId) { editorController(it.noteId) } }
     val loaded = controller?.isLoaded() == true
     // Pictures and drawings may be added only to a readable body whose editor has opened it; the
     // ViewModel refuses an import otherwise too, before writing anything.

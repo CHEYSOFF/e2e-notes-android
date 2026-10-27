@@ -8,6 +8,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -26,6 +27,7 @@ import my.cheysoff.core_blocks.OpenDocument
 import my.cheysoff.core_domain.model.AttachmentData
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.model.NoteContentFormat
+import my.cheysoff.core_domain.model.NotesSortOrder
 import my.cheysoff.core_domain.model.SketchData
 import my.cheysoff.core_domain.repository.NotesRepository
 import kotlinx.coroutines.flow.first
@@ -66,6 +68,23 @@ class NotesWorkspaceBlocksTest {
         val inner: InMemoryNotesRepository,
     ) : NotesRepository by inner {
         val saves = mutableListOf<Pair<Note, String?>>()
+
+        /**
+         * While true, a note flow obtained BEFORE it was set emits nothing: the model's open-note
+         * subscription goes stale, as when the store has merged something in that the model has
+         * not been told about yet. A flow obtained while it is set (a fresh read) sees the store.
+         */
+        var holdEmissions = false
+
+        override fun getNoteById(id: String): Flow<Note?> {
+            val fresh = holdEmissions
+            return inner.getNoteById(id).filter { fresh || !holdEmissions }
+        }
+
+        override fun getNotes(sortOrder: NotesSortOrder): Flow<List<Note>> {
+            val fresh = holdEmissions
+            return inner.getNotes(sortOrder).filter { fresh || !holdEmissions }
+        }
 
         override suspend fun saveNote(note: Note, blocksBase: String?) {
             saves += note to blocksBase
@@ -283,6 +302,58 @@ class NotesWorkspaceBlocksTest {
         assertEquals(NoteContentFormat.BLOCKS, saved.contentFormat)
         assertEquals(BlocksSave.encodeForSave(edited), saved.content)
         assertNull(blocksBase)
+    }
+
+    @Test
+    fun `a title-only save keeps a body the store merged in after the last emission`() = runTest {
+        val body = BlocksSave.encodeForSave(listOf(Block("a", BlockType.PARAGRAPH, text = "one")))
+        val repository = RecordingRepository(
+            InMemoryNotesRepository(listOf(note("n1", content = body, format = NoteContentFormat.BLOCKS))),
+        )
+        val model = model(repository)
+        advanceUntilIdle()
+        model.selectNote("n1")
+        advanceUntilIdle()
+
+        // A sync merges a block into the stored row; the model's subscription has not caught up.
+        repository.holdEmissions = true
+        val merged = BlocksSave.encodeForSave(
+            listOf(Block("a", BlockType.PARAGRAPH, text = "one"), Block("b", BlockType.PARAGRAPH, text = "synced")),
+        )
+        repository.inner.saveNote(note("n1", content = merged, format = NoteContentFormat.BLOCKS), null)
+        repository.saves.clear()
+
+        model.setTitle("Renamed")
+        advanceUntilIdle()
+
+        val (saved, blocksBase) = repository.saves.single()
+        assertEquals("Renamed", saved.title)
+        assertEquals("the stored body is kept, not the draft's stale one", merged, saved.content)
+        assertNull(blocksBase)
+        repository.holdEmissions = false
+        val stored = repository.inner.getNoteById("n1").first()!!
+        assertEquals("Renamed", stored.title)
+        assertEquals(merged, stored.content)
+    }
+
+    @Test
+    fun `deleting a note right after typing puts what was on screen in Trash`() = runTest {
+        val repository = RecordingRepository(InMemoryNotesRepository(listOf(note("n1"))))
+        val model = model(repository)
+        advanceUntilIdle()
+        model.selectNote("n1")
+        advanceUntilIdle()
+        val base = model.state.value.editor!!.blocks!!
+        val edited = base.visible().map { it.copy(text = "typed just now") }
+
+        model.onBlocksChanged("n1", edited, base) // still inside the save debounce
+        model.deleteSelectedNote()
+        advanceUntilIdle()
+
+        val trashed = repository.inner.getDeletedNotes().first().single()
+        assertEquals("n1", trashed.id)
+        assertEquals(NoteContentFormat.BLOCKS, trashed.contentFormat)
+        assertEquals(BlocksSave.encodeForSave(edited), trashed.content)
     }
 
     @Test

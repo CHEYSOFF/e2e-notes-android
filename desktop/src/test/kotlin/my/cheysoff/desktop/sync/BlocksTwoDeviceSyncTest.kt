@@ -15,7 +15,6 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import my.cheysoff.core_blocks.Block
 import my.cheysoff.core_blocks.BlockCodec
-import my.cheysoff.core_blocks.BlockDocument
 import my.cheysoff.core_blocks.BlockIds
 import my.cheysoff.core_blocks.BlockMerge
 import my.cheysoff.core_blocks.BlockType
@@ -28,8 +27,7 @@ import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.core_domain.model.NotesSortOrder
 import my.cheysoff.core_domain.sync.SyncRecord
 import my.cheysoff.core_editor.EditorFlags
-import my.cheysoff.core_editor.EditorModel
-import my.cheysoff.core_editor.RemoteApply
+import my.cheysoff.core_editor.ui.BlockEditorController
 import my.cheysoff.core_sync_codec.RecordCodec
 import my.cheysoff.core_sync_engine.ChangePage
 import my.cheysoff.core_sync_engine.IncomingRecord
@@ -234,35 +232,28 @@ class BlocksTwoDeviceSyncTest {
         val model = model(); settle()
         model.selectNote("n"); settle()
 
-        // The editor as BlockEditor wires it: the first document opens the note, every later store
-        // emission for it is offered to RemoteApply and applied (nothing typed, so nothing waits).
-        val editor = EditorModel(BlockDocument(emptyList()))
-        val remote = RemoteApply(editor, now = { wall })
-        var loaded = false
+        // The real editor controller, fed every store emission for the note exactly as BlockEditor
+        // feeds it (its LaunchedEffect calls receive): the first opens the note, every later one
+        // is a synced change applied through the controller's own RemoteApply path.
+        val controller = BlockEditorController("n")
         val collector = CoroutineScope(StandardTestDispatcher(testScheduler) + Job()).also { scopes += it }
         collector.launch {
             model.state.mapNotNull { s -> s.editor?.takeIf { it.id == "n" }?.blocks }.distinctUntilChanged().collect { doc ->
-                if (!loaded) {
-                    remote.noteLoaded(doc)
-                    loaded = true
-                } else {
-                    remote.offer(doc)
-                    remote.tick(lastLocalEditAt = Long.MIN_VALUE)
-                }
+                controller.receive("n", doc)
             }
         }
         settle()
-        assertTrue(loaded)
-        assertEquals(false, editor.blocks().first { it.id == "milk" }.done)
+        assertTrue(controller.blocks.isNotEmpty())
+        assertEquals(false, controller.blocks.first { it.id == "milk" }.done)
 
         phoneEdits("n") { blocks -> blocks.map { if (it.id == "milk") it.copy(done = true) else it } }
         syncPhone(); syncLaptop(); settle()
 
-        assertEquals(true, editor.blocks().first { it.id == "milk" }.done)
-        assertTrue(!remote.hasPending)
+        assertEquals(true, controller.blocks.first { it.id == "milk" }.done)
+        assertTrue("a remote change is never an undo step", !controller.canUndo)
 
         // Typing after the tick, saved against the editor's base, keeps the tick on both devices.
-        model.onBlocksChanged("n", editor.blocks().map { if (it.id == "intro") it.copy(text = "Shopping list") else it }, remote.base)
+        model.onBlocksChanged("n", controller.blocks.map { if (it.id == "intro") it.copy(text = "Shopping list") else it }, controller.base)
         settle()
         syncLaptop(); syncPhone()
         val expected = listOf("p:Shopping list:false:null", "check:milk:true:null")
