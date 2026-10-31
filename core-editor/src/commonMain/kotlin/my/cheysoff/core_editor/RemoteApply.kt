@@ -190,7 +190,12 @@ class RemoteApply(
             if (sameContent(mine, b) || !remoteChanged(b.id)) continue
             // A text line turned picture or back under the same id cannot happen (picture ids are
             // "pic:"/"drw:" + record), and has no edit whose id outcome is certain. Left as is.
-            if (Markers.isPictureType(mine.type) || Markers.isPictureType(b.type)) continue
+            if (Markers.isPictureType(mine.type) || Markers.isPictureType(b.type)) {
+                // What a picture line's content can change by is its size, kept beside the text.
+                if (mine.type != b.type) continue
+                if (held(b.id)) deferred += b.id else model.setPictureSize(b.id, b.size)
+                continue
+            }
             if (held(b.id)) deferred += b.id else edits.rewrite(b.id, b)
         }
 

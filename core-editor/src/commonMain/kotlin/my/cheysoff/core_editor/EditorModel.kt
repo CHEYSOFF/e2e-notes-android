@@ -63,6 +63,24 @@ class EditorModel(initial: BlockDocument) {
     val refs: Map<String, String>
         get() = pictures.mapNotNull { (id, info) -> info.ref?.let { id to it } }.toMap()
 
+    /** Sizes of the picture and drawing lines not at full size: block id to percent (see [Block.size]). */
+    val pictureSizes: Map<String, Int>
+        get() = pictures.mapNotNull { (id, info) -> info.size?.let { id to it } }.toMap()
+
+    /**
+     * Sets picture line [id]'s size (a percent, see [Block.size]; null or 100 and over is full
+     * size). The size lives beside the text, like the record, so this is no text edit: callers
+     * record it in the history themselves (see [EditorCommands.resizePicture]). Returns whether it
+     * changed.
+     */
+    fun setPictureSize(id: String, size: Int?): Boolean {
+        val info = pictures[id] ?: return false
+        val normal = normalSize(size)
+        if (info.size == normal) return false
+        pictures = pictures + (id to PictureInfo(info.type, info.ref, normal))
+        return true
+    }
+
     /** The picture/drawing lines currently shown, by block id. A line id is a picture iff it is here. */
     private var pictures: Map<String, PictureInfo> by mutableStateOf(emptyMap())
 
@@ -104,7 +122,7 @@ class EditorModel(initial: BlockDocument) {
         for (line in project(doc)) {
             val b = line.block
             if (lineIds.isNotEmpty()) text.append('\n')
-            if (Markers.isPictureType(b.type)) shown[b.id] = PictureInfo(b.type, b.ref)
+            if (Markers.isPictureType(b.type)) shown[b.id] = PictureInfo(b.type, b.ref, b.size)
             val content = lineContent(b)
             text.append(content)
             placeStyles(b.spans, text.length - b.text.length, styles)
@@ -140,7 +158,7 @@ class EditorModel(initial: BlockDocument) {
         for (b in doc.visible()) {
             if (Markers.isPictureType(b.type)) {
                 if (!seen.add(b.id)) continue
-                out += ProjectedLine(Block(b.id, b.type, ref = b.ref), b, b.id)
+                out += ProjectedLine(Block(b.id, b.type, ref = b.ref, size = normalSize(b.size)), b, b.id)
                 continue
             }
             val first = seen.add(b.id)
@@ -201,7 +219,7 @@ class EditorModel(initial: BlockDocument) {
             val (type, done) = Markers.typeOf(lineText)
             val picture = shown[id]
             val read = if (picture != null && Markers.isPictureType(type)) {
-                Block(id, picture.type, ref = picture.ref)
+                Block(id, picture.type, ref = picture.ref, size = picture.size)
             } else {
                 val (plain, index) = stripPrivateUse(lineText)
                 val spans = spanStyles(TextRange(line.start, line.end)).flatMap { r ->
@@ -219,8 +237,8 @@ class EditorModel(initial: BlockDocument) {
     private fun carryOver(read: Block): Block {
         val old = loaded[read.id] ?: return read
         val same = old.type == read.type && old.text == read.text && old.done == read.done &&
-            old.ref == read.ref && old.spans == read.spans
-        return if (same) old else old.copy(type = read.type, text = read.text, spans = read.spans, done = read.done, ref = read.ref)
+            old.ref == read.ref && old.size == read.size && old.spans == read.spans
+        return if (same) old else old.copy(type = read.type, text = read.text, spans = read.spans, done = read.done, ref = read.ref, size = read.size)
     }
 
     /**
@@ -268,10 +286,10 @@ class EditorModel(initial: BlockDocument) {
      * @throws IllegalArgumentException if [type] is not a picture type, or [id] is already shown
      *   or already staged.
      */
-    fun stagePicture(id: String, type: BlockType, ref: String) {
+    fun stagePicture(id: String, type: BlockType, ref: String, size: Int? = null) {
         require(Markers.isPictureType(type)) { "not a picture type: $type" }
         requireFree(id)
-        stagedPictures.addLast(id to PictureInfo(type, ref))
+        stagedPictures.addLast(id to PictureInfo(type, ref, normalSize(size)))
     }
 
     private fun requireFree(id: String) {
@@ -505,7 +523,13 @@ private class Derived(
     val unusedStaged: Int,
 )
 
-private class PictureInfo(val type: BlockType, val ref: String?)
+private class PictureInfo(val type: BlockType, val ref: String?, val size: Int? = null)
+
+/** The smallest a picture can be made, in percent of its full size. */
+internal const val MIN_PICTURE_SIZE = 25
+
+/** [size] as the editor holds it: clamped to [MIN_PICTURE_SIZE], with full size (100 or more) as null. */
+internal fun normalSize(size: Int?): Int? = size?.coerceAtLeast(MIN_PICTURE_SIZE)?.takeIf { it < 100 }
 
 /**
  * One line as [EditorModel.project] makes it. [source] is the block as given, for the line that

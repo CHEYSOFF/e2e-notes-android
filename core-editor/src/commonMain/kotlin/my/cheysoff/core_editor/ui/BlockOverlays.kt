@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,6 +58,7 @@ internal fun BlockOverlays(
     drag: PictureDrag,
     accent: Color,
     textColor: Color,
+    sizing: PictureSizing,
     pictureContent: @Composable (recordId: String, kind: BlockType) -> Unit,
 ) {
     // Placed from the last layout that matched the text (see LaidOutText), never dropped while a
@@ -83,7 +85,24 @@ internal fun BlockOverlays(
                     // A block saved without `ref` still names its record in its id ("pic:<record>").
                     val ref = refs[id] ?: id.substringAfter(':')
                     val kind = if (marker == Markers.DRAWING) BlockType.DRAWING else BlockType.PICTURE
-                    PictureOverlay(controller, layout, drag, lines[k], id, accent) { pictureContent(ref, kind) }
+                    val scale = pictureScale(controller.model.pictureSizes[id])
+                    val sel = controller.model.state.selection
+                    val selected = line.start in sel.min until sel.max
+                    PictureOverlay(controller, layout, drag, lines[k], id, accent, scale, selected) {
+                        CompositionLocalProvider(LocalPictureSelected provides selected) { pictureContent(ref, kind) }
+                    }
+                    // Only for a picture selected alone: a wider selection is about its text.
+                    val alone = sel.min == line.start && sel.max == line.start + 1
+                    if (selected && alone && drag.dragging != id) {
+                        val row = layout.getLineForOffset(line.start)
+                        val top = layout.getLineTop(row)
+                        val bottom = layout.getLineBottom(row)
+                        val width = layout.size.width.toFloat()
+                        when (sizing) {
+                            PictureSizing.Handle -> PictureResizeHandle(controller, id, width * scale, bottom, width, accent)
+                            PictureSizing.Presets -> PictureSizeBar(controller, id, top, bottom, accent)
+                        }
+                    }
                 }
                 marker == Markers.CHECK_OPEN || marker == Markers.CHECK_DONE -> {
                     val done = marker == Markers.CHECK_DONE
@@ -145,7 +164,10 @@ internal fun BlockOverlays(
     }
 }
 
-/** A picture or drawing over its marker line, filling the line, and draggable to another gap. */
+/**
+ * A picture or drawing over its marker line: as tall as the line, as wide as the field times
+ * [scale] (its size), and draggable to another gap.
+ */
 @Composable
 private fun PictureOverlay(
     controller: BlockEditorController,
@@ -154,14 +176,14 @@ private fun PictureOverlay(
     at: Line,
     id: String,
     accent: Color,
+    scale: Float,
+    selected: Boolean,
     content: @Composable () -> Unit,
 ) {
     val line = layout.getLineForOffset(at.start)
     val top = layout.getLineTop(line)
     val bottom = layout.getLineBottom(line)
     val density = LocalDensity.current
-    val sel = controller.model.state.selection
-    val selected = at.start in sel.min until sel.max
     val dragging = drag.dragging == id
     with(density) {
         Box(
@@ -170,7 +192,7 @@ private fun PictureOverlay(
                     val d = if (dragging) drag.delta else Offset.Zero
                     IntOffset(d.x.roundToInt(), (top + d.y).roundToInt())
                 }
-                .width((layout.size.width / density.density).dp)
+                .width((layout.size.width * scale / density.density).dp)
                 .height(((bottom - top) / density.density).dp)
                 .testTag("picture-$id")
                 .pictureDragGesture(

@@ -19,7 +19,7 @@ import my.cheysoff.core_domain.sync.Hlc
 
 /**
  * The v1 JSON form of a [BlockDocument]:
- * `{"v":1,"blocks":[{"id","t","text","spans":[[start,end,"b"]],"done","ref","pos","c","pc"}],"gone":[{"id","c","pos"?,"pc"?}]}`.
+ * `{"v":1,"blocks":[{"id","t","text","spans":[[start,end,"b"]],"done","ref"?,"w"?,"pos","c","pc"}],"gone":[{"id","c","pos"?,"pc"?}]}`.
  *
  * Encoding is canonical -- keys in schema order, spans sorted by (start, end, style), tombstones by
  * id, blocks by (pos, id); span ties by InlineStyle declaration order -- because the merge breaks clock ties by comparing encoded JSON, and
@@ -74,6 +74,8 @@ object BlockCodec {
         put("done", b.done)
         // Omitted rather than null: most blocks have no ref and a null key is noise in every body.
         if (b.ref != null) put("ref", b.ref)
+        // Omitted at full size, so every body written before pictures could be resized encodes as it did.
+        if (b.size != null) put("w", b.size)
         put("pos", b.pos)
         put("c", b.clock.toString())
         put("pc", b.posClock.toString())
@@ -120,6 +122,7 @@ object BlockCodec {
             spans = spans,
             done = o["done"]?.jsonPrimitive?.booleanOrNull ?: false,
             ref = o["ref"]?.jsonPrimitive?.contentOrNull,
+            size = o["w"]?.let { it.jsonPrimitive.intOrNull ?: return null },
             pos = o["pos"]?.jsonPrimitive?.content ?: "",
             clock = clockOf(o["c"]) ?: return null,
             posClock = clockOf(o["pc"]) ?: return null,

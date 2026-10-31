@@ -29,7 +29,8 @@ import my.cheysoff.core_editor.lineRanges
  *   or number marker gets [MarkerSpacing] of letter spacing; a checklist marker gets room for the
  *   [CheckBoxSize] box plus a [CheckGap] before its text.
  * - A picture or drawing line is its one marker, sized to make the line [pictureHeight] tall,
- *   which is where the overlay draws the picture.
+ *   scaled by its size ([pictureScale] of the line's index), which is where the overlay draws the
+ *   picture.
  * - Headings are sized and bold.
  * - A ticked item's text is struck through and greyed.
  * - Paragraph spacing: every line break carries a transparent span [LineGap] taller than the body
@@ -43,17 +44,18 @@ internal class EditorStyling(
     private val pictureHeight: Dp,
     private val fontScale: Float,
     private val doneColor: Color,
+    private val pictureScale: (line: Int) -> Float = { 1f },
 ) : OutputTransformation {
 
     override fun TextFieldBuffer.transformOutput() {
         val text = asCharSequence()
-        for (line in lineRanges(text)) {
+        for ((k, line) in lineRanges(text).withIndex()) {
             if (line.end < text.length) addStyle(lineBreak, line.end, line.end + 1)
             if (line.start == line.end || !Markers.isPrivateUse(text[line.start])) continue
             val (type, done) = Markers.typeOf(text.subSequence(line.start, line.end))
             val markerEnd = line.start + 1
             when (type) {
-                BlockType.PICTURE, BlockType.DRAWING -> addStyle(pictureMarker, line.start, markerEnd)
+                BlockType.PICTURE, BlockType.DRAWING -> addStyle(pictureMarker(pictureScale(k)), line.start, markerEnd)
                 BlockType.H1, BlockType.H2, BlockType.H3 -> {
                     addStyle(Transparent, line.start, markerEnd)
                     if (line.end > markerEnd) addStyle(heading(type), markerEnd, line.end)
@@ -72,9 +74,9 @@ internal class EditorStyling(
 
     // A font's line is about 1.17 times its size; the overlay uses the laid-out line, so this need
     // only be close. Divided by the font scale because sp grow with it and the picture should not.
-    private val pictureMarker = SpanStyle(
+    private fun pictureMarker(scale: Float) = SpanStyle(
         color = Color.Transparent,
-        fontSize = (pictureHeight.value / LineFactor / fontScale).sp,
+        fontSize = (pictureHeight.value * scale / LineFactor / fontScale).sp,
     )
 
     private val listMarker = SpanStyle(color = Color.Transparent, letterSpacing = MarkerSpacing)

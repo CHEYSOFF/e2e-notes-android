@@ -42,6 +42,22 @@ class BlockStampingTest {
     }
 
     @Test
+    fun `resizing a picture stamps its content clock, so the size syncs`() {
+        val prior = prior()
+        val edited = prior.blocks.map { if (it.id == "pic:r1") it.copy(size = 50) else it }
+
+        val doc = BlockStamping.stamp(prior, edited, t1)
+
+        val pic = doc.blocks.first { it.id == "pic:r1" }
+        assertEquals(50, pic.size)
+        assertEquals(t1, pic.clock)
+        assertEquals(t0, pic.posClock)
+        assertEquals(t0, doc.blocks.first { it.id == "a" }.clock)
+        // And the newer size wins a merge with the older one.
+        assertEquals(50, BlockMerge.mergeDocs(prior, doc).blocks.first { it.id == "pic:r1" }.size)
+    }
+
+    @Test
     fun `span order alone is not an edit`() {
         val spans = listOf(StyleSpan(0, 1, InlineStyle.BOLD), StyleSpan(1, 2, InlineStyle.ITALIC))
         val prior = BlockDocument(listOf(para("a", "xy", "a").copy(spans = spans)))

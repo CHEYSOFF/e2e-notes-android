@@ -39,7 +39,7 @@ data class StyleSpan(val start: Int, val end: Int, val style: InlineStyle)
  * One paragraph, list item, picture or drawing.
  *
  * Two clocks, not one, so that a move and an edit made on different devices both survive:
- * [clock] covers the content (type, text, spans, done, ref) and [posClock] covers [pos] alone.
+ * [clock] covers the content (type, text, spans, done, ref, size) and [posClock] covers [pos] alone.
  * [pos] is a fractional-index string; blocks are ordered by `(pos, id)`.
  */
 data class Block(
@@ -50,6 +50,11 @@ data class Block(
     val done: Boolean = false,
     /** The attachment or sketch record id, for [BlockType.PICTURE] and [BlockType.DRAWING]. */
     val ref: String? = null,
+    /**
+     * A picture's or drawing's size, as a percentage (25 to 99) of its full size; null is full
+     * size. Content, like [ref]: covered by [clock].
+     */
+    val size: Int? = null,
     val pos: String = "",
     val clock: Hlc = Hlc.ZERO,
     val posClock: Hlc = Hlc.ZERO,
@@ -92,7 +97,7 @@ class BlockDocument(blocks: List<Block>, val gone: List<Tombstone> = emptyList()
             val a = blocks[i]
             val b = other.blocks[i]
             a.id == b.id && a.type == b.type && a.text == b.text && a.spans == b.spans &&
-                a.done == b.done && a.ref == b.ref
+                a.done == b.done && a.ref == b.ref && a.size == b.size
         }
 
     override fun equals(other: Any?): Boolean =

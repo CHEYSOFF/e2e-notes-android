@@ -22,6 +22,7 @@ class BlockCodecTest {
                 spans = InlineStyle.entries.map { StyleSpan(0, 2, it) },
                 done = type == BlockType.CHECK,
                 ref = if (type == BlockType.PICTURE) "rec-1" else null,
+                size = if (type == BlockType.PICTURE) 50 else null,
                 pos = "a$i",
                 clock = hlc(100L + i, i),
                 posClock = hlc(200L + i, i, "n2"),
@@ -32,6 +33,15 @@ class BlockCodecTest {
         val decoded = BlockCodec.decode(BlockCodec.encode(doc))
 
         assertEquals(doc, decoded)
+    }
+
+    @Test
+    fun `a full-size picture is written without a size, and a malformed size is refused`() {
+        val full = Block("pic:r", BlockType.PICTURE, ref = "r", pos = "a")
+        val json = BlockCodec.encode(BlockDocument(listOf(full)))
+        assertFalse("\"w\"" in json, json)
+        assertTrue("\"w\":40" in BlockCodec.encode(BlockDocument(listOf(full.copy(size = 40)))))
+        assertNull(BlockCodec.decode(json.replace("\"ref\":\"r\"", "\"ref\":\"r\",\"w\":\"big\"")))
     }
 
     @Test

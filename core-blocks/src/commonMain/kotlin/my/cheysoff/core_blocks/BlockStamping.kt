@@ -49,7 +49,7 @@ object BlockStamping {
             val contentChanged = old == null || !sameContent(old, b)
             result += if (contentChanged) {
                 Block(
-                    id = b.id, type = b.type, text = b.text, spans = b.spans, done = b.done, ref = b.ref,
+                    id = b.id, type = b.type, text = b.text, spans = b.spans, done = b.done, ref = b.ref, size = b.size,
                     pos = finalPos[i]!!, clock = clock, posClock = if (moved) clock else old?.posClock ?: clock,
                 )
             } else {
@@ -72,7 +72,7 @@ object BlockStamping {
 
     /** Spans compare as sets: their order carries no meaning, so reordering alone is not an edit. */
     private fun sameContent(a: Block, b: Block) =
-        a.type == b.type && a.text == b.text && a.done == b.done && a.ref == b.ref &&
+        a.type == b.type && a.text == b.text && a.done == b.done && a.ref == b.ref && a.size == b.size &&
             a.spans.toSet() == b.spans.toSet()
 
     /**

@@ -165,6 +165,22 @@ class BlockEditorController internal constructor(
     /** Ticks or unticks the checklist item on line [line]. */
     internal fun toggleCheck(line: Int) = local { EditorCommands.toggleCheck(model, line) }
 
+    /**
+     * Resizes picture or drawing line [id] to [size] percent (null: full size) as one local,
+     * undoable change. [from] is the size a drag started at: the drag shows its sizes through
+     * [previewPictureSize] as it goes, and the whole drag is still one undo step back to [from].
+     */
+    internal fun resizePicture(id: String, size: Int?, from: Int? = model.pictureSizes[id]) {
+        if (!loaded) return
+        model.setPictureSize(id, from)
+        local { EditorCommands.resizePicture(model, id, size) }
+    }
+
+    /** Shows picture line [id] at [size] during a drag, unsaved and unrecorded; [resizePicture] ends it. */
+    internal fun previewPictureSize(id: String, size: Int?) {
+        if (loaded) model.setPictureSize(id, size)
+    }
+
     /** Moves the picture on line [from] to gap [toGap]; see [EditorCommands.movePicture]. */
     internal fun movePicture(from: Int, toGap: Int) = local { EditorCommands.movePicture(model, from, toGap) }
 

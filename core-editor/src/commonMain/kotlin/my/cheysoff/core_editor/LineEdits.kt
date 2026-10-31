@@ -63,7 +63,7 @@ internal class LineEdits(private val model: EditorModel) {
         val picture = Markers.isPictureType(block.type)
         step("insert")
         if (picture) {
-            model.stagePicture(block.id, block.type, block.ref ?: block.id.substringAfter(':'))
+            model.stagePicture(block.id, block.type, block.ref ?: block.id.substringAfter(':'), block.size)
         } else {
             model.stageText(block.id)
         }
@@ -214,4 +214,5 @@ internal fun lineContent(block: Block) = (Markers.of(block.type, block.done)?.to
 
 /** Whether two blocks read the same in the editor; ids, positions and clocks aside. */
 internal fun sameContent(x: Block, y: Block) =
-    x.type == y.type && x.text == y.text && x.spans == y.spans && x.done == y.done && x.ref == y.ref
+    x.type == y.type && x.text == y.text && x.spans == y.spans && x.done == y.done && x.ref == y.ref &&
+        x.size == y.size

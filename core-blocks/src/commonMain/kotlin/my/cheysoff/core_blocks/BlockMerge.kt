@@ -11,7 +11,7 @@ import my.cheysoff.core_domain.sync.Hlc
  *
  * ## The rule, per block id
  *
- * - **Content** (type, text, spans, done, ref) comes from the block with the greater content clock `c`.
+ * - **Content** (type, text, spans, done, ref, size) comes from the block with the greater content clock `c`.
  * - **Position** comes from the greater position clock `pc`. Candidates are the live blocks *and*
  *   the tombstones, because a tombstone remembers where its block last was.
  * - **Tombstone** clock is the greater of the two.

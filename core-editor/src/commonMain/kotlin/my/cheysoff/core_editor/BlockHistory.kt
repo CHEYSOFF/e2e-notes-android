@@ -266,8 +266,11 @@ class BlockHistory(private val model: EditorModel, private val now: () -> Long) 
         var caretAfter: String? = null
         for (t in targets) {
             val snap = t.snap ?: continue
-            if (t.id in model.ids && !Markers.isPictureType(snap.block.type)) {
-                if (edits.rewrite(t.id, snap.block)) caretAfter = t.id
+            if (t.id !in model.ids) continue
+            if (Markers.isPictureType(snap.block.type)) {
+                model.setPictureSize(t.id, snap.block.size)
+            } else if (edits.rewrite(t.id, snap.block)) {
+                caretAfter = t.id
             }
         }
         for (t in targets.filter { it.snap != null }.sortedBy { it.snap!!.index }) {

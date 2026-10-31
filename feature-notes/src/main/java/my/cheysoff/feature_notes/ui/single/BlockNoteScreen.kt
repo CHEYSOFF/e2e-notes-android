@@ -100,6 +100,8 @@ import my.cheysoff.core_domain.sketch.Sketch
 import my.cheysoff.core_domain.sketch.sketchesForDisplay
 import my.cheysoff.core_editor.ui.BlockEditor
 import my.cheysoff.core_editor.ui.BlockEditorController
+import my.cheysoff.core_editor.ui.LocalPictureSelected
+import my.cheysoff.core_editor.ui.PictureSizing
 import my.cheysoff.core_ui.attachment.AttachmentThumbnail
 import my.cheysoff.core_ui.sketch.SketchRenderer
 import my.cheysoff.core_ui.theme.AppBlack
@@ -445,6 +447,7 @@ private fun BlockNoteBody(
                 selectionAccent = accent,
                 textStyle = bodyStyle.copy(color = Color(0xFFB9B9BD)),
                 placeholder = { Text("Start writing…", style = bodyStyle, color = Color(0xFF4A4A50)) },
+                pictureSizing = PictureSizing.Presets,
             )
         }
 
@@ -665,19 +668,25 @@ private fun NotePicture(
 }
 
 /**
- * Calls [onOpen] on a tap that stays a tap. Deliberately not `clickable`/`detectTapGestures`:
+ * Calls [onOpen] on a tap that stays a tap, on a picture already selected: the first tap selects
+ * it (showing its size buttons), the next opens it. Deliberately not `clickable`/`detectTapGestures`:
  * those consume the press, and the editor's own overlay around this content needs it -- its tap
  * selects the picture and its long-press drag moves it. This only watches: [waitForUpOrCancellation]
  * returns null once anything consumed the gesture (a drag, or the note scrolling), so moving a
  * picture or scrolling past it never opens it.
  */
-private fun Modifier.openOnTap(key: Any, onOpen: () -> Unit): Modifier =
-    pointerInput(key) {
+@Composable
+private fun Modifier.openOnTap(key: Any, onOpen: () -> Unit): Modifier {
+    val selected by rememberUpdatedState(LocalPictureSelected.current)
+    return pointerInput(key) {
         awaitEachGesture {
             awaitFirstDown(requireUnconsumed = false)
-            if (waitForUpOrCancellation() != null) onOpen()
+            // Read at the press: the editor's own tap selects the picture on release.
+            val wasSelected = selected
+            if (waitForUpOrCancellation() != null && wasSelected) onOpen()
         }
     }
+}
 
 @Composable
 private fun PicturePlaceholder(text: String) {

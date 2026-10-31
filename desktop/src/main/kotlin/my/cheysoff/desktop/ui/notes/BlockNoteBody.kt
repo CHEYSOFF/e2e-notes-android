@@ -23,7 +23,9 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,6 +45,7 @@ import my.cheysoff.core_domain.model.AttachmentData
 import my.cheysoff.core_domain.sketch.DisplaySketch
 import my.cheysoff.core_editor.ui.BlockEditor
 import my.cheysoff.core_editor.ui.BlockEditorController
+import my.cheysoff.core_editor.ui.LocalPictureSelected
 import my.cheysoff.desktop.ui.attachment.DesktopImportResult
 import my.cheysoff.desktop.ui.attachment.decodeAttachmentImage
 import my.cheysoff.desktop.ui.state.EditorDraft
@@ -234,20 +237,26 @@ private fun NotePicture(
 }
 
 /**
- * Calls [onOpen] on a click that stays a click. Deliberately not `clickable`/`detectTapGestures`:
+ * Calls [onOpen] on a click that stays a click, on a picture already selected: the first click
+ * selects it (showing its resize handle), the next opens it. Deliberately not `clickable`/`detectTapGestures`:
  * those consume the press, and the editor's own overlay around this content needs it too -- its tap
  * selects the picture (so Delete acts on it) and its drag moves it. This only watches: it fires when
  * the press is released without the drag having consumed the movement
  * ([waitForUpOrCancellation] returns null once anything consumed a change), so moving a picture
  * never opens the viewer.
  */
-private fun Modifier.openOnClick(attachment: AttachmentData, onOpen: (AttachmentData) -> Unit): Modifier =
-    pointerInput(attachment.id) {
+@Composable
+private fun Modifier.openOnClick(attachment: AttachmentData, onOpen: (AttachmentData) -> Unit): Modifier {
+    val selected by rememberUpdatedState(LocalPictureSelected.current)
+    return pointerInput(attachment.id) {
         awaitEachGesture {
             awaitFirstDown(requireUnconsumed = false)
-            if (waitForUpOrCancellation() != null) onOpen(attachment)
+            // Read at the press: the editor's own tap selects the picture on release.
+            val wasSelected = selected
+            if (waitForUpOrCancellation() != null && wasSelected) onOpen(attachment)
         }
     }
+}
 
 /**
  * Whether this controller has opened its note. [BlockEditorController.base] is documented to throw

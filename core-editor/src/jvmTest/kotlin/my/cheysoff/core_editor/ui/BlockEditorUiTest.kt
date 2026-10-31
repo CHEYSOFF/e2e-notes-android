@@ -349,6 +349,92 @@ class BlockEditorUiTest {
     }
 
     @Test
+    fun `a selected picture's corner handle resizes it as one undoable change`() = runComposeUiTest {
+        EditorFlags.enable()
+        val changes = mutableListOf<List<Block>>()
+        val controller = BlockEditorController("n1")
+        setContent {
+            BlockEditor(
+                "n1", doc(text, picture, number), { changes += it },
+                { _, _ -> Box(Modifier.fillMaxSize()) }, Modifier.width(400.dp), controller,
+            )
+        }
+        waitForIdle()
+        onNodeWithTag("picture-resize-pic:r1").assertDoesNotExist()
+        onNodeWithTag("picture-pic:r1").performMouseInput { click(center) }
+        waitForIdle()
+        val full = onNodeWithTag("picture-pic:r1").getBoundsInRoot()
+
+        onNodeWithTag("picture-resize-pic:r1").performMouseInput {
+            moveTo(center)
+            press()
+            moveBy(Offset(-10f, 0f))
+            moveBy(Offset(-(200.dp.toPx() - 10f), 0f)) // half the field's width
+            release()
+        }
+        waitForIdle()
+
+        assertEquals(50, changes.last().first { it.id == "pic:r1" }.size)
+        assertEquals(1, changes.size, "the drag is one change, not one per move")
+        val half = onNodeWithTag("picture-pic:r1").getBoundsInRoot()
+        assertClose(200.dp, half.right - half.left, "width")
+        assertClose((full.bottom - full.top) / 2, half.bottom - half.top, "height")
+        assertClose(full.left, half.left, "it stays at the left")
+
+        controller.undo()
+        waitForIdle()
+        val back = onNodeWithTag("picture-pic:r1").getBoundsInRoot()
+        assertClose(400.dp, back.right - back.left, "undone width")
+    }
+
+    @Test
+    fun `the size buttons resize a selected picture`() = runComposeUiTest {
+        EditorFlags.enable()
+        val changes = mutableListOf<List<Block>>()
+        val controller = BlockEditorController("n1")
+        setContent {
+            BlockEditor(
+                "n1", doc(text, picture.copy(size = 75), number), { changes += it },
+                { _, _ -> Box(Modifier.fillMaxSize()) }, Modifier.width(400.dp), controller,
+                pictureSizing = PictureSizing.Presets,
+            )
+        }
+        waitForIdle()
+        onNodeWithTag("picture-sizes-pic:r1").assertDoesNotExist()
+        onNodeWithTag("picture-pic:r1").performClick()
+        waitForIdle()
+
+        onNodeWithTag("picture-size-S-pic:r1").performClick()
+        waitForIdle()
+        assertEquals(25, changes.last().first { it.id == "pic:r1" }.size)
+        onNodeWithTag("picture-pic:r1").getBoundsInRoot().let { assertClose(100.dp, it.right - it.left, "S width") }
+
+        onNodeWithTag("picture-size-Full-pic:r1").performClick()
+        waitForIdle()
+        assertEquals(null, changes.last().first { it.id == "pic:r1" }.size)
+        onNodeWithTag("picture-pic:r1").getBoundsInRoot().let { assertClose(400.dp, it.right - it.left, "Full width") }
+    }
+
+    @Test
+    fun `the editor tells picture content whether its picture is selected`() = runComposeUiTest {
+        EditorFlags.enable()
+        val controller = BlockEditorController("n1")
+        var selected = false
+        setContent {
+            BlockEditor(
+                "n1", doc(text, picture, number), {},
+                { _, _ -> selected = LocalPictureSelected.current; Box(Modifier.fillMaxSize()) },
+                Modifier.width(400.dp), controller,
+            )
+        }
+        waitForIdle()
+        assertFalse(selected)
+        onNodeWithTag("picture-pic:r1").performClick()
+        waitForIdle()
+        assertTrue(selected)
+    }
+
+    @Test
     fun `typing and Ctrl+Z are local edits reported through onChange`() = runComposeUiTest {
         EditorFlags.enable()
         val changes = mutableListOf<List<Block>>()

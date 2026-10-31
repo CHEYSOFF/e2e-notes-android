@@ -60,6 +60,8 @@ val DefaultEditorAccent = Color(0xFF7C5CFF)
  * - [pictureContent] draws a picture or drawing record into the space its line takes. It must
  *   cope with a record it cannot resolve (not synced yet, failed to decode) by drawing a
  *   placeholder; the block itself stays and is saved as it is.
+ * - [pictureSizing] is how a selected picture or drawing is resized: a corner handle to drag
+ *   (mouse) or a row of size buttons (touch). Either way the size syncs as part of the block.
  * - [selectionAccent] colours the selection handles and cursor, and at 30 % alpha the selection
  *   background; pass the app theme's primary.
  *
@@ -80,6 +82,7 @@ fun BlockEditor(
     textStyle: TextStyle = TextStyle(color = Color(0xFF1F1D2B), fontSize = 16.sp),
     pictureHeight: Dp = 200.dp,
     placeholder: (@Composable () -> Unit)? = null,
+    pictureSizing: PictureSizing = PictureSizing.Handle,
 ) {
     SideEffect { controller.onChange = onChange }
 
@@ -113,8 +116,12 @@ fun BlockEditor(
     val density = LocalDensity.current
     val textColor = textStyle.color.takeIf { it != Color.Unspecified } ?: Color.Black
     val bodySize = if (textStyle.fontSize.isUnspecified) 16.sp else textStyle.fontSize
-    val styling = remember(bodySize, pictureHeight, density.fontScale, textColor) {
-        EditorStyling(bodySize, pictureHeight, density.fontScale, textColor.copy(alpha = 0.45f))
+    // Keyed on the sizes, so a resize lays the field out again with the picture's line resized.
+    val sizes = controller.model.pictureSizes
+    val styling = remember(bodySize, pictureHeight, density.fontScale, textColor, sizes) {
+        EditorStyling(bodySize, pictureHeight, density.fontScale, textColor.copy(alpha = 0.45f)) { k ->
+            pictureScale(controller.model.ids.getOrNull(k)?.let(sizes::get))
+        }
     }
     val input = remember(controller) { EditingRules(controller.model).then(ReportLocalEdits(controller)) }
     val drag = remember(controller, controller.loadedNote) { PictureDrag() }
@@ -152,7 +159,7 @@ fun BlockEditor(
                 },
             )
             controller.laidOut?.let { view ->
-                BlockOverlays(controller, view, drag, selectionAccent, textColor, pictureContent)
+                BlockOverlays(controller, view, drag, selectionAccent, textColor, pictureSizing, pictureContent)
             }
             drag.slot?.let { DropIndicator(it, selectionAccent) }
         }

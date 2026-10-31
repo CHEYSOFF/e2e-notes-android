@@ -208,6 +208,18 @@ object EditorCommands {
     }
 
     /**
+     * Sets picture or drawing line [id] to [size] percent (see `Block.size`) as one local change.
+     * Returns whether the size changed.
+     */
+    fun resizePicture(model: EditorModel, id: String, size: Int?): Boolean {
+        val history = model.history
+        val before = model.blocks()
+        if (!model.setPictureSize(id, size)) return false
+        history?.recordLocal(before, model.blocks())
+        return true
+    }
+
+    /**
      * Rewrites the field's inline styles with [change] applied to the selected text. [change] gets
      * the selected pieces of each line's text, never a marker or line break, and each style's runs
      * as field offsets. Every inline style is then re-placed per line through [placeStyles], the

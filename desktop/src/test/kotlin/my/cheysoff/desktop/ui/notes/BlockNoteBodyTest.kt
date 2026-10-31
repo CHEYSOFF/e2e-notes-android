@@ -108,13 +108,17 @@ class BlockNoteBodyTest {
     }
 
     @Test
-    fun `clicking a picture opens the viewer for its record`() = runComposeUiTest {
+    fun `the first click on a picture selects it, showing its handle, and the next opens it`() = runComposeUiTest {
         val opened = mutableListOf<String>()
         showBody(opened)
 
         onNodeWithTag("picture-pic:r1").performMouseInput { click(center) }
         waitForIdle()
+        assertTrue("selecting is not opening", opened.isEmpty())
+        onNodeWithTag("picture-resize-pic:r1").assertIsDisplayed()
 
+        onNodeWithTag("picture-pic:r1").performMouseInput { click(center) }
+        waitForIdle()
         assertEquals(listOf("r1"), opened)
     }
 
