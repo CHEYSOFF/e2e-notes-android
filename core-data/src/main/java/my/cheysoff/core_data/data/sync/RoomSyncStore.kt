@@ -4,6 +4,8 @@ import androidx.room.withTransaction
 import my.cheysoff.core_data.data.local.AttachmentDao
 import my.cheysoff.core_data.data.local.AttachmentEntity
 import my.cheysoff.core_data.data.local.DIRTY_ATTACHMENT_PAGE
+import my.cheysoff.core_data.data.local.DIRTY_EVENT_PAGE
+import my.cheysoff.core_data.data.local.EventDao
 import my.cheysoff.core_data.data.local.FolderDao
 import my.cheysoff.core_data.data.local.NoteDao
 import my.cheysoff.core_data.data.local.NoteDatabase
@@ -74,6 +76,7 @@ class RoomSyncStore(
     private val folderDao: FolderDao,
     private val sketchDao: SketchDao,
     private val attachmentDao: AttachmentDao,
+    private val eventDao: EventDao,
     private val syncStateDao: SyncStateDao,
     private val accountId: String,
     /**
@@ -144,6 +147,16 @@ class RoomSyncStore(
                 contentBaseline = null,
             )
         }
+
+        RecordType.EVENT -> eventDao.eventRow(uuid)?.let { event ->
+            StoredRecord(
+                record = RecordRows.toRecord(event),
+                dirty = event.dirty,
+                lastSyncedSeq = event.lastSyncedSeq,
+                // A description is not a body in the conflict-copy sense -- see RecordType.EVENT.
+                contentBaseline = null,
+            )
+        }
     }
 
     /**
@@ -198,7 +211,15 @@ class RoomSyncStore(
                 contentBaseline = null,
             )
         }
-        return (notes + folders + sketches + attachments).sortedWith(
+        val events = eventDao.dirtyEvents(DIRTY_EVENT_PAGE).map { event ->
+            StoredRecord(
+                record = RecordRows.toRecord(event),
+                dirty = true,
+                lastSyncedSeq = event.lastSyncedSeq,
+                contentBaseline = null,
+            )
+        }
+        return (notes + folders + sketches + attachments + events).sortedWith(
             compareBy({ it.record.rowClock }, { it.record.type }, { it.record.uuid }),
         )
     }
@@ -282,6 +303,30 @@ class RoomSyncStore(
                     lastSyncedSeq = write.seq,
                 )
                 attachmentDao.upsertAttachment(reconcileAttachmentAgainstNote(incoming))
+            }
+
+            // No reconciler, deliberately. An event is not a child of a note: `linkedNoteId` is a
+            // back-reference, and an event written beside a note survives that note being trashed.
+            // Running either note reconciler here would silently tombstone standalone events on
+            // every device the moment their note went to Trash.
+            RecordType.EVENT -> {
+                val existing = eventDao.eventRow(write.record.uuid)
+                eventDao.upsertEvent(
+                    RecordRows.toEventEntity(
+                        record = write.record,
+                        createdAt = RecordRows.createdAtFor(
+                            existing = existing?.createdAt,
+                            remote = write.remoteCreatedAt,
+                            record = write.record,
+                        ),
+                        // Preserved rather than blanked, exactly as for an attachment: `meta` is
+                        // opaque to this build, and a build that does not understand a value must
+                        // carry it rather than tidy it away.
+                        meta = write.remoteMeta ?: existing?.meta.orEmpty(),
+                        dirty = write.dirty,
+                        lastSyncedSeq = write.seq,
+                    )
+                )
             }
         }
 
@@ -554,6 +599,8 @@ class RoomSyncStore(
         RecordType.SKETCH -> sketchDao.recordSketchSeen(uuid, seq)
 
         RecordType.ATTACHMENT -> attachmentDao.recordAttachmentSeen(uuid, seq)
+
+        RecordType.EVENT -> eventDao.recordEventSeen(uuid, seq)
     }
 
     /**
@@ -593,6 +640,14 @@ class RoomSyncStore(
         )
 
         RecordType.ATTACHMENT -> attachmentDao.acknowledgeAttachmentPush(
+            uuid = uuid,
+            seq = seq,
+            sealedMs = sealedRowClock.ms,
+            sealedCounter = sealedRowClock.counter,
+            sealedNode = sealedRowClock.node,
+        )
+
+        RecordType.EVENT -> eventDao.acknowledgeEventPush(
             uuid = uuid,
             seq = seq,
             sealedMs = sealedRowClock.ms,

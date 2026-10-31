@@ -130,12 +130,13 @@ class RecordPayloadCodecTest {
     }
 
     /**
-     * A body written by a different `richeditor` escapes text differently. Refusing rather than
+     * A body written by a different HTML serializer escapes text differently. Refusing rather than
      * re-saving is what stops this build from rewriting it at version 1 and mangling it.
      */
     @Test
     fun `a newer content-serializer version is refused`() {
-        val text = encoded().replaceFirst("\"serializer\":1", "\"serializer\":2")
+        // 3, not 2: serializer 2 now means BLOCKS (see BlocksSerializerVersionTest).
+        val text = encoded().replaceFirst("\"serializer\":1", "\"serializer\":3")
         assertTrue(decode(text) is PayloadResult.UnsupportedVersion)
     }
 

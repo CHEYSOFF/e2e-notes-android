@@ -1,0 +1,72 @@
+package my.cheysoff.feature_notes
+
+import my.cheysoff.core_blocks.Block
+import my.cheysoff.core_blocks.BlockCodec
+import my.cheysoff.core_blocks.BlockDocument
+import my.cheysoff.core_blocks.BlockType
+import my.cheysoff.core_domain.model.Note
+import my.cheysoff.core_domain.model.NoteContentFormat
+import my.cheysoff.feature_notes.model.list.searchPreviews
+import my.cheysoff.feature_notes.model.list.toUi
+import my.cheysoff.feature_notes.model.single.ChecklistItem
+import my.cheysoff.feature_notes.model.single.buildNoteShareText
+import org.junit.Assert.assertEquals
+import org.junit.Test
+
+class BlocksBodyReadersTest {
+
+    private val body = BlockCodec.encode(
+        BlockDocument(
+            listOf(
+                Block(id = "a", type = BlockType.PARAGRAPH, text = "Trip plan", pos = "a"),
+                Block(id = "b", type = BlockType.CHECK, text = "buy tickets", pos = "b"),
+            ),
+        ),
+    )
+
+    private fun note(content: String = body) =
+        Note(id = "n", title = "T", content = content, contentFormat = NoteContentFormat.BLOCKS)
+
+    @Test
+    fun `a BLOCKS note shows readable text in the list snippet and is found by search`() {
+        val preview = note().toUi()
+        assertEquals("Trip plan\n☐ buy tickets", preview.content)
+        val hits = searchPreviews(listOf(preview), "tickets")
+        assertEquals(listOf("n"), hits.map { it.preview.id })
+    }
+
+    @Test
+    fun `an undecodable BLOCKS body shows its raw text`() {
+        assertEquals("{broken", note("{broken").toUi().content)
+    }
+
+    @Test
+    fun `share text for a BLOCKS note reads the blocks and keeps a leftover checklist`() {
+        val text = buildNoteShareText(
+            title = "T",
+            content = body,
+            format = NoteContentFormat.BLOCKS,
+            checklist = listOf(ChecklistItem(id = "c1", text = "old item", isDone = true)),
+        )
+        assertEquals("T\n\nTrip plan\n☐ buy tickets\n\n[x] old item", text)
+    }
+
+    @Test
+    fun `share text for an HTML note carries its text, never its markup`() {
+        // The pre-blocks editor wrote HTML; the note screen shares the stored body before the
+        // editor has loaded it, so the reader has to turn markup into text itself.
+        val text = buildNoteShareText(
+            title = "T",
+            content = "<h1>Trip&period;</h1><ul><li>Email &lt;a@b.c&gt;</li></ul>",
+            format = NoteContentFormat.HTML,
+            checklist = listOf(ChecklistItem(id = "c1", text = "pack", isDone = false)),
+        )
+        assertEquals("T\n\nTrip.\n• Email <a@b.c>\n\n[ ] pack", text)
+    }
+
+    @Test
+    fun `share text for a PLAIN note is its text as stored`() {
+        val text = buildNoteShareText("T", "a <b> c", NoteContentFormat.PLAIN, emptyList())
+        assertEquals("T\n\na <b> c", text)
+    }
+}

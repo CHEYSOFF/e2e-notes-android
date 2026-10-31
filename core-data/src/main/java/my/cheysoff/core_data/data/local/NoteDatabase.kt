@@ -15,12 +15,13 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * stale the moment the next migration lands — which is how Migration4to5Test came to be broken
  * without anyone noticing.
  */
-internal const val NOTE_DATABASE_VERSION = 11
+internal const val NOTE_DATABASE_VERSION = 12
 
 @Database(
     entities = [
         NoteEntity::class, FolderEntity::class, SyncStateEntity::class, SketchEntity::class,
         AttachmentEntity::class,
+        EventEntity::class,
     ],
     version = NOTE_DATABASE_VERSION,
     exportSchema = true,
@@ -31,6 +32,7 @@ abstract class NoteDatabase : RoomDatabase() {
     abstract val syncStateDao: SyncStateDao
     abstract val sketchDao: SketchDao
     abstract val attachmentDao: AttachmentDao
+    abstract val eventDao: EventDao
 
     companion object {
         /**
@@ -343,6 +345,44 @@ abstract class NoteDatabase : RoomDatabase() {
         }
 
         /**
+         * v12 adds `events`, the first record type that is not a child of a note.
+         *
+         * A new table only -- nothing existing is touched, so there is nothing to backfill and no
+         * way for this to lose data. The column list must match `EventEntity` exactly, defaults
+         * included, or Room's schema validation fails at startup rather than at the first sync;
+         * `Migration11to12Test` is what proves it on a real device.
+         *
+         * `recurrence`, `reminders` and `descriptionFormat` are here carrying values this build
+         * never writes. They cannot be added later: `PayloadFields.EVENT_COLUMNS` is frozen once
+         * the first event record reaches a server, and a column added after that halts the account
+         * of every device still on the older build.
+         */
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `events` (" +
+                        "`uuid` TEXT NOT NULL, `title` TEXT NOT NULL, " +
+                        "`startAt` INTEGER NOT NULL, `endAt` INTEGER NOT NULL, " +
+                        "`startLocal` TEXT NOT NULL, `endLocal` TEXT NOT NULL, " +
+                        "`timeZone` TEXT NOT NULL, `isAllDay` INTEGER NOT NULL, " +
+                        "`location` TEXT NOT NULL, `description` TEXT NOT NULL, " +
+                        "`descriptionFormat` TEXT NOT NULL, `reminders` TEXT NOT NULL, " +
+                        "`recurrence` TEXT NOT NULL, `linkedNoteId` TEXT, " +
+                        "`shareToGoogle` INTEGER NOT NULL, `colorArgb` INTEGER, " +
+                        "`createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL, " +
+                        "`isDeleted` INTEGER NOT NULL DEFAULT 0, `deletedAt` INTEGER, " +
+                        "`hlcMs` INTEGER NOT NULL, `hlcCounter` INTEGER NOT NULL, " +
+                        "`hlcNode` TEXT NOT NULL, `fieldHlc` TEXT NOT NULL DEFAULT '', " +
+                        "`dirty` INTEGER NOT NULL DEFAULT 1, `lastSyncedSeq` INTEGER NOT NULL DEFAULT 0, " +
+                        "`meta` TEXT NOT NULL DEFAULT '', " +
+                        "PRIMARY KEY(`uuid`))"
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_events_startAt` ON `events` (`startAt`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_events_linkedNoteId` ON `events` (`linkedNoteId`)")
+            }
+        }
+
+        /**
          * Every migration above, in order. `DataModule` spreads this into Room's builder instead
          * of listing the fields a second time, so the chain the app ships with cannot be missing a
          * step that exists here.
@@ -370,6 +410,7 @@ abstract class NoteDatabase : RoomDatabase() {
             MIGRATION_8_9,
             MIGRATION_9_10,
             MIGRATION_10_11,
+            MIGRATION_11_12,
         )
     }
 }

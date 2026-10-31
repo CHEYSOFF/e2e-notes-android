@@ -107,6 +107,8 @@ fun MananaWindow(
     var sidebarWidth by remember { mutableStateOf(WindowGeometry.sidebarWidth()) }
     var sidebarVisible by remember { mutableStateOf(true) }
     val titleFocus = remember { FocusRequester() }
+    // A second close request while the first is waiting on its flush must not exit twice.
+    var closing by remember { mutableStateOf(false) }
 
     // The clock the whole UI formats "3 h ago" against. Held in state and ticked rather than read
     // at each recomposition, so every relative timestamp on screen agrees with every other one and
@@ -127,21 +129,26 @@ fun MananaWindow(
     }
 
     Window(
-        onCloseRequest = {
-            // The debounce may still be holding the last few keystrokes; closing must not eat them.
-            model.flushPendingSave()
-            WindowGeometry.save(
-                width = windowState.size.width,
-                height = windowState.size.height,
-                x = windowState.position.takeIf { it.isSpecified }?.x,
-                y = windowState.position.takeIf { it.isSpecified }?.y,
-                maximized = windowState.placement == WindowPlacement.Maximized,
-                sidebarWidth = sidebarWidth,
-            )
-            onExit()
+        onCloseRequest = close@{
+            if (closing) return@close
+            closing = true
+            // The debounce may still be holding the last few keystrokes, and a save may still be
+            // in flight; exiting before they land would eat them. flushThen waits (bounded) first.
+            model.flushThen {
+                WindowGeometry.save(
+                    width = windowState.size.width,
+                    height = windowState.size.height,
+                    x = windowState.position.takeIf { it.isSpecified }?.x,
+                    y = windowState.position.takeIf { it.isSpecified }?.y,
+                    maximized = windowState.placement == WindowPlacement.Maximized,
+                    sidebarWidth = sidebarWidth,
+                )
+                onExit()
+            }
         },
         state = windowState,
         title = "Mañana",
+        icon = MananaIcon,
         // Preview, not `onKeyEvent`: these have to fire while a text field has focus, and a
         // focused field consumes the ordinary event before the window ever sees it.
         onPreviewKeyEvent = { event ->
@@ -180,7 +187,8 @@ fun MananaWindow(
                 sidebarVisible = sidebarVisible,
                 titleFocus = titleFocus,
                 onNewNote = ::newNote,
-                onLock = onLock,
+                // Locking closes the store; the pending save has to land first (see flushThen).
+                onLock = { model.flushThen(onLock) },
                 isRemembered = isRemembered,
                 onToggleRemember = onToggleRemember,
                 syncLabel = syncLabel,

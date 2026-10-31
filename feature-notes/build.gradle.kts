@@ -12,7 +12,7 @@ kotlin {
 
 android {
     namespace = "my.cheysoff.feature_notes"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 24
@@ -42,11 +42,16 @@ android {
 dependencies {
     implementation(project(":core-ui"))
     implementation(project(":core-domain"))
+    implementation(project(":core-blocks"))
+    // The shared block editor (Task 15): the note body on the BLOCKS path.
+    implementation(project(":core-editor"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
     implementation(libs.androidx.activity.compose)
+    // LocalLifecycleOwner, for the block path's flush of a pending save on ON_STOP.
+    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
@@ -56,7 +61,6 @@ dependencies {
     implementation(libs.hilt.android)
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.androidx.compose.runtime.saveable)
-    implementation(libs.richeditor.compose)
     ksp(libs.hilt.compiler)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

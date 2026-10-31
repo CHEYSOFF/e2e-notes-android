@@ -68,6 +68,7 @@ class AttachmentSyncStoreTest {
             folderDao = database.folderDao,
             sketchDao = database.sketchDao,
             attachmentDao = database.attachmentDao,
+        eventDao = database.eventDao,
             syncStateDao = database.syncStateDao,
             accountId = "acct-1",
             clockObserver = ClockObserver {

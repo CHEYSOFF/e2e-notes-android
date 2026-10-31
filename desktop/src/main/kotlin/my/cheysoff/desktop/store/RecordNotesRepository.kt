@@ -16,9 +16,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import my.cheysoff.core_blocks.BlockDocument
+import my.cheysoff.core_blocks.BlocksSave
+import my.cheysoff.core_blocks.PictureLifecycle
 import my.cheysoff.core_domain.model.AttachmentData
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.Note
+import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.core_domain.model.NotesSortOrder
 import my.cheysoff.core_domain.model.SketchData
 import my.cheysoff.core_domain.model.TrashPolicy
@@ -224,6 +228,14 @@ class RecordNotesRepository private constructor(
 
                             RecordType.ATTACHMENT -> AttachmentRecords.fromPayload(payload)
                                 ?.let { attachments[it.attachment.id] = it } ?: malformed++
+
+                            // Stored but not shown. This build understands the type well enough to
+                            // keep its envelope -- `RecordSyncStore` writes every record opaquely,
+                            // so nothing is lost and no cursor is skipped -- and has no calendar
+                            // surface to render it on yet. Deliberately not counted as malformed
+                            // (which freezes the cursor) nor as an unknown type (which is a claim
+                            // about the protocol, not about this window).
+                            RecordType.EVENT -> Unit
                         }
                     }
                 }
@@ -343,13 +355,22 @@ class RecordNotesRepository private constructor(
      * the phone's statement ignores them, and for the reason its KDoc gives: callers build a [Note]
      * out of what the editor is holding, so those fields arrive at their defaults and would wipe
      * the stored values. `createdAt` is preserved unless it is the legacy 0 sentinel.
+     *
+     * A BLOCKS note's body is stamped per block against the editor's base ([blocksBase], else the
+     * stored body) and merged into the stored body, its checklist field is cleared when the save
+     * carries the editor's base (else kept; see `BlocksSave.Write`), and its
+     * pictures and drawings follow the saved blocks -- see [blocksBody] and [reconcilePictures].
+     * The phone's `RoomNotesRepository.saveNote` does the same, through the
+     * same `BlocksSave` and `PictureLifecycle`.
      */
-    override suspend fun saveNote(note: Note): Unit = write { snapshot ->
+    override suspend fun saveNote(note: Note, blocksBase: String?): Unit = write { snapshot ->
         val now = clock()
         val stamp = hlc.next(now)
         val existing = snapshot.notes[note.id]
+        val body = if (note.contentFormat == NoteContentFormat.BLOCKS) blocksBody(existing?.note, note, blocksBase, stamp) else null
+        val incoming = body?.note ?: note
         val updated = if (existing == null) {
-            note.copy(
+            incoming.copy(
                 createdAt = now,
                 updatedAt = now,
                 isFavorite = false,
@@ -358,17 +379,103 @@ class RecordNotesRepository private constructor(
             )
         } else {
             existing.note.copy(
-                title = note.title,
-                content = note.content,
-                contentFormat = note.contentFormat,
-                checklist = note.checklist,
-                isPinned = note.isPinned,
-                folderId = note.folderId,
+                title = incoming.title,
+                content = incoming.content,
+                contentFormat = incoming.contentFormat,
+                checklist = incoming.checklist,
+                isPinned = incoming.isPinned,
+                folderId = incoming.folderId,
                 updatedAt = now,
                 createdAt = if (existing.note.createdAt == 0L) now else existing.note.createdAt,
             )
         }
-        snapshot.putNote(existing, updated, stamp, SAVE_NOTE_FIELDS)
+        val next = snapshot.putNote(existing, updated, stamp, savedNoteFields(existing?.note, updated))
+        body?.saved?.let { next.reconcilePictures(note.id, body.base, it, now) } ?: next
+    }
+
+    /**
+     * What a BLOCKS save stores -- the port of `RoomNotesRepository.blocksBody`, deciding through
+     * the same shared `BlocksSave`: the stamped-and-merged body, and the checklist
+     * `BlocksSave.Write.checklistToStore` picks -- empty only when the save carried the editor's base,
+     * whose document `OpenDocument` folded the items into; the stored one otherwise, so a title-only
+     * save cannot destroy a leftover checklist. [BlocksBody.saved] is null when the stored body is
+     * kept because it is a BLOCKS body this build cannot read; the checklist is kept with it, since
+     * nothing else holds its items, and no picture is reconciled against a document not written.
+     */
+    private fun blocksBody(prior: Note?, note: Note, blocksBase: String?, stamp: Hlc): BlocksBody =
+        when (val out = BlocksSave.prepare(prior?.contentFormat, prior?.content.orEmpty(), note.content, stamp, blocksBase)) {
+            is BlocksSave.Write -> {
+                out.warning?.let { System.err.println("RecordNotesRepository: note ${note.id}: $it") }
+                // The checklist is cleared only by a save carrying the editor's base; see BlocksSave.Write.
+                val checklist = out.checklistToStore(prior = prior?.checklist, incoming = note.checklist)
+                BlocksBody(note.copy(content = out.content, checklist = checklist), out.doc, out.base)
+            }
+            is BlocksSave.Keep -> {
+                // Keep is only ever returned when a note exists; see BlocksSave.prepare.
+                val kept = prior!!
+                System.err.println("RecordNotesRepository: not overwriting the body of note ${note.id}: ${out.reason}")
+                BlocksBody(
+                    note.copy(content = kept.content, contentFormat = kept.contentFormat, checklist = kept.checklist),
+                    saved = null,
+                    base = null,
+                )
+            }
+        }
+
+    private class BlocksBody(val note: Note, val saved: BlockDocument?, val base: BlockDocument?)
+
+    /**
+     * Soft-deletes the note's pictures and drawings that the editor's [base] showed and the final
+     * [saved] document no longer does, and undeletes the ones [saved] shows again -- the port of
+     * `RoomNotesRepository.reconcilePictures`, inside the same [write] as the note so the body and
+     * its records are never published out of step.
+     *
+     * Each record gets its own clock and a tombstone-only stamp, exactly as [deleteAttachment] and
+     * [deleteSketch] write them; `deletedAt` is the save's own instant. Walked in id order so a save
+     * is the same sequence of writes every time.
+     */
+    private fun Snapshot.reconcilePictures(noteId: String, base: BlockDocument?, saved: BlockDocument, now: Long): Snapshot {
+        val ownAttachments = attachments.values.filter { it.attachment.noteId == noteId }.sortedBy { it.attachment.id }
+        val ownSketches = sketches.values.filter { it.sketch.noteId == noteId }.sortedBy { it.sketch.id }
+        val changes = PictureLifecycle.reconcile(base, saved, ownAttachments.map { it.attachment }, ownSketches.map { it.sketch })
+        var next = this
+        for (row in ownAttachments) {
+            val id = row.attachment.id
+            if (id in changes.delete) {
+                next = next.putAttachment(row, row.attachment.copy(isDeleted = true, deletedAt = now), hlc.next(now), TOMBSTONE_FIELDS)
+            } else if (id in changes.undelete) {
+                next = next.putAttachment(row, row.attachment.copy(isDeleted = false, deletedAt = null), hlc.next(now), TOMBSTONE_FIELDS)
+            }
+        }
+        for (row in ownSketches) {
+            val id = row.sketch.id
+            if (id in changes.delete) {
+                next = next.putSketch(row, row.sketch.copy(isDeleted = true, deletedAt = now), hlc.next(now), TOMBSTONE_FIELDS)
+            } else if (id in changes.undelete) {
+                next = next.putSketch(row, row.sketch.copy(isDeleted = false, deletedAt = null), hlc.next(now), TOMBSTONE_FIELDS)
+            }
+        }
+        return next
+    }
+
+    /**
+     * Which fields this save actually CHANGED -- the port of `RoomNotesRepository.savedNoteFields`.
+     *
+     * Stamping all of [SAVE_NOTE_FIELDS] on every save gives an unchanged field a new clock, so
+     * ticking one checklist box re-asserted the title and body too -- and if the phone had edited
+     * the body meanwhile, this device's older copy won the merge and reverted it on both devices.
+     * Only a field whose value moved gets a clock; the rest keep the one they had.
+     */
+    private fun savedNoteFields(prior: Note?, note: Note): Set<String> {
+        if (prior == null) return SAVE_NOTE_FIELDS
+        val touched = mutableSetOf(FieldClocks.UPDATED_AT)
+        if (prior.title != note.title) touched += FieldClocks.TITLE
+        // One value with one clock, exactly as on the phone.
+        if (prior.content != note.content || prior.contentFormat != note.contentFormat) touched += FieldClocks.CONTENT
+        if (prior.checklist != note.checklist) touched += FieldClocks.CHECKLIST
+        if (prior.isPinned != note.isPinned) touched += FieldClocks.PINNED
+        if (prior.folderId != note.folderId) touched += FieldClocks.FOLDER
+        return touched
     }
 
     /**
@@ -587,8 +694,8 @@ class RecordNotesRepository private constructor(
     /**
      * Soft-deletes one attachment: its own tombstone, its own fresh clock, and nothing else --
      * the exact mirror of [deleteSketch] and of the phone's
-     * `AttachmentsRepository.deleteAttachment`. This is the desktop's only attachment write; see
-     * [DesktopAttachments] for why there is no `saveAttachment` to mirror it.
+     * `AttachmentsRepository.deleteAttachment`. [saveAttachment] (a pasted image) is the
+     * desktop's only other attachment write.
      *
      * A no-op, minting no clock, when [id] is unknown or already trashed -- the same idempotence
      * guard [deleteNote] documents, for the same reason: a second delete must not re-stamp
@@ -603,6 +710,29 @@ class RecordNotesRepository private constructor(
             existing.attachment.copy(isDeleted = true, deletedAt = now),
             hlc.next(now),
             TOMBSTONE_FIELDS,
+        )
+    }
+
+    /**
+     * Stores a new attachment pasted on this computer. Every clocked field is stamped, as for any
+     * row this device creates, and `meta` is `""` because this build never sets it (see
+     * `AttachmentData.meta`). A second save of an id that already exists is ignored rather than
+     * treated as an edit -- nothing on the desktop edits an attachment.
+     */
+    override suspend fun saveAttachment(attachment: AttachmentData): Unit = write { snapshot ->
+        if (snapshot.attachments.containsKey(attachment.id)) return@write snapshot
+        val now = clock()
+        snapshot.putAttachment(
+            existing = null,
+            attachment = attachment.copy(
+                createdAt = now,
+                updatedAt = now,
+                isDeleted = false,
+                deletedAt = null,
+                meta = "",
+            ),
+            stamp = hlc.next(now),
+            touched = FieldClocks.ATTACHMENT_FIELDS,
         )
     }
 
@@ -710,16 +840,15 @@ class RecordNotesRepository private constructor(
     }
 
     /**
-     * Re-clocks, re-seals and stores an attachment. The exact mirror of [putSketch] -- same shape,
-     * same reasoning, same reason [existing] is never null (the only caller is [deleteAttachment],
-     * which has already confirmed the row exists).
+     * Re-clocks, re-seals and stores an attachment. The mirror of [putSketch] -- same shape, same
+     * reasoning -- except that [existing] is null when [saveAttachment] is creating the row.
      *
      * `meta` rides inside [attachment] and is therefore preserved by construction: this method
      * copies whatever the row held, and [AttachmentRecords] carries it through the payload
      * verbatim. That is what a build which does not understand the column is required to do.
      */
     private fun Snapshot.putAttachment(
-        existing: AttachmentRow,
+        existing: AttachmentRow?,
         attachment: AttachmentData,
         stamp: Hlc,
         touched: Set<String>,
@@ -729,15 +858,15 @@ class RecordNotesRepository private constructor(
             rowClock = stamp,
             clocks = FieldClocks.parse(
                 FieldClocks.stamp(
-                    previousSerialized = FieldClocks.serialize(existing.clocks),
-                    previousRowClock = existing.rowClock,
+                    previousSerialized = FieldClocks.serialize(existing?.clocks.orEmpty()),
+                    previousRowClock = existing?.rowClock,
                     allFields = FieldClocks.ATTACHMENT_FIELDS,
                     touched = touched,
                     newClock = stamp,
                 ),
             ),
-            dirty = existing.dirty,
-            lastSyncedSeq = existing.lastSyncedSeq,
+            dirty = existing?.dirty ?: true,
+            lastSyncedSeq = existing?.lastSyncedSeq ?: 0L,
         )
         val sealed = codec.seal(
             AttachmentRecords.toPayload(row, createdAt = attachment.createdAt),

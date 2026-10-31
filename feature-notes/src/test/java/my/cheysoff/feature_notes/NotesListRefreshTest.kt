@@ -31,9 +31,10 @@ class NotesListRefreshTest {
 
     private val notesRepo = FakeNotesRepository()
     private val settingsRepo = FakeSettingsRepository()
+    private val eventsRepo = FakeEventsRepository()
     private val syncController = FakeSyncController()
 
-    private fun viewModel() = NotesListViewModel(notesRepo, settingsRepo, syncController)
+    private fun viewModel() = NotesListViewModel(notesRepo, settingsRepo, syncController, eventsRepo)
 
     @Test
     fun `pulling down runs a pass, labelled as the manual one`() = runTest {

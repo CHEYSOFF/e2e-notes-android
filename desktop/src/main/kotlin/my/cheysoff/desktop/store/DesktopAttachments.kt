@@ -14,9 +14,8 @@ import my.cheysoff.core_domain.model.AttachmentData
  * the attachment rail does not appear, rather than that build having to fake a whole attachment
  * store for a feature it never exercises.
  *
- * There is no `saveAttachment`, for the reason [DesktopSketches] gives for having no `saveSketch`:
- * importing an image is the phone's job in this plan, so a write seam here would be an untested,
- * unreachable one. The desktop is a render-and-delete replica.
+ * [saveAttachment] has one caller: an image pasted into the editor with Ctrl+V. Picking a file
+ * from disk is still not a desktop feature.
  *
  * [RecordNotesRepository] is the only real implementation.
  */
@@ -30,4 +29,10 @@ interface DesktopAttachments {
      * here — its own tombstone and its own fresh clock, never a hard delete.
      */
     suspend fun deleteAttachment(id: String)
+
+    /**
+     * Stores a brand-new attachment -- the desktop's half of the phone's
+     * `AttachmentsRepository.saveAttachment`, for new rows only.
+     */
+    suspend fun saveAttachment(attachment: AttachmentData)
 }

@@ -12,7 +12,7 @@ kotlin {
 
 android {
     namespace = "my.cheysoff.feature_pairing"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         // Higher than the 24 the other library modules declare, and deliberately equal to the

@@ -1,19 +1,38 @@
 package my.cheysoff.desktop.ui.state
 
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import my.cheysoff.core_blocks.Block
+import my.cheysoff.core_blocks.BlockCodec
+import my.cheysoff.core_blocks.BlockDocument
+import my.cheysoff.core_blocks.BlockText
+import my.cheysoff.core_blocks.BlocksSave
+import my.cheysoff.core_blocks.OpenDocument
 import my.cheysoff.core_domain.model.AttachmentData
+import my.cheysoff.core_domain.sketch.NoteBlocks
+import my.cheysoff.desktop.ui.attachment.DesktopImportResult
 import my.cheysoff.core_domain.model.Folder
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.model.NoteContentFormat
@@ -59,6 +78,14 @@ class NotesWorkspaceModel(
      */
     private val autosaveDelayMillis: Long = 600L,
     private val sortOrder: NotesSortOrder = NotesSortOrder.DEFAULT,
+    /** Where a pasted image is decoded and re-encoded; injected so a test can keep it on its scheduler. */
+    private val encodeDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    /**
+     * The debounce between the block editor's last change and the save. Shorter than
+     * [autosaveDelayMillis] because the editor reports finished blocks, not a field to re-serialise.
+     */
+    private val blocksSaveDelayMillis: Long = 400L,
+    private val log: (String) -> Unit = { System.err.println(it) },
 ) {
     private val _state = MutableStateFlow(WorkspaceUiState())
     val state: StateFlow<WorkspaceUiState> = _state.asStateFlow()
@@ -68,6 +95,40 @@ class NotesWorkspaceModel(
     private var latestFolders: List<Folder> = emptyList()
 
     private var autosaveJob: Job? = null
+
+    /** Saves launched and not yet finished; [flushAndAwait] joins them. Completion may run off-thread. */
+    private val savesInFlight = HashSet<Job>()
+
+    /** Serializes saves; see [persist]. */
+    private val saveMutex = Mutex()
+
+    /** The stored row the open draft was last reconciled with. See [mergeIncoming]. */
+    private var editorBaseline: Note? = null
+
+    /**
+     * The block editor's latest unsaved state, with the base it was edited against, or null when
+     * the last one was written. Captured together at [onBlocksChanged] time, never re-read at save
+     * time: a synced change the editor applies between the edit and the save moves the editor's base
+     * but not these blocks, and stamping old blocks against a newer base would read the synced change
+     * as the user undoing it. Cleared by the save that writes it, for the same reason: re-sending it
+     * later would claim blocks the other device has changed since.
+     */
+    private var unsavedBlocks: UnsavedBlocks? = null
+
+    private class UnsavedBlocks(val noteId: String, val blocks: List<Block>, val base: BlockDocument)
+
+    /**
+     * Ids of pasted pictures whose record is being written but whose block the editor has not
+     * inserted yet. Left out of the assembled document meanwhile, because a record with no block is
+     * otherwise appended at the end by [OpenDocument.assemble] -- the editor would receive it there
+     * first and the insert at the caret would then meet a block it already shows.
+     */
+    private val picturesBeingPlaced = MutableStateFlow<Set<String>>(emptySet())
+
+    /** The last assembled document, re-applied to a draft created after it arrived (see [recompute]). */
+    private var lastOpened: OpenedDocument? = null
+
+    private class OpenedDocument(val noteId: String, val document: BlockDocument, val unreadableBody: String?)
 
     init {
         scope.launch {
@@ -103,6 +164,9 @@ class NotesWorkspaceModel(
                     .collect { list -> _state.value = _state.value.copy(attachments = list) }
             }
         }
+
+        // The open note's document for the block editor; see openedDocuments.
+        scope.launch { openedDocuments().collect(::attachDocument) }
     }
 
     // ---------------------------------------------------------------- list & folders
@@ -117,7 +181,9 @@ class NotesWorkspaceModel(
         flushPendingSave()
         // A viewer left open on the outgoing note's photo must not silently persist over the
         // incoming note -- see WorkspaceUiState.viewingAttachmentId's own KDoc.
-        _state.value = recompute(_state.value.copy(selectedNoteId = noteId, viewingAttachmentId = null))
+        _state.value = recompute(
+            _state.value.copy(selectedNoteId = noteId, viewingAttachmentId = null, pasteFailure = null),
+        )
     }
 
     /**
@@ -150,16 +216,32 @@ class NotesWorkspaceModel(
 
     fun deleteSelectedNote() {
         val id = _state.value.selectedNoteId ?: return
-        autosaveJob?.cancel()
         val draft = _state.value.editor
+        val typed = unsavedBlocks?.takeIf { it.noteId == id }
+        // Typed blocks still waiting for their debounce are written first, so Trash (and Undo out
+        // of it) holds what was on screen, not the body of the last save.
+        if (typed != null && draft != null && draft.id == id && autosaveJob?.isActive == true) {
+            autosaveJob?.cancel()
+            persist(draft)
+        }
+        autosaveJob?.cancel()
+        unsavedBlocks = null
+        val savesBefore = synchronized(savesInFlight) { savesInFlight.toList() }
+        // A pasted photo or a sketch is content too, even with no text beside it. Read before the
+        // selection is cleared, which empties both lists.
+        val hasMedia = _state.value.attachments.isNotEmpty() || _state.value.sketches.isNotEmpty()
         latestNotes = latestNotes.filterNot { it.id == id }
         _state.value = recompute(
             _state.value.copy(selectedNoteId = null, saveStatus = SaveStatus.Idle, viewingAttachmentId = null),
         )
         scope.launch {
+            // After every save already launched, the flush above included, or the delete could
+            // land first and the save would write the note back over it.
+            savesBefore.joinAll()
             // A note that was created and left blank must never reach Trash — it would be a row
             // the user has to clean up for having pressed Ctrl+N by accident.
-            if (draft != null && draft.isBlank()) repository.purgeNote(id) else repository.deleteNote(id)
+            val blank = draft != null && draft.isBlank() && (typed == null || BlockText.isEmpty(typed.blocks))
+            if (blank && !hasMedia) repository.purgeNote(id) else repository.deleteNote(id)
         }
     }
 
@@ -169,38 +251,75 @@ class NotesWorkspaceModel(
 
     fun setNoteFolder(folderId: String?) = mutateSelected { it.copy(folderId = folderId) }
 
-    // ---------------------------------------------------------------- sketches
-
-    /**
-     * Deletes one sketch. There is no undo and no Trash for a sketch (`TrashEntryKind` is
-     * `{NOTE, FOLDER}`), so the confirmation the caller shows before invoking this is the only
-     * safety net -- see [my.cheysoff.desktop.ui.notes.SketchSection].
-     *
-     * Removed from [WorkspaceUiState.sketches] immediately rather than waiting for the repository's
-     * own echo, the same optimism [deleteSelectedNote] applies to the note list -- the row the user
-     * just deleted must not still be on screen while the write is in flight.
-     */
-    fun deleteSketch(id: String) {
-        val port = sketches ?: return
-        _state.value = _state.value.copy(sketches = _state.value.sketches.filterNot { it.id == id })
-        scope.launch { port.deleteSketch(id) }
-    }
-
     // ---------------------------------------------------------------- attachments
 
     /**
-     * Deletes one attachment. There is no undo and no Trash for an attachment (`TrashEntryKind` is
-     * `{NOTE, FOLDER}`), so the confirmation [my.cheysoff.desktop.ui.attachment.AttachmentViewer]
-     * shows before invoking this is the only safety net -- the exact mirror of [deleteSketch].
+     * Attaches a pasted image to the open note, at the end of its body -- the same placement the
+     * phone gives a picked photo: anchored at the note's current block count, next in order there.
      *
-     * Removed from [WorkspaceUiState.attachments] immediately rather than waiting for the
-     * repository's own echo, for the same reason [deleteSketch] does: the row the user just deleted
-     * must not still be on screen while the write is in flight.
+     * [encode] is the slow half (decode, downscale, JPEG) and is expected to have run off the UI
+     * thread already; this only stamps identity and placement and writes. Added to
+     * [WorkspaceUiState.attachments] immediately rather than after the repository's echo.
+     *
+     * The editor passes [onAttached], which gets the new record's id once the record is written, to
+     * place the picture block at the caret. Until then the record is kept out of the assembled
+     * document (see [picturesBeingPlaced]). Without it the record is only written, and the next
+     * assembly appends its picture at the end of the document (`OpenDocument.assemble`).
      */
-    fun deleteAttachment(id: String) {
-        val port = attachments ?: return
-        _state.value = _state.value.copy(attachments = _state.value.attachments.filterNot { it.id == id })
-        scope.launch { port.deleteAttachment(id) }
+    fun pasteImage(
+        // First, so the encode stays the trailing lambda at every existing call site.
+        onAttached: ((recordId: String) -> Unit)? = null,
+        encode: () -> DesktopImportResult,
+    ): Job? {
+        val port = attachments ?: return null
+        val noteId = _state.value.selectedNoteId ?: return null
+        if (onAttached != null) {
+            // A picture is a block of the body. A read-only note has no editable
+            // body to put it in, and a note whose document has not been assembled yet has no editor
+            // to insert it; either way a record written now would be a picture the user did not see
+            // land, appended at the end on the next open. Refused before anything is written.
+            val draft = _state.value.editor?.takeIf { it.id == noteId } ?: return null
+            if (draft.unreadableBody != null || draft.blocks == null) return null
+        }
+        return scope.launch {
+            val result = withContext(encodeDispatcher) { encode() }
+            if (result !is DesktopImportResult.Imported) {
+                _state.value = _state.value.copy(pasteFailure = result)
+                return@launch
+            }
+            val draft = _state.value.editor?.takeIf { it.id == noteId }
+            val anchor = if (draft == null) 0 else NoteBlocks.count(draft.content, draft.contentFormat)
+            val existing = _state.value.attachments
+            val attachment = result.attachment.copy(
+                id = newId(),
+                noteId = noteId,
+                anchor = anchor,
+                order = (existing.filter { it.anchor == anchor }.maxOfOrNull { it.order } ?: -1) + 1,
+                createdAt = now(),
+                updatedAt = now(),
+            )
+            if (_state.value.selectedNoteId == noteId) {
+                _state.value = _state.value.copy(attachments = existing + attachment, pasteFailure = null)
+            }
+            if (onAttached == null) {
+                port.saveAttachment(attachment)
+                return@launch
+            }
+            picturesBeingPlaced.value += attachment.id
+            try {
+                // The record first, then the block: a block must never point at a record that was
+                // not written. If the user has moved to another note meanwhile, the block is not
+                // placed; the record is still the note's, and opening it appends the picture.
+                port.saveAttachment(attachment)
+                if (_state.value.selectedNoteId == noteId) onAttached(attachment.id)
+            } finally {
+                picturesBeingPlaced.value -= attachment.id
+            }
+        }
+    }
+
+    fun dismissPasteFailure() {
+        _state.value = _state.value.copy(pasteFailure = null)
     }
 
     /** Opens the full-screen viewer on [id]. See [WorkspaceUiState.viewingAttachmentId]. */
@@ -209,7 +328,7 @@ class NotesWorkspaceModel(
     }
 
     /**
-     * Moves the viewer [delta] photos along the rail's own order, or does nothing at either end.
+     * Moves the viewer [delta] photos along `orderedForDisplay`'s order, or does nothing at either end.
      *
      * Deliberately does not wrap. Paging off the last photo back to the first reads as the viewer
      * having jumped somewhere rather than as having reached the end, and there is no page indicator
@@ -235,48 +354,18 @@ class NotesWorkspaceModel(
     fun setTitle(title: String) = mutateSelected { it.copy(title = title) }
 
     /**
-     * The rich-text body, as HTML from the editor.
+     * The block editor's [blocks] for note [noteId] after a local edit, with the editor's [base]
+     * at that moment (`BlockEditorController.base`). Saved after [blocksSaveDelayMillis] of quiet,
+     * or at once by [flushPendingSave] when the user switches notes or closes the window.
      *
-     * Writing to the body promotes the row to [NoteContentFormat.HTML] — the same promotion the
-     * Android editor does, and for the same reason: the format is recorded, never guessed.
-     * A body that is still empty stays PLAIN, because an empty body is identical either way and
-     * an HTML-marked empty note would round-trip through a parser for nothing.
+     * Ignored when [noteId] is not the open note (an edit cannot be saved over another note), and
+     * when the open note's body is unreadable (it is read-only; see [EditorDraft.unreadableBody]).
      */
-    fun setContent(html: String) = mutateSelected {
-        it.copy(
-            content = html,
-            contentFormat = if (html.isEmpty()) NoteContentFormat.PLAIN else NoteContentFormat.HTML,
-        )
-    }
-
-    fun addChecklistItem(after: String? = null): String {
-        val id = newId()
-        mutateSelected { draft ->
-            val item = DesktopChecklistItem(id = id, text = "", isDone = false)
-            val at = draft.checklist.indexOfFirst { it.id == after }
-            val items = draft.checklist.toMutableList()
-            if (at >= 0) items.add(at + 1, item) else items.add(item)
-            draft.copy(checklist = items)
-        }
-        return id
-    }
-
-    fun setChecklistItemText(itemId: String, text: String) = mutateSelected { draft ->
-        draft.copy(
-            checklist = draft.checklist.map {
-                // Normalized on the way IN, not just on the way out: the format cannot hold a
-                // newline, so state that held one would not survive its own serialize/parse echo.
-                if (it.id == itemId) it.copy(text = normalizeChecklistText(text)) else it
-            }
-        )
-    }
-
-    fun toggleChecklistItem(itemId: String) = mutateSelected { draft ->
-        draft.copy(checklist = draft.checklist.map { if (it.id == itemId) it.copy(isDone = !it.isDone) else it })
-    }
-
-    fun removeChecklistItem(itemId: String) = mutateSelected { draft ->
-        draft.copy(checklist = draft.checklist.filterNot { it.id == itemId })
+    fun onBlocksChanged(noteId: String, blocks: List<Block>, base: BlockDocument) {
+        val draft = _state.value.editor ?: return
+        if (draft.id != noteId || draft.unreadableBody != null) return
+        unsavedBlocks = UnsavedBlocks(noteId, blocks, base)
+        scheduleSave(draft, blocksSaveDelayMillis)
     }
 
     // ---------------------------------------------------------------- search
@@ -346,26 +435,131 @@ class NotesWorkspaceModel(
         persist(draft)
     }
 
-    private fun scheduleSave(draft: EditorDraft) {
+    /**
+     * [flushPendingSave], then waits until every save already handed to the repository has
+     * finished, for at most [timeoutMillis]. Returns false on timeout.
+     *
+     * For the moments the store is about to go away -- a lock closes it, a window close ends the
+     * process -- where a save that was merely launched would be lost: the debounced keystrokes, or
+     * a write still in flight. The timeout keeps a hung save from hanging the lock or the exit;
+     * losing the last second of typing is better than a window that will not close.
+     */
+    suspend fun flushAndAwait(timeoutMillis: Long = FLUSH_TIMEOUT_MILLIS): Boolean {
+        flushPendingSave()
+        val pending = synchronized(savesInFlight) { savesInFlight.toList() }
+        val done = withTimeoutOrNull(timeoutMillis) { pending.joinAll() } != null
+        if (!done) log("NotesWorkspaceModel: a save did not finish within $timeoutMillis ms; continuing")
+        return done
+    }
+
+    /**
+     * Runs [action] once [flushAndAwait] returns. What the lock button and the window's close
+     * request go through, so neither closes the store under a pending save.
+     */
+    fun flushThen(action: () -> Unit): Job = scope.launch {
+        flushAndAwait()
+        action()
+    }
+
+    private fun scheduleSave(draft: EditorDraft, delayMillis: Long = autosaveDelayMillis) {
         autosaveJob?.cancel()
         _state.value = _state.value.copy(saveStatus = SaveStatus.Pending)
         autosaveJob = scope.launch {
-            delay(autosaveDelayMillis)
-            persist(draft)
+            delay(delayMillis)
+            // The draft as it is NOW, not as it was when the debounce started: a sync landing
+            // inside the window may have merged a remote change into it, and saving the captured
+            // copy would write the older value straight back over that change.
+            persist(_state.value.editor?.takeIf { it.id == draft.id } ?: draft)
         }
     }
 
+    /**
+     * Writes [draft]. With block edits pending for it, the body is those blocks as BLOCKS, built
+     * only by [BlocksSave.encodeForSave] and saved against the editor's base; the repository stamps
+     * and merges it (see `BlocksSave`). Without, it is a title/metadata save: the stored row is read
+     * fresh, under [saveMutex], and only the title, pin, favorite and folder are applied to it, as
+     * the phone does. The draft's body is the stored body as last EMITTED, and a block the store
+     * merged in since (a sync, or an earlier save's merge) would be reverted or, sent without a
+     * base, tombstoned by writing it back.
+     *
+     * Every save goes through [saveMutex], so a title save can never read the row before an
+     * earlier block save of the same note has written it.
+     */
     private fun persist(draft: EditorDraft) {
-        val note = draft.toNote(updatedAt = now())
+        val typed = unsavedBlocks?.takeIf { it.noteId == draft.id && draft.unreadableBody == null }
+        unsavedBlocks = null
+        val plain = draft.toNote(updatedAt = now())
+        val note = if (typed == null) plain else plain.copy(
+            content = BlocksSave.encodeForSave(typed.blocks),
+            contentFormat = NoteContentFormat.BLOCKS,
+        )
+        val blocksBase = typed?.let { BlockCodec.encode(it.base) }
         // The local list is updated ahead of the repository echo so the sidebar row's title and
         // snippet track what is being typed. Waiting for the round trip would make the list lag a
         // whole debounce behind the editor.
         latestNotes = latestNotes.map { if (it.id == note.id) note else it }
         _state.value = recompute(_state.value.copy(saveStatus = SaveStatus.Saved(note.updatedAt)))
-        scope.launch { repository.saveNote(note) }
+        val save = scope.launch {
+            saveMutex.withLock {
+                val toSave = if (typed != null) {
+                    note
+                } else {
+                    val stored = repository.getNoteById(note.id).first() ?: note
+                    stored.copy(
+                        title = note.title,
+                        isPinned = note.isPinned,
+                        isFavorite = note.isFavorite,
+                        folderId = note.folderId,
+                        updatedAt = note.updatedAt,
+                    )
+                }
+                repository.saveNote(toSave, blocksBase)
+            }
+        }
+        synchronized(savesInFlight) { savesInFlight += save }
+        save.invokeOnCompletion { synchronized(savesInFlight) { savesInFlight -= save } }
     }
 
     // ---------------------------------------------------------------- internals
+
+    /**
+     * The open note's document for the block editor, re-assembled whenever the stored row, its
+     * attachments or its sketches change, and dropped for the next note on a switch
+     * (flatMapLatest). Each emission names its note, so [attachDocument] can refuse one that
+     * arrives after the selection moved on.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun openedDocuments(): Flow<OpenedDocument> =
+        state.map { it.selectedNoteId }
+            .distinctUntilChanged()
+            .flatMapLatest { id ->
+                if (id == null) return@flatMapLatest emptyFlow()
+                combine(
+                    repository.getNoteById(id).filterNotNull().distinctUntilChanged(),
+                    attachments?.getAttachmentsForNote(id) ?: flowOf(emptyList()),
+                    sketches?.getSketchesForNote(id) ?: flowOf(emptyList()),
+                    picturesBeingPlaced,
+                ) { note, pictures, drawings, placing ->
+                    OpenedDocument(
+                        noteId = id,
+                        document = OpenDocument.assemble(note, pictures.filterNot { it.id in placing }, drawings),
+                        unreadableBody = note.content.takeIf {
+                            note.contentFormat == NoteContentFormat.BLOCKS && BlockCodec.decode(it) == null
+                        },
+                    )
+                }
+            }
+
+    private fun attachDocument(opened: OpenedDocument) {
+        lastOpened = opened
+        val draft = _state.value.editor ?: return
+        if (draft.id != opened.noteId) return
+        _state.value = _state.value.copy(editor = draft.withDocument(opened))
+    }
+
+    private fun EditorDraft.withDocument(opened: OpenedDocument?): EditorDraft =
+        if (opened == null || opened.noteId != id) this
+        else copy(blocks = opened.document, unreadableBody = opened.unreadableBody)
 
     /**
      * The live list of sketches for whichever note is selected, re-subscribing whenever the
@@ -415,11 +609,19 @@ class NotesWorkspaceModel(
         val rows = currentRows()
         val content = buildListContent(rows, base.selectedFolderId)
         val selected = resolveSelection(content, base.selectedNoteId)
+        val stored = selected?.let { id -> latestNotes.firstOrNull { it.id == id } }
         val editor = when {
             selected == null -> null
-            selected == base.editor?.id -> base.editor
-            else -> latestNotes.firstOrNull { it.id == selected }?.toDraft()
+            selected == base.editor?.id -> base.editor.let { draft ->
+                val baseline = editorBaseline
+                if (stored == null || baseline == null || baseline.id != draft.id) draft
+                else mergeIncoming(draft, baseline, stored)
+            }
+            // A fresh draft picks up a document already assembled for its note, if one arrived
+            // before the draft could exist (the stored row reached getNoteById first).
+            else -> stored?.toDraft()?.withDocument(lastOpened)
         }
+        editorBaseline = if (editor == null) null else stored ?: editorBaseline
         val search =
             if (base.search.isOpen) base.search.copy(hits = searchRows(rows, base.search.query))
             else base.search
@@ -433,6 +635,40 @@ class NotesWorkspaceModel(
             loaded = loaded,
         )
     }
+
+    companion object {
+        /** How long a lock or a window close waits for pending saves; see [flushAndAwait]. */
+        const val FLUSH_TIMEOUT_MILLIS = 2_000L
+    }
+}
+
+/**
+ * The open [draft] after the stored row became [incoming], given the row it was last reconciled
+ * with ([baseline]) -- the desktop twin of the phone's `mergeIncomingNote`.
+ *
+ * Per field: if the draft still holds the baseline value, the user has not touched it since, so
+ * the stored value is taken (a change synced in from the phone, or the echo of our own save, which
+ * is equal anyway). If the user has changed it, their edit stands and will be saved over it.
+ * `content` and `contentFormat` move as one value, as everywhere else.
+ */
+internal fun mergeIncoming(draft: EditorDraft, baseline: Note, incoming: Note): EditorDraft {
+    val bodyUntouched = draft.content == baseline.content && draft.contentFormat == baseline.contentFormat
+    val checklistUntouched = draft.checklist.serializeChecklist() == baseline.checklist
+    return draft.copy(
+        title = if (draft.title == baseline.title) incoming.title else draft.title,
+        content = if (bodyUntouched) incoming.content else draft.content,
+        contentFormat = if (bodyUntouched) incoming.contentFormat else draft.contentFormat,
+        checklist = when {
+            !checklistUntouched -> draft.checklist
+            // Our own echo: keep the items (and their ids, which focus is keyed on) as they are.
+            incoming.checklist == draft.checklist.serializeChecklist() -> draft.checklist
+            else -> parseChecklist(incoming.checklist)
+        },
+        isPinned = if (draft.isPinned == baseline.isPinned) incoming.isPinned else draft.isPinned,
+        isFavorite = if (draft.isFavorite == baseline.isFavorite) incoming.isFavorite else draft.isFavorite,
+        folderId = if (draft.folderId == baseline.folderId) incoming.folderId else draft.folderId,
+        updatedAt = maxOf(draft.updatedAt, incoming.updatedAt),
+    )
 }
 
 private fun Note.toDraft() = EditorDraft(
@@ -464,5 +700,5 @@ internal fun EditorDraft.toNote(updatedAt: Long) = Note(
 /** A draft with nothing in any of the three fields the user can type into. */
 internal fun EditorDraft.isBlank(): Boolean =
     title.isBlank() &&
-        htmlToPlainText(content).isBlank() &&
+        (BlockText.bodyIsBlank(content, contentFormat) ?: htmlToPlainText(content).isBlank()) &&
         checklist.all { it.text.isBlank() }

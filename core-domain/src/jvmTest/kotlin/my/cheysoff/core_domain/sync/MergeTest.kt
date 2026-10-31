@@ -324,6 +324,23 @@ class MergeTest {
     }
 
     /**
+     * The body merger is opt-in. Passed explicitly or left out, [ContentMerger.NONE] declines every
+     * body, so an HTML conflict still takes field LWW and still writes the loser out as a copy.
+     */
+    @Test
+    fun defaultMergerKeepsTodaysBehaviour() {
+        val localRecord = note(rowClock = hlc(10), content = "<p>milk</p>", contentFormat = "html")
+        val remote = note(rowClock = hlc(20), content = "<p>eggs</p>", contentFormat = "html")
+
+        val implicit = Merge.merge(local(localRecord, dirty = true), remote)
+        val explicit = Merge.merge(local(localRecord, dirty = true), remote, ContentMerger.NONE)
+
+        assertTrue(implicit is MergeResult.ConflictCopy)
+        assertEquals(implicit, explicit)
+        assertEquals("<p>eggs</p>", (implicit as MergeResult.ConflictCopy).record.text(FieldClocks.CONTENT))
+    }
+
+    /**
      * Both devices resolving the same conflict build the **same** copy.
      *
      * This is what makes the design docs' "deduplicate on `(uuid, loserContentHlc)`" rule free.

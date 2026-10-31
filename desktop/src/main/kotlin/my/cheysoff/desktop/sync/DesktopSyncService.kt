@@ -1,5 +1,6 @@
 package my.cheysoff.desktop.sync
 
+import my.cheysoff.core_blocks.BlockMerge
 import my.cheysoff.core_sync_codec.EnvelopeSyncTransport
 import my.cheysoff.core_sync_codec.RecordCodec
 import my.cheysoff.core_sync_engine.ClockObserver
@@ -63,6 +64,8 @@ class DesktopSyncService(
             metaOf = syncStore::metaOf,
         ),
         clock = clockObserver,
+        // Two devices' edits to one BLOCKS body merge per block instead of one winning.
+        contentMerger = BlockMerge,
     )
 
     /**

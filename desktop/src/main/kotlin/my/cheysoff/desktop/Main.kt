@@ -11,6 +11,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import my.cheysoff.core_editor.EditorFlags
 import my.cheysoff.desktop.app.AppController
 import my.cheysoff.desktop.app.DesktopSyncState
 import my.cheysoff.desktop.keychain.CredentialStores
@@ -18,6 +19,7 @@ import my.cheysoff.desktop.platform.HostOs
 import my.cheysoff.desktop.ui.AccountInviteScreen
 import my.cheysoff.desktop.ui.CreatePassphraseScreen
 import my.cheysoff.desktop.ui.DamagedScreen
+import my.cheysoff.desktop.ui.MananaIcon
 import my.cheysoff.desktop.ui.FirstRunScreen
 import my.cheysoff.desktop.ui.MananaColors
 import my.cheysoff.desktop.ui.NameServerScreen
@@ -25,6 +27,7 @@ import my.cheysoff.desktop.ui.PairingScreen
 import my.cheysoff.desktop.ui.MananaTheme
 import my.cheysoff.desktop.ui.UnlockScreen
 import my.cheysoff.desktop.ui.MananaWindow
+import my.cheysoff.desktop.vault.BlocksBackup
 import my.cheysoff.desktop.vault.DesktopVault
 import my.cheysoff.desktop.vault.VaultLocation
 import java.io.PrintWriter
@@ -44,12 +47,19 @@ import java.nio.file.Paths
  * it gets a separate, equally real vault at that path.
  */
 fun main(args: Array<String>) {
+    // Before any composition: the block editor relies on Compose 1.12 styled text fields.
+    EditorFlags.enable()
     val directory = vaultDirectoryFrom(args)
     installCrashLog(directory)
-    val vault = DesktopVault(
-        directory = directory,
-        credentialStore = CredentialStores.forHost(HostOs.current(), directory),
-    )
+    // One-time snapshot of the vault before anything can open records.db: this is the first build
+    // that can rewrite note bodies as BLOCKS. See BlocksBackup for why, and why a failure does not
+    // stop the app from starting.
+    val vault = BlocksBackup.beforeOpening(directory) {
+        DesktopVault(
+            directory = directory,
+            credentialStore = CredentialStores.forHost(HostOs.current(), directory),
+        )
+    }
 
     application {
         val scope = rememberCoroutineScope()
@@ -100,6 +110,7 @@ fun main(args: Array<String>) {
             Window(
                 onCloseRequest = ::exitApplication,
                 title = "Manana",
+                icon = MananaIcon,
                 state = rememberWindowState(width = 1100.dp, height = 760.dp),
             ) {
                 MananaTheme {

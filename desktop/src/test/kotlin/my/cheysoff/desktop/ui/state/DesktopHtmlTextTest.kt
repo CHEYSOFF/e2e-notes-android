@@ -23,7 +23,7 @@ class DesktopHtmlTextTest {
 
     @Test
     fun `rc14 entity escaping round-trips back to the characters it replaced`() {
-        // What richeditor 1.0.0-rc14 wrote for "Milk, eggs, coffee." — bodies in this shape are
+        // What the pre-blocks editor's 1.0.0-rc14 release wrote for "Milk, eggs, coffee." — bodies in this shape are
         // still on disk and the desktop must read them.
         val stored = "<p>Milk&comma; eggs&comma; coffee&period;</p>"
         assertEquals("Milk, eggs, coffee.", htmlToPlainText(stored))

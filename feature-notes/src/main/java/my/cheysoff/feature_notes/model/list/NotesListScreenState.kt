@@ -1,6 +1,7 @@
 package my.cheysoff.feature_notes.model.list
 
 import androidx.compose.runtime.Immutable
+import my.cheysoff.core_domain.model.EventData
 import my.cheysoff.core_domain.model.NotesSortOrder
 import java.time.LocalDate
 import java.time.YearMonth
@@ -71,6 +72,16 @@ data class NotesListScreenState(
      * dropped: a note that is invisible in every view is indistinguishable from a lost note.
      */
     val calendarUndatedCount: Int = 0,
+    /**
+     * Events starting on [calendarSelectedDay], soonest first.
+     *
+     * Separate from [calendarDayNotes] rather than merged into one list: a note is filed on the day
+     * it was last worked on, an event is scheduled for a day, and showing them in one run would
+     * imply a relationship neither has to the other.
+     */
+    val calendarDayEvents: List<EventData> = emptyList(),
+    /** Days carrying at least one event, so the grid can mark them apart from note days. */
+    val calendarEventDays: Set<LocalDate> = emptySet(),
 )
 
 enum class BottomBarItem {

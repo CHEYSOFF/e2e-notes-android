@@ -183,6 +183,34 @@ fun AppNavHost(
                                 )
                                 .show()
                         }
+
+                        // Block path only: the note is read-only (or not open yet), so a new
+                        // picture or drawing had nowhere to go and was not saved.
+                        is SingleNoteEvent.PictureRefused -> {
+                            Toast
+                                .makeText(
+                                    context,
+                                    if (event.isDrawing) {
+                                        "This note can't be edited here, so the drawing wasn't added"
+                                    } else {
+                                        "This note can't be edited here, so the picture wasn't added"
+                                    },
+                                    Toast.LENGTH_LONG,
+                                )
+                                .show()
+                        }
+
+                        // The stored body can't be read, so no copy was written (it would not
+                        // hold the user's text).
+                        SingleNoteEvent.DuplicateRefused -> {
+                            Toast
+                                .makeText(
+                                    context,
+                                    "This note can't be read here, so it wasn't duplicated",
+                                    Toast.LENGTH_LONG,
+                                )
+                                .show()
+                        }
                     }
                 }
             }
@@ -192,6 +220,7 @@ fun AppNavHost(
                 onIntent = { intent -> viewModel.onIntent(intent) },
                 loadAttachment = { id -> viewModel.attachment(id) },
                 onColorMixed = { argb -> viewModel.onSketchColorMixed(argb) },
+                editorController = viewModel::editorController,
             )
         }
 

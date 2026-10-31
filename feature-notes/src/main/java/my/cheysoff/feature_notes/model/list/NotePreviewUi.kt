@@ -2,6 +2,7 @@ package my.cheysoff.feature_notes.model.list
 
 import androidx.compose.runtime.Immutable
 import androidx.core.text.HtmlCompat
+import my.cheysoff.core_blocks.BlockText
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.core_domain.model.NoteContentFormat
 import my.cheysoff.core_domain.model.NotePreview
@@ -46,7 +47,8 @@ fun Note.toUi(): NotePreviewUi {
 }
 
 private fun previewSnippet(content: String, format: NoteContentFormat): String =
-    if (format == NoteContentFormat.HTML) htmlToPlainText(content) else content.trim()
+    BlockText.bodyPlain(content, format)
+        ?: if (format == NoteContentFormat.HTML) htmlToPlainText(content) else content.trim()
 
 private fun htmlToPlainText(html: String): String =
     HtmlCompat.fromHtml(html, HtmlCompat.FROM_HTML_MODE_COMPACT).toString().trim()

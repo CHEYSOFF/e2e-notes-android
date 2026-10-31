@@ -212,7 +212,8 @@ class RecordSyncStore(
         // that a future record type with an unclocked column of its own fails to compile on both
         // platforms instead of being silently defaulted to `""` on this one.
         RecordType.NOTE, RecordType.FOLDER, RecordType.SKETCH -> ""
-        RecordType.ATTACHMENT -> existingMeta(codec.blindedIdOf(type.wireKey, uuid)).orEmpty()
+        RecordType.ATTACHMENT, RecordType.EVENT ->
+            existingMeta(codec.blindedIdOf(type.wireKey, uuid)).orEmpty()
     }
 
     private fun put(

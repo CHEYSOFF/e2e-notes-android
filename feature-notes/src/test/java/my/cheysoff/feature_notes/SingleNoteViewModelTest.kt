@@ -39,7 +39,7 @@ import java.util.UUID
  * `SingleNoteMergeTest` covers the pure functions this class is built out of (`mergeIncomingNote`,
  * `mergeChecklist`, `isDiscardableOnOpen`). Those were always testable. What was not, until
  * `kotlinx-coroutines-test` became resolvable, is everything that needs a clock and a dispatcher:
- * the 300 ms autosave debounce, the mutex that serializes writes, the baseline that has to move
+ * the 400 ms autosave debounce, the mutex that serializes writes, the baseline that has to move
  * with every one of them, and the latch that decides whether backing out of a note DESTROYS it.
  * Every data-loss bug this file guards against lives in that half.
  *
@@ -50,7 +50,7 @@ import java.util.UUID
  *  - `advanceUntilIdle()` means "let everything that can run, run"; `runCurrent()` means "run only
  *    what is scheduled for right now", which is how an un-debounced write is told from a debounced
  *    one; `advanceTimeBy(n)` runs tasks scheduled strictly before `now + n`, so a task scheduled at
- *    exactly +300 needs `advanceTimeBy(301)`.
+ *    exactly +400 needs `advanceTimeBy(401)`.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class SingleNoteViewModelTest {
@@ -226,7 +226,7 @@ class SingleNoteViewModelTest {
     // The baseline moves with every write
     //
     // The baseline is "what the stored row is known to hold". It is what tells an echo of our own
-    // save apart from someone else's change, and it is what `hasUnsavedContent()` compares against.
+    // save apart from someone else's change.
     // It is private, so these tests reach it the only honest way: through behaviour that can only
     // be right if the baseline moved.
     // ============================================================================================
@@ -266,40 +266,6 @@ class SingleNoteViewModelTest {
         assertEquals(0, repo.upsertCount())
         assertEquals(listOf(SingleNoteEvent.NavigateBack), events)
     }
-
-    @Test
-    fun `a body whose format marker changed but whose bytes did not still counts as unsaved`() =
-        runTest(mainDispatcherRule.dispatcher) {
-            // A legacy PLAIN row whose bytes happen to survive the rich-text round trip. The editor
-            // reports the same characters back, so only `contentFormat` moves — and the row must
-            // still be rewritten, or it keeps a PLAIN marker for a body the editor now treats as
-            // HTML and is re-parsed with the wrong reader on the next open.
-            repo.noteById.value = note(content = "hello", contentFormat = NoteContentFormat.PLAIN)
-            val vm = viewModel()
-            val events = collectEvents(vm)
-            advanceUntilIdle()
-
-            vm.onIntent(SingleNoteIntent.ContentChanged("hello"))
-            assertEquals(NoteContentFormat.HTML, vm.state.value.contentFormat)
-
-            vm.onIntent(SingleNoteIntent.BackClicked)
-            // runCurrent, NOT advanceUntilIdle. The ContentChanged above already queued a
-            // debounced autosave, so advancing the clock would produce the write whether or not
-            // back flushed anything — and the assertion below would then hold for a reason that
-            // has nothing to do with hasUnsavedContent(). (Written that way first; the mutation
-            // that strips the contentFormat comparison out of hasUnsavedContent() survived it.)
-            //
-            // Holding the clock still leaves exactly one thing that can produce a write here: the
-            // immediate flush back is supposed to perform before it navigates. Which is also the
-            // real requirement — popping the screen cancels viewModelScope, so a row left to the
-            // debounce is a row that keeps a PLAIN marker for a body the editor now treats as
-            // HTML, and gets re-parsed with the wrong reader on the next open.
-            runCurrent()
-
-            assertEquals(1, repo.upsertCount())
-            assertEquals(NoteContentFormat.HTML, repo.savedNotes.single().contentFormat)
-            assertEquals(listOf(SingleNoteEvent.NavigateBack), events)
-        }
 
     // --- writeMeta must claim ONLY the field its UPDATE actually wrote ---------------------------
     //
@@ -514,7 +480,8 @@ class SingleNoteViewModelTest {
             advanceUntilIdle()
 
             vm.onIntent(SingleNoteIntent.TitleChanged("ab"))
-            advanceTimeBy(300) // strictly before +300: the save is scheduled AT +300
+            // The one save debounce, the block editor's 400 ms (title edits share it).
+            advanceTimeBy(400) // strictly before +400: the save is scheduled AT +400
             assertEquals(0, repo.upsertCount())
 
             advanceTimeBy(1)
@@ -550,7 +517,7 @@ class SingleNoteViewModelTest {
             advanceUntilIdle()
 
             vm.onIntent(SingleNoteIntent.TitleChanged("ab"))
-            advanceTimeBy(50) // nowhere near the 300 ms window
+            advanceTimeBy(50) // nowhere near the 400 ms window
             vm.onIntent(SingleNoteIntent.BackClicked)
             advanceUntilIdle()
 
@@ -607,161 +574,15 @@ class SingleNoteViewModelTest {
         }
 
     // ============================================================================================
-    // Undo / redo
-    // ============================================================================================
-
-    @Test
-    fun `undo restores the previous title and persists it without waiting out the debounce`() =
-        runTest(mainDispatcherRule.dispatcher) {
-            repo.noteById.value = note(title = "a")
-            val vm = viewModel()
-            advanceUntilIdle()
-
-            vm.onIntent(SingleNoteIntent.TitleChanged("ab"))
-            advanceUntilIdle()
-            assertEquals(1, repo.upsertCount())
-            assertTrue(vm.state.value.canUndo)
-            assertFalse(vm.state.value.canRedo)
-
-            vm.onIntent(SingleNoteIntent.Undo)
-            // runCurrent, not advanceUntilIdle: pressing undo is a discrete action, so its write
-            // must be scheduled for now. A debounced write would still be 300 ms away here.
-            runCurrent()
-
-            assertEquals("a", vm.state.value.title)
-            assertFalse(vm.state.value.canUndo)
-            assertTrue(vm.state.value.canRedo)
-            assertEquals(2, repo.upsertCount())
-            assertEquals("a", repo.savedNotes.last().title)
-        }
-
-    @Test
-    fun `redo replays the undone edit and persists it`() = runTest(mainDispatcherRule.dispatcher) {
-        repo.noteById.value = note(title = "a")
-        val vm = viewModel()
-        advanceUntilIdle()
-
-        vm.onIntent(SingleNoteIntent.TitleChanged("ab"))
-        advanceUntilIdle()
-        vm.onIntent(SingleNoteIntent.Undo)
-        advanceUntilIdle()
-        vm.onIntent(SingleNoteIntent.Redo)
-        runCurrent()
-
-        assertEquals("ab", vm.state.value.title)
-        assertTrue(vm.state.value.canUndo)
-        assertFalse(vm.state.value.canRedo)
-        assertEquals(3, repo.upsertCount())
-        assertEquals("ab", repo.savedNotes.last().title)
-    }
-
-    @Test
-    fun `undo and redo on an empty stack do nothing at all`() = runTest(mainDispatcherRule.dispatcher) {
-        repo.noteById.value = note(title = "a")
-        val vm = viewModel()
-        advanceUntilIdle()
-
-        vm.onIntent(SingleNoteIntent.Undo)
-        vm.onIntent(SingleNoteIntent.Redo)
-        advanceUntilIdle()
-
-        assertEquals("a", vm.state.value.title)
-        assertEquals(0, repo.upsertCount())
-    }
-
-    @Test
-    fun `undoing a body edit restores the bytes and the format marker together`() =
-        runTest(mainDispatcherRule.dispatcher) {
-            // The marker says how the bytes are read. Restoring one without the other hands a
-            // plain body to the HTML reader, which swallows anything that looks like a tag —
-            // silent, permanent truncation, and the reason the format column exists at all.
-            repo.noteById.value = note(content = "a < b and c > d", contentFormat = NoteContentFormat.PLAIN)
-            val vm = viewModel()
-            advanceUntilIdle()
-
-            vm.onIntent(SingleNoteIntent.ContentChanged("<p>rewritten</p>"))
-            advanceUntilIdle()
-            assertEquals(NoteContentFormat.HTML, vm.state.value.contentFormat)
-
-            vm.onIntent(SingleNoteIntent.Undo)
-            runCurrent()
-
-            assertEquals("a < b and c > d", vm.state.value.content)
-            assertEquals(NoteContentFormat.PLAIN, vm.state.value.contentFormat)
-            // ...and the pair reaches the database as a pair, too.
-            val written = repo.savedNotes.last()
-            assertEquals("a < b and c > d", written.content)
-            assertEquals(NoteContentFormat.PLAIN, written.contentFormat)
-        }
-
-    @Test
-    fun `undoing a body edit bumps contentRevision so the editor re-seeds`() =
-        runTest(mainDispatcherRule.dispatcher) {
-            repo.noteById.value = note(content = "one")
-            val vm = viewModel()
-            advanceUntilIdle()
-
-            vm.onIntent(SingleNoteIntent.ContentChanged("<p>two</p>"))
-            advanceUntilIdle()
-            assertEquals(0, vm.state.value.contentRevision)
-
-            vm.onIntent(SingleNoteIntent.Undo)
-            runCurrent()
-            assertEquals(1, vm.state.value.contentRevision)
-
-            vm.onIntent(SingleNoteIntent.Redo)
-            runCurrent()
-            assertEquals(2, vm.state.value.contentRevision)
-        }
-
-    @Test
-    fun `ordinary typing never bumps contentRevision`() = runTest(mainDispatcherRule.dispatcher) {
-        // A bump re-seeds RichTextState from `content`, which moves the caret. The body changes on
-        // every debounced flush while the user types, so a bump on this path would yank the cursor
-        // to the end of the note mid-sentence.
-        repo.noteById.value = note(content = "one")
-        val vm = viewModel()
-        advanceUntilIdle()
-
-        vm.onIntent(SingleNoteIntent.ContentChanged("<p>two</p>"))
-        vm.onIntent(SingleNoteIntent.ContentChanged("<p>three</p>"))
-        vm.onIntent(SingleNoteIntent.TitleChanged("t"))
-        vm.onIntent(SingleNoteIntent.ChecklistItemAdded(newId = "i1", afterId = null))
-        advanceUntilIdle()
-
-        assertEquals(0, vm.state.value.contentRevision)
-    }
-
-    @Test
-    fun `undoing a checklist edit puts back the original item instances, ids and all`() =
-        runTest(mainDispatcherRule.dispatcher) {
-            repo.noteById.value = note(checklist = "0milk")
-            val vm = viewModel()
-            advanceUntilIdle()
-            val original = vm.state.value.checklist
-
-            vm.onIntent(SingleNoteIntent.ChecklistItemAdded(newId = "i2", afterId = null))
-            advanceUntilIdle()
-            assertEquals(2, vm.state.value.checklist.size)
-
-            vm.onIntent(SingleNoteIntent.Undo)
-            runCurrent()
-
-            // Same ids, so nothing loses focus and no in-flight keystroke is stranded.
-            assertEquals(original.map { it.id }, vm.state.value.checklist.map { it.id })
-            assertEquals(listOf("milk"), vm.state.value.checklist.map { it.text })
-        }
-
-    // ============================================================================================
-    // What each write path actually writes
+    // Format markers
     // ============================================================================================
 
     @Test
     fun `a title-only edit leaves a legacy plain body labelled PLAIN`() =
         runTest(mainDispatcherRule.dispatcher) {
-            // The one place a note earns the HTML label is the rich-text editor reporting a body.
-            // Labelling it anywhere else relabels an untouched legacy plain-text body, and the next
-            // open parses "Email John <john@example.com>" as markup and eats the address.
+            // A body changes format only when the block editor saves it as BLOCKS. A title-only
+            // save that relabelled an untouched legacy plain-text body as HTML would have the next
+            // open parse "Email John <john@example.com>" as markup and eat the address.
             repo.noteById.value = note(
                 title = "a",
                 content = "Email John <john@example.com>",
@@ -777,21 +598,6 @@ class SingleNoteViewModelTest {
             assertEquals("ab", written.title)
             assertEquals("Email John <john@example.com>", written.content)
             assertEquals(NoteContentFormat.PLAIN, written.contentFormat)
-        }
-
-    @Test
-    fun `a body edit writes the new bytes and the HTML marker together`() =
-        runTest(mainDispatcherRule.dispatcher) {
-            repo.noteById.value = note(content = "plain", contentFormat = NoteContentFormat.PLAIN)
-            val vm = viewModel()
-            advanceUntilIdle()
-
-            vm.onIntent(SingleNoteIntent.ContentChanged("<p>rich</p>"))
-            advanceUntilIdle()
-
-            val written = repo.savedNotes.single()
-            assertEquals("<p>rich</p>", written.content)
-            assertEquals(NoteContentFormat.HTML, written.contentFormat)
         }
 
     @Test
@@ -842,49 +648,6 @@ class SingleNoteViewModelTest {
         }
 
     @Test
-    fun `a structural checklist change is written immediately, typing into an item is debounced`() =
-        runTest(mainDispatcherRule.dispatcher) {
-            repo.noteById.value = note()
-            val vm = viewModel()
-            advanceUntilIdle()
-
-            vm.onIntent(SingleNoteIntent.ChecklistItemAdded(newId = "i1", afterId = null))
-            runCurrent()
-            assertEquals(1, repo.upsertCount())
-
-            vm.onIntent(SingleNoteIntent.ChecklistItemTextChanged(id = "i1", text = "milk"))
-            runCurrent()
-            assertEquals("typing into an item must wait out the debounce", 1, repo.upsertCount())
-
-            advanceUntilIdle()
-            assertEquals(2, repo.upsertCount())
-            assertEquals("0milk", repo.savedNotes.last().checklist)
-        }
-
-    @Test
-    fun `a checklist intent naming an item that is already gone is dropped`() =
-        runTest(mainDispatcherRule.dispatcher) {
-            // A keystroke can be in flight when the row it addresses is removed. Acting on it would
-            // record an undo step that appears to do nothing when taken.
-            repo.noteById.value = note(checklist = "0milk")
-            val vm = viewModel()
-            advanceUntilIdle()
-
-            vm.onIntent(SingleNoteIntent.ChecklistItemTextChanged(id = "ghost", text = "x"))
-            vm.onIntent(SingleNoteIntent.ChecklistItemToggled(id = "ghost"))
-            vm.onIntent(SingleNoteIntent.ChecklistItemRemoved(id = "ghost"))
-            advanceUntilIdle()
-
-            assertEquals(0, repo.upsertCount())
-            assertFalse(vm.state.value.canUndo)
-            assertEquals(listOf("milk"), vm.state.value.checklist.map { it.text })
-        }
-
-    // ============================================================================================
-    // Duplicate
-    // ============================================================================================
-
-    @Test
     fun `duplicate writes a new row and leaves the editor on the original`() =
         runTest(mainDispatcherRule.dispatcher) {
             repo.noteById.value = note(
@@ -914,10 +677,31 @@ class SingleNoteViewModelTest {
             assertEquals("f1", copy.folderId)
             // A second pinned card with a near-identical title reads as a glitch in the pager.
             assertFalse(copy.isPinned)
+            assertFalse(copy.isFavorite)
+            // Left for the repository's insert to stamp.
+            assertEquals(0L, copy.createdAt)
+            assertEquals(0L, copy.updatedAt)
 
             assertEquals(listOf(SingleNoteEvent.NoteDuplicated("Trip (copy)")), events)
             // The editor did not move.
             assertEquals("Trip", vm.state.value.title)
+        }
+
+    @Test
+    fun `a plain-text note keeps its plain marker when duplicated`() =
+        runTest(mainDispatcherRule.dispatcher) {
+            // The marker must travel with the same bytes it describes: labelling a legacy plain body
+            // as HTML would have it parsed on the next open and characters eaten.
+            repo.noteById.value = note(content = "Email John <john@example.com>", contentFormat = NoteContentFormat.PLAIN)
+            val vm = viewModel()
+            advanceUntilIdle()
+
+            vm.onIntent(SingleNoteIntent.DuplicateNote)
+            advanceUntilIdle()
+
+            val copy = repo.savedNotes.single()
+            assertEquals(NoteContentFormat.PLAIN, copy.contentFormat)
+            assertEquals("Email John <john@example.com>", copy.content)
         }
 
     @Test
@@ -984,125 +768,7 @@ class SingleNoteViewModelTest {
             assertEquals(listOf(SingleNoteEvent.NavigateBack), events)
         }
     // ============================================================================================
-    // Checklist editing
-    // ============================================================================================
-
-    @Test
-    fun `a new item is inserted after the one it was added from, not appended`() =
-        runTest(mainDispatcherRule.dispatcher) {
-            repo.noteById.value = note(checklist = "0milk\n0eggs")
-            val vm = viewModel()
-            advanceUntilIdle()
-            val milkId = vm.state.value.checklist.first().id
-
-            vm.onIntent(SingleNoteIntent.ChecklistItemAdded(newId = "new", afterId = milkId))
-            advanceUntilIdle()
-
-            // Pressing enter on a row opens the next line under THAT row; appending would send the
-            // caret to the bottom of the list instead.
-            assertEquals(listOf("milk", "", "eggs"), vm.state.value.checklist.map { it.text })
-            assertEquals("new", vm.state.value.checklist[1].id)
-        }
-
-    @Test
-    fun `an add whose anchor row is already gone appends instead of failing`() =
-        runTest(mainDispatcherRule.dispatcher) {
-            // The anchor id comes from the UI, so it can name a row that a concurrent removal has
-            // just taken out. Appending is the safe reading of "after nothing in particular".
-            repo.noteById.value = note(checklist = "0milk")
-            val vm = viewModel()
-            advanceUntilIdle()
-
-            vm.onIntent(SingleNoteIntent.ChecklistItemAdded(newId = "new", afterId = "ghost"))
-            advanceUntilIdle()
-
-            assertEquals(listOf("milk", ""), vm.state.value.checklist.map { it.text })
-        }
-
-    @Test
-    fun `toggling an item flips only that row and is written at once`() =
-        runTest(mainDispatcherRule.dispatcher) {
-            repo.noteById.value = note(checklist = "0milk\n0eggs")
-            val vm = viewModel()
-            advanceUntilIdle()
-            val eggsId = vm.state.value.checklist[1].id
-
-            vm.onIntent(SingleNoteIntent.ChecklistItemToggled(eggsId))
-            runCurrent()
-
-            assertEquals(listOf(false, true), vm.state.value.checklist.map { it.isDone })
-            assertEquals("0milk\n1eggs", repo.savedNotes.single().checklist)
-        }
-
-    @Test
-    fun `removing an item drops only that row and is written at once`() =
-        runTest(mainDispatcherRule.dispatcher) {
-            repo.noteById.value = note(checklist = "0milk\n0eggs\n0bread")
-            val vm = viewModel()
-            advanceUntilIdle()
-            val eggsId = vm.state.value.checklist[1].id
-
-            vm.onIntent(SingleNoteIntent.ChecklistItemRemoved(eggsId))
-            runCurrent()
-
-            assertEquals(listOf("milk", "bread"), vm.state.value.checklist.map { it.text })
-            assertEquals("0milk\n0bread", repo.savedNotes.single().checklist)
-        }
-
-    @Test
-    fun `typing into two different checklist rows makes two undo steps, not one`() =
-        runTest(mainDispatcherRule.dispatcher) {
-            // Undo steps are grouped by item id, so a burst within one row folds into a single
-            // step but moving to another row starts a new one. Sharing a group across rows would
-            // make one undo wipe both edits.
-            repo.noteById.value = note(checklist = "0milk\n0eggs")
-            val vm = viewModel()
-            advanceUntilIdle()
-            val (milkId, eggsId) = vm.state.value.checklist.map { it.id }
-
-            vm.onIntent(SingleNoteIntent.ChecklistItemTextChanged(milkId, "milkk"))
-            vm.onIntent(SingleNoteIntent.ChecklistItemTextChanged(eggsId, "eggss"))
-            advanceUntilIdle()
-            assertEquals(listOf("milkk", "eggss"), vm.state.value.checklist.map { it.text })
-
-            vm.onIntent(SingleNoteIntent.Undo)
-            advanceUntilIdle()
-            assertEquals(listOf("milkk", "eggs"), vm.state.value.checklist.map { it.text })
-
-            vm.onIntent(SingleNoteIntent.Undo)
-            advanceUntilIdle()
-            assertEquals(listOf("milk", "eggs"), vm.state.value.checklist.map { it.text })
-        }
-
-    @Test
-    fun `undo steps back through edits to different fields in the order they were made`() =
-        runTest(mainDispatcherRule.dispatcher) {
-            // One stack for the whole editor: the top-bar button steps back through the user's
-            // edits whichever field each one touched.
-            repo.noteById.value = note(title = "t0", content = "b0")
-            val vm = viewModel()
-            advanceUntilIdle()
-
-            vm.onIntent(SingleNoteIntent.TitleChanged("t1"))
-            advanceUntilIdle()
-            vm.onIntent(SingleNoteIntent.ContentChanged("<p>b1</p>"))
-            advanceUntilIdle()
-
-            vm.onIntent(SingleNoteIntent.Undo)
-            advanceUntilIdle()
-            // The body edit was last, so it is the first to come back — and the title edit is
-            // untouched by it, which is the point of recording per slice rather than per screen.
-            assertEquals("b0", vm.state.value.content)
-            assertEquals("t1", vm.state.value.title)
-
-            vm.onIntent(SingleNoteIntent.Undo)
-            advanceUntilIdle()
-            assertEquals("t0", vm.state.value.title)
-            assertEquals("b0", vm.state.value.content)
-        }
-
-    // ============================================================================================
-    // Live merging of database emissions
+    // Merge and duplicate
     // ============================================================================================
 
     @Test
@@ -1125,28 +791,6 @@ class SingleNoteViewModelTest {
             assertEquals("f2", vm.state.value.folderId)
             // Not editable, so always adopted — this is what keeps "Edited … ago" honest.
             assertEquals(2_000L, vm.state.value.updatedAt)
-        }
-
-    @Test
-    fun `the echo of our own checklist write leaves the row ids alone`() =
-        runTest(mainDispatcherRule.dispatcher) {
-            // Ids back the focus requesters and address the text/toggle/remove intents. Re-minting
-            // them on every emission steals focus from the row being typed into and strands any
-            // keystroke already in flight for it.
-            repo.noteById.value = note(checklist = "0milk")
-            val vm = viewModel()
-            advanceUntilIdle()
-            val milkId = vm.state.value.checklist.single().id
-
-            vm.onIntent(SingleNoteIntent.ChecklistItemTextChanged(milkId, "milkk"))
-            advanceUntilIdle()
-            assertEquals("0milkk", repo.savedNotes.single().checklist)
-
-            repo.noteById.value = note(checklist = "0milkk", updatedAt = 2_000L)
-            advanceUntilIdle()
-
-            assertEquals(milkId, vm.state.value.checklist.single().id)
-            assertEquals("milkk", vm.state.value.checklist.single().text)
         }
 
     @Test
@@ -1245,21 +889,6 @@ class SingleNoteViewModelTest {
             assertEquals("re-editing must not move createdAt", 111L, saved.createdAt)
             assertTrue("re-editing still stamps a fresh updatedAt", saved.updatedAt > 111L)
         }
-
-    @Test
-    fun `deleting a sketch goes through the repository's soft delete`() =
-        runTest(mainDispatcherRule.dispatcher) {
-            repo.noteById.value = note()
-            val vm = viewModel()
-            advanceUntilIdle()
-
-            vm.onIntent(SingleNoteIntent.SketchDeleted("s1"))
-            advanceUntilIdle()
-
-            assertEquals(listOf("s1"), sketchRepo.deleted)
-        }
-
-    // -- H1: a drawing must never be left orphaned by the blank-note discard on back -----------
 
     @Test
     fun `a note opened as new whose only content is a drawing is not purged on back`() =

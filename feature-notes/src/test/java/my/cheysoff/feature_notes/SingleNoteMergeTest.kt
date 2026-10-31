@@ -437,4 +437,18 @@ class SingleNoteMergeTest {
             nextSketchOrder(sketches, anchor = 0),
         )
     }
+
+    @Test
+    fun `a remote body adopted while the note is open reaches the state`() {
+        // The open editor takes the body through its assembled document (RemoteApply); the state's
+        // content must follow too, for the blank-note check and for share before the editor loads.
+        val empty = Note(id = "n", title = "", content = "", contentFormat = NoteContentFormat.PLAIN)
+        val first = mergeIncomingNote(SingleNoteScreenState(), baseline = null, incoming = empty)
+
+        val withText = empty.copy(content = "<p>typed on the laptop</p>", contentFormat = NoteContentFormat.HTML)
+        val second = mergeIncomingNote(first.state, first.baseline, withText)
+
+        assertEquals("<p>typed on the laptop</p>", second.state.content)
+        assertEquals(NoteContentFormat.HTML, second.state.contentFormat)
+    }
 }

@@ -45,7 +45,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import my.cheysoff.core_editor.ui.BlockEditorController
+import my.cheysoff.core_editor.ui.rememberBlockEditorController
 import my.cheysoff.desktop.ui.attachment.AttachmentViewer
+import my.cheysoff.desktop.ui.attachment.DesktopImageImporter
 import my.cheysoff.desktop.ui.attachment.orderedForDisplay
 import my.cheysoff.desktop.ui.state.NotesWorkspaceModel
 import my.cheysoff.desktop.ui.state.WorkspaceUiState
@@ -91,6 +94,12 @@ fun NotesWorkspaceScreen(
     textScale: TextScale,
     onCycleTextScale: () -> Unit,
 ) {
+    // The open note's block editor controller: one per note (keyed on its id). Held here, above
+    // both the editor pane and the full-screen viewer, because the viewer's Delete has to act
+    // through the editor (see deletePictureFromViewer).
+    val openNoteId = state.editor?.id
+    val blockController = if (openNoteId != null) rememberBlockEditorController(openNoteId) else null
+
     Box(modifier = Modifier.fillMaxSize().background(AppBlack)) {
         Column(modifier = Modifier.fillMaxSize()) {
             TitleBar(
@@ -138,20 +147,21 @@ fun NotesWorkspaceScreen(
                         now = now,
                         titleFocus = titleFocus,
                         onTitleChange = model::setTitle,
-                        onContentChange = model::setContent,
                         onSetFolder = model::setNoteFolder,
                         onTogglePin = model::togglePinned,
                         onToggleFavorite = model::toggleFavorite,
                         onDelete = model::deleteSelectedNote,
-                        onAddChecklistItem = model::addChecklistItem,
-                        onChecklistTextChange = model::setChecklistItemText,
-                        onToggleChecklistItem = model::toggleChecklistItem,
-                        onRemoveChecklistItem = model::removeChecklistItem,
                         sketches = state.sketches,
-                        onDeleteSketch = model::deleteSketch,
                         attachments = state.attachments,
                         onAttachmentTapped = { model.openAttachmentViewer(it.id) },
+                        onPasteImage = { image, onAttached ->
+                            model.pasteImage(onAttached) { DesktopImageImporter.import(image) }
+                        },
+                        pasteFailure = state.pasteFailure,
+                        onDismissPasteFailure = model::dismissPasteFailure,
                         modifier = Modifier.weight(1f),
+                        blockController = blockController,
+                        onBlocksChange = model::onBlocksChanged,
                     )
                 }
             }
@@ -173,9 +183,8 @@ fun NotesWorkspaceScreen(
         // update to the row is reflected immediately; a stale id (the row vanished from under the
         // viewer) simply renders nothing rather than a stale photo.
         state.attachments.firstOrNull { it.id == state.viewingAttachmentId }?.let { attachment ->
-            // The rail's own order, so the arrows, the dots and the tiles all agree about which
-            // photo comes next -- a second comparator here is exactly the drift sortAttachments'
-            // KDoc warns about.
+            // The shared display order, so the arrows and the dots agree about which photo comes
+            // next -- a second comparator here is exactly the drift sortAttachments' KDoc warns about.
             val ordered = remember(state.attachments) { orderedForDisplay(state.attachments) }
             AttachmentViewer(
                 attachment = attachment,
@@ -184,11 +193,22 @@ fun NotesWorkspaceScreen(
                 onClose = model::closeAttachmentViewer,
                 onDelete = { id ->
                     model.closeAttachmentViewer()
-                    model.deleteAttachment(id)
+                    blockController?.let { deletePictureFromViewer(id, it) }
                 },
             )
         }
     }
+}
+
+/**
+ * The full-screen viewer's Delete of picture [recordId]: removes the picture's block through the
+ * editor (`removePicture`), a local edit that is saved like typing and can be undone. The save then
+ * soft-deletes the record (`PictureLifecycle`), and an undo undeletes it. The record is never
+ * deleted here: with the block still in the body, the next save would bring it straight back. If no
+ * block shows the record, nothing is deleted.
+ */
+internal fun deletePictureFromViewer(recordId: String, blockController: BlockEditorController) {
+    blockController.removePicture(recordId)
 }
 
 /**

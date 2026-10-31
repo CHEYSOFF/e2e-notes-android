@@ -188,7 +188,7 @@ class Migration7to8Test {
             }
 
             val store = RoomSyncStore(
-                db, db.noteDao, db.folderDao, db.sketchDao, db.attachmentDao, db.syncStateDao,
+                db, db.noteDao, db.folderDao, db.sketchDao, db.attachmentDao, db.eventDao, db.syncStateDao,
                 "acct", ClockObserver {},
             )
             runBlocking {
@@ -216,7 +216,7 @@ class Migration7to8Test {
                 assertEquals("", c.getString(0))
             }
             val store = RoomSyncStore(
-                db, db.noteDao, db.folderDao, db.sketchDao, db.attachmentDao, db.syncStateDao,
+                db, db.noteDao, db.folderDao, db.sketchDao, db.attachmentDao, db.eventDao, db.syncStateDao,
                 "acct", ClockObserver {},
             )
             runBlocking { assertNull(store.halt()) }
@@ -239,7 +239,7 @@ class Migration7to8Test {
         val db = openMigrated()
         try {
             val store = RoomSyncStore(
-                db, db.noteDao, db.folderDao, db.sketchDao, db.attachmentDao, db.syncStateDao,
+                db, db.noteDao, db.folderDao, db.sketchDao, db.attachmentDao, db.eventDao, db.syncStateDao,
                 "acct", ClockObserver {},
             )
             runBlocking {

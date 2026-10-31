@@ -119,20 +119,4 @@ class NotesWorkspaceModelSketchesTest {
 
         assertTrue(model.state.value.sketches.isEmpty())
     }
-
-    @Test
-    fun `deleteSketch drops the row immediately and calls through to the port`() = runTest {
-        val repository = InMemoryNotesRepository(notes = listOf(Note(id = "n1", title = "t", content = "")))
-        val fake = FakeSketches(mapOf("n1" to listOf(sketch("s1", "n1"), sketch("s2", "n1"))))
-        val model = model(repository, fake)
-        advanceUntilIdle()
-        model.selectNote("n1")
-        advanceUntilIdle()
-
-        model.deleteSketch("s1")
-
-        assertEquals("removed from state without waiting on the coroutine", listOf("s2"), model.state.value.sketches.map { it.id })
-        advanceUntilIdle()
-        assertEquals(listOf("s1"), fake.deletedIds)
-    }
 }

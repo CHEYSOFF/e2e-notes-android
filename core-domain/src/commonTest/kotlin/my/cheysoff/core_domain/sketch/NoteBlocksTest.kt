@@ -56,8 +56,8 @@ class NoteBlocksTest {
 
     @Test
     fun `a line break inside a paragraph does not undercount the blocks after it`() {
-        // "<p>first<br>second</p>" is real richeditor toHtml() output -- see the "line-break" case
-        // in RichEditorHtmlRoundTripTest.kt:292 -- with a second paragraph appended so a <br> that
+        // "<p>first<br>second</p>" is real output of the pre-blocks editor's toHtml() -- see the
+        // round-trip inputs in LegacyImportTest -- with a second paragraph appended so a <br> that
         // is wrongly treated as a nesting element shows up: it would leave the scanner's depth at
         // 1 instead of 0 after the first </p>, so "Third" below would never be counted.
         val html = "<p>first<br>second</p><p>Third</p>"

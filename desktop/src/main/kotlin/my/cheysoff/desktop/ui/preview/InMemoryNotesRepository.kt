@@ -38,7 +38,7 @@ class InMemoryNotesRepository(
     override fun getNoteById(id: String): Flow<Note?> =
         notesState.map { all -> all.firstOrNull { it.id == id && !it.isDeleted } }
 
-    override suspend fun saveNote(note: Note) {
+    override suspend fun saveNote(note: Note, blocksBase: String?) {
         notesState.value = notesState.value.upsert(note) { it.id == note.id }
     }
 

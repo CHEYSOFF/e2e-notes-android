@@ -1,0 +1,6 @@
+<component name="ArtifactManager">
+  <artifact type="jar" name="core-sync-net-jvm">
+    <output-path>$PROJECT_DIR$/core-sync-net/build/libs</output-path>
+    <root id="archive" name="core-sync-net-jvm.jar" />
+  </artifact>
+</component>

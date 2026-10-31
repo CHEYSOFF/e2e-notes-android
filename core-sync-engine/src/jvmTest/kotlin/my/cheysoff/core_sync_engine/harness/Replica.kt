@@ -319,6 +319,26 @@ class Replica(
             FieldClocks.UPDATED_AT to FieldValue.of(stampMs.toString()),
             FieldClocks.DELETED to FieldValue.of(SyncValues.FALSE, null),
         )
+
+        // `EventEntity`'s own Kotlin defaults, on the same principle as the three above. The
+        // schedule's six parts are in `FIELD_TO_COLUMNS[SCHEDULE]` order -- startAt, endAt,
+        // startLocal, endLocal, timeZone, allDay -- and a default event is a zero-length one at
+        // the stamp, which is what a row carries before anything has been typed into it.
+        RecordType.EVENT -> mapOf(
+            FieldClocks.TITLE to FieldValue.of(""),
+            FieldClocks.SCHEDULE to FieldValue.of(
+                stampMs.toString(), stampMs.toString(), "", "", "", SyncValues.FALSE,
+            ),
+            FieldClocks.LOCATION to FieldValue.of(""),
+            FieldClocks.DESCRIPTION to FieldValue.of("", "plain"),
+            FieldClocks.REMINDERS to FieldValue.of(""),
+            FieldClocks.RECURRENCE to FieldValue.of(""),
+            FieldClocks.LINKED_NOTE to FieldValue.of(null),
+            FieldClocks.SHARE_TO_GOOGLE to FieldValue.of(SyncValues.FALSE),
+            FieldClocks.COLOR to FieldValue.of(null),
+            FieldClocks.UPDATED_AT to FieldValue.of(stampMs.toString()),
+            FieldClocks.DELETED to FieldValue.of(SyncValues.FALSE, null),
+        )
     }
 
     // ── Driving the engine ─────────────────────────────────────────────────────────────────────

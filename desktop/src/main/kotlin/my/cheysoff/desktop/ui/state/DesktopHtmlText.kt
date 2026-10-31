@@ -1,21 +1,22 @@
 package my.cheysoff.desktop.ui.state
 
 import com.mohamedrejeb.ksoup.entities.KsoupEntities
+import my.cheysoff.core_blocks.BlockText
 import my.cheysoff.core_domain.model.NoteContentFormat
 
 /**
  * Turns a stored note body into the plain text the list card and the search index see.
  *
  * The Android app does this with `HtmlCompat.fromHtml`, which does not exist off Android. Rather
- * than reach for a general HTML parser, this does the two things the app's own editor output
- * actually needs, and nothing else:
+ * than reach for a general HTML parser, this does the two things the pre-blocks editor's HTML
+ * output actually needs, and nothing else:
  *
  *  1. tags are removed, with the block-level ones turned into a line break so paragraphs and list
  *     items do not run together into one word ("milkeggscoffee");
- *  2. character references are decoded with [KsoupEntities], the *same* codec richeditor used to
- *     write them.
+ *  2. character references are decoded with [KsoupEntities], the *same* codec the pre-blocks
+ *     editor used to write them.
  *
- * Point 2 is the load-bearing one. Bodies written by richeditor 1.0.0-rc14 ran through
+ * Point 2 is the load-bearing one. Bodies written by that editor's 1.0.0-rc14 release ran through
  * `KsoupEntities.encodeHtml`, which emits a named entity for nearly every punctuation mark and
  * every non-ASCII letter — "." is stored as `&period;`, a Cyrillic "р" as `&rcy;`. A hand-written
  * entity table would decode the handful of names someone thought of and leave a Russian note
@@ -31,9 +32,13 @@ fun htmlToPlainText(html: String): String {
     return KsoupEntities.decodeHtml(stripped).trim()
 }
 
-/** [htmlToPlainText] for HTML rows; a verbatim trim for PLAIN ones, matching `Note.toUi()`. */
+/**
+ * [htmlToPlainText] for HTML rows; a verbatim trim for PLAIN ones, matching `Note.toUi()`; the
+ * blocks reading from [BlockText] for BLOCKS ones.
+ */
 fun noteBodyAsPlainText(content: String, format: NoteContentFormat): String =
-    if (format == NoteContentFormat.HTML) htmlToPlainText(content) else content.trim()
+    BlockText.bodyPlain(content, format)
+        ?: if (format == NoteContentFormat.HTML) htmlToPlainText(content) else content.trim()
 
 /**
  * Tags whose closing (or self-closing) form ends a line of rendered text. Everything else — <b>,

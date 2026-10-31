@@ -21,7 +21,7 @@ ksp {
 
 android {
     namespace = "my.cheysoff.core_data"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 24
@@ -63,6 +63,8 @@ android {
 dependencies {
     implementation(project(":core-domain"))
     implementation(project(":core-crypto"))
+    // saveNote stamps and encodes BLOCKS bodies, and reconciles a note's pictures against them.
+    implementation(project(":core-blocks"))
     // `SyncStore` and the types it exchanges. `api`, not `implementation`: `RoomSyncStore` IS a
     // `SyncStore`, so anything that constructs one -- the app's sync wiring -- needs the interface
     // on its compile classpath too.

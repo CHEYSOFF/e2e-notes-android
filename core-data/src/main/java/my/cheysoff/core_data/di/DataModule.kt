@@ -15,6 +15,9 @@ import my.cheysoff.core_data.data.RoomSketchesRepository
 import my.cheysoff.core_data.data.local.AttachmentDao
 import my.cheysoff.core_data.data.local.FolderDao
 import my.cheysoff.core_data.data.local.NoteDao
+import my.cheysoff.core_data.data.local.EventDao
+import my.cheysoff.core_data.data.RoomEventsRepository
+import my.cheysoff.core_domain.repository.EventsRepository
 import my.cheysoff.core_data.data.local.NoteDatabase
 import my.cheysoff.core_data.data.local.SketchDao
 import my.cheysoff.core_data.data.local.SyncStateDao
@@ -49,6 +52,10 @@ abstract class DataModule {
         roomSketchesRepository: RoomSketchesRepository
     ): SketchesRepository
 
+
+    @Binds
+    @Singleton
+    abstract fun bindEventsRepository(impl: RoomEventsRepository): EventsRepository
     @Binds
     @Singleton
     abstract fun bindAttachmentsRepository(
@@ -168,6 +175,12 @@ abstract class DataModule {
         @Singleton
         fun provideAttachmentDao(database: NoteDatabase): AttachmentDao {
             return database.attachmentDao
+        }
+
+        @Provides
+        @Singleton
+        fun provideEventDao(database: NoteDatabase): EventDao {
+            return database.eventDao
         }
 
         /**

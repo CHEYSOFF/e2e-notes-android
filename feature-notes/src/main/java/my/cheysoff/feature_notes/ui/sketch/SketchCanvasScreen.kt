@@ -31,6 +31,7 @@ import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.automirrored.outlined.Backspace
 import androidx.compose.material3.AlertDialog
+import my.cheysoff.feature_notes.ui.attachment.pictureDeleteCopy
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -292,18 +293,18 @@ fun SketchCanvasScreen(
     }
 
     if (showDeleteConfirm) {
+        // The delete removes the drawing's block, which Undo restores. See pictureDeleteCopy.
+        val copy = pictureDeleteCopy(isDrawing = true)
         AlertDialog(
             containerColor = SurfaceDark,
             onDismissRequest = { showDeleteConfirm = false },
-            title = { Text("Delete this drawing?", color = TitleGrey) },
-            // Same wording as the photo viewer's, because it is the same fact: drawings are not
-            // kept in Trash either, so this really is final.
-            text = { Text("This cannot be undone.", color = BodyGrey) },
+            title = { Text(copy.title, color = TitleGrey) },
+            text = { Text(copy.body, color = BodyGrey) },
             confirmButton = {
                 TextButton(onClick = {
                     showDeleteConfirm = false
                     onDelete?.invoke()
-                }) { Text("Delete", color = AccentIndigo) }
+                }) { Text(copy.confirm, color = AccentIndigo) }
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel", color = BodyGrey) }

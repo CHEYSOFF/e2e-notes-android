@@ -13,7 +13,7 @@ kotlin {
 
 android {
     namespace = "my.cheysoff.notes"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "my.cheysoff.notes"
@@ -70,6 +70,9 @@ dependencies {
     // blob the server stores. `:app` is where the two meet the HTTP client and the account keys.
     implementation(project(":core-sync-engine"))
     implementation(project(":core-sync-codec"))
+    // BlockMerge, handed to the sync engine so BLOCKS bodies merge block by block.
+    implementation(project(":core-blocks"))
+    implementation(project(":core-editor"))
 
     implementation(libs.androidx.core.ktx)
     // The sync server address is a preference, stored the same way every other preference in this
@@ -105,6 +108,9 @@ dependencies {
     androidTestImplementation(libs.androidx.room.ktx)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    // ui-test-junit4 drives touches through espresso-core; the version it brings by default calls
+    // InputManager.getInstance, which Android 17 (SDK 37) no longer has. Pinned to one that works.
+    androidTestImplementation(libs.androidx.espresso.core)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

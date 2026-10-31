@@ -34,6 +34,11 @@ package my.cheysoff.core_domain.sync
  * **5. A clean row does not accept an older record.** The rollback guard;
  * see [RejectReason.ROLLBACK_SUSPECTED], which also states its blind spot.
  *
+ * **6. A body that can be merged is merged rather than contested.** A note's body is normally a
+ * single clocked value under rule 4. A [ContentMerger] may take over a pair of bodies it
+ * understands (BLOCKS bodies, merged block by block). Its result is then the body, at the greater
+ * of the two clocks, and there is nothing to preserve as a copy because nothing was discarded.
+ *
  * ## Why the result is convergent
  *
  * Every field is `max` over a total order (`(ms, counter, node)`, with value order as an
@@ -41,6 +46,9 @@ package my.cheysoff.core_domain.sync
  * associative and idempotent. So the merge is a join on a semilattice, which is the standard —
  * and the only — reason to believe N replicas exchanging records in any order end up in the same
  * place. The harness is what checks that the implementation actually is one.
+ *
+ * Rule 6 keeps that: the clock is still `max`, and a [ContentMerger] is required to be a join on
+ * the bodies it accepts. `BlockMergeConvergenceTest` checks that claim for BLOCKS.
  */
 object Merge {
 
@@ -54,8 +62,10 @@ object Merge {
      * @param remote the record that arrived, from a pull or inline in a `409`. The two are the
      *   same thing to this function and deliberately share one code path; a second, subtly
      *   different merge for the conflict case is how the two drift apart.
+     * @param contentMerger offered every pair of note bodies first; see rule 6. The default
+     *   declines all of them, which is the merge as it was before BLOCKS.
      */
-    fun merge(local: LocalRecord?, remote: SyncRecord): MergeResult {
+    fun merge(local: LocalRecord?, remote: SyncRecord, contentMerger: ContentMerger = ContentMerger.NONE): MergeResult {
         remote.validate()
 
         if (local == null) {
@@ -81,10 +91,22 @@ object Merge {
         val mergedFields = LinkedHashMap<String, FieldValue>(type.fields.size)
         val mergedClocks = LinkedHashMap<String, Hlc>(type.fields.size)
 
+        var bodyMerged = false
         for (field in type.fields) {
             // updatedAt is decided after the loop, because on a note it is not decided by its own
             // clock alone. Every other field is a plain max.
             if (field == FieldClocks.UPDATED_AT) continue
+            val mergedBody = if (type == RecordType.NOTE && field == FieldClocks.CONTENT) {
+                contentMerger.merge(local.record.valueOf(field), remote.valueOf(field))
+            } else {
+                null
+            }
+            if (mergedBody != null) {
+                bodyMerged = true
+                mergedClocks[field] = maxOf(local.record.clockOf(field), remote.clockOf(field))
+                mergedFields[field] = mergedBody
+                continue
+            }
             val (clock, value) = takeGreater(field, local.record, remote)
             mergedClocks[field] = clock
             mergedFields[field] = value
@@ -123,7 +145,8 @@ object Merge {
         // left. Anything else is a version only this device has, and the next push must send it.
         val dirty = merged != remote.normalized()
 
-        val copy = conflictCopy(local, remote)
+        // A merged body discarded nothing, so it owes no copy (rule 6).
+        val copy = if (bodyMerged) null else conflictCopy(local, remote)
         if (copy != null) {
             return MergeResult.ConflictCopy(record = merged, dirty = dirty, copy = copy)
         }
@@ -250,6 +273,12 @@ object Merge {
         // binding `updatedAt` to it as well would add a second clock to the max() that can only
         // ever equal the first.
         RecordType.ATTACHMENT -> FieldClocks.IMAGE
+        // `schedule` is an event's user-facing payload -- when it is *is* the event, the role
+        // `content` plays for a note. Not `title`: a Google import or a timezone normalisation pass
+        // rewrites titles, and binding `updatedAt` there would drag it on a non-user edit. Not
+        // `null` either, for the reason the SKETCH branch gives -- that would leave `updatedAt`
+        // depending on every write path remembering to stamp it alongside the schedule.
+        RecordType.EVENT -> FieldClocks.SCHEDULE
     }
 
     /** `max(the field's own clock, the companion field's clock)`. See [mergeUpdatedAt]. */

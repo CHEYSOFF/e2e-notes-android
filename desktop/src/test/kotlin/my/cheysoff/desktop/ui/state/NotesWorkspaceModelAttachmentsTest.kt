@@ -5,6 +5,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -14,9 +15,11 @@ import kotlinx.coroutines.test.runTest
 import my.cheysoff.core_domain.model.AttachmentData
 import my.cheysoff.core_domain.model.Note
 import my.cheysoff.desktop.store.DesktopAttachments
+import my.cheysoff.desktop.ui.attachment.DesktopImportResult
 import my.cheysoff.desktop.ui.preview.InMemoryNotesRepository
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -49,6 +52,13 @@ class NotesWorkspaceModelAttachmentsTest {
             deletedIds = deletedIds + id
             state.value = state.value.mapValues { (_, list) -> list.filterNot { it.id == id } }
         }
+
+        var saved = listOf<AttachmentData>(); private set
+
+        override suspend fun saveAttachment(attachment: AttachmentData) {
+            saved = saved + attachment
+            state.value = state.value + (attachment.noteId to state.value[attachment.noteId].orEmpty() + attachment)
+        }
     }
 
     private fun attachment(id: String, noteId: String, anchor: Int = 0) = AttachmentData(
@@ -73,7 +83,12 @@ class NotesWorkspaceModelAttachmentsTest {
     ): NotesWorkspaceModel {
         val scope = CoroutineScope(StandardTestDispatcher(testScheduler) + Job())
         scopes += scope
-        return NotesWorkspaceModel(repository = repository, scope = scope, attachments = attachments)
+        return NotesWorkspaceModel(
+            repository = repository,
+            scope = scope,
+            attachments = attachments,
+            encodeDispatcher = StandardTestDispatcher(testScheduler),
+        )
     }
 
     @Test
@@ -124,22 +139,56 @@ class NotesWorkspaceModelAttachmentsTest {
     }
 
     @Test
-    fun `deleteAttachment drops the row immediately and calls through to the port`() = runTest {
-        val repository = InMemoryNotesRepository(notes = listOf(Note(id = "n1", title = "t", content = "")))
-        val fake = FakeAttachments(mapOf("n1" to listOf(attachment("a1", "n1"), attachment("a2", "n1"))))
+    fun `pasteImage saves the image under the open note, anchored after its body`() = runTest {
+        val repository = InMemoryNotesRepository(
+            notes = listOf(Note(id = "n1", title = "t", content = "one\ntwo")),
+        )
+        val fake = FakeAttachments(mapOf("n1" to listOf(attachment("a0", "n1", anchor = 2))))
         val model = model(repository, fake)
         advanceUntilIdle()
         model.selectNote("n1")
         advanceUntilIdle()
 
-        model.deleteAttachment("a1")
-
-        assertEquals(
-            "removed from state without waiting on the coroutine",
-            listOf("a2"),
-            model.state.value.attachments.map { it.id },
-        )
+        model.pasteImage { DesktopImportResult.Imported(attachment("", "")) }
         advanceUntilIdle()
-        assertEquals(listOf("a1"), fake.deletedIds)
+
+        val saved = fake.saved.single()
+        assertEquals("n1", saved.noteId)
+        assertEquals(2, saved.anchor)
+        assertEquals(1, saved.order)
+        assertTrue(saved.id.isNotEmpty())
+        assertEquals(setOf("a0", saved.id), model.state.value.attachments.map { it.id }.toSet())
+        assertNull(model.state.value.pasteFailure)
+    }
+
+    @Test
+    fun `a failed paste saves nothing and says why`() = runTest {
+        val repository = InMemoryNotesRepository(notes = listOf(Note(id = "n1", title = "t", content = "")))
+        val fake = FakeAttachments()
+        val model = model(repository, fake)
+        advanceUntilIdle()
+        model.selectNote("n1")
+        advanceUntilIdle()
+
+        model.pasteImage { DesktopImportResult.TooLarge }
+        advanceUntilIdle()
+
+        assertTrue(fake.saved.isEmpty())
+        assertEquals(DesktopImportResult.TooLarge, model.state.value.pasteFailure)
+    }
+
+    @Test
+    fun `deleting a note whose only content is a pasted image trashes it instead of purging it`() = runTest {
+        val repository = InMemoryNotesRepository(notes = listOf(Note(id = "n1", title = "", content = "")))
+        val fake = FakeAttachments(mapOf("n1" to listOf(attachment("a1", "n1"))))
+        val model = model(repository, fake)
+        advanceUntilIdle()
+        model.selectNote("n1")
+        advanceUntilIdle()
+
+        model.deleteSelectedNote()
+        advanceUntilIdle()
+
+        assertEquals(listOf("n1"), repository.getDeletedNotes().first().map { it.id })
     }
 }

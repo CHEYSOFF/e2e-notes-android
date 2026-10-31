@@ -71,6 +71,7 @@ class RoomSyncStoreTest {
             folderDao = database.folderDao,
             sketchDao = database.sketchDao,
             attachmentDao = database.attachmentDao,
+        eventDao = database.eventDao,
             syncStateDao = database.syncStateDao,
             accountId = account,
             clockObserver = ClockObserver {},
@@ -679,7 +680,7 @@ class RoomSyncStoreTest {
         store.saveCursor(12L)
         val other = RoomSyncStore(
             database, database.noteDao, database.folderDao, database.sketchDao,
-            database.attachmentDao, database.syncStateDao,
+            database.attachmentDao, database.eventDao, database.syncStateDao,
             accountId = "acct-2",
             clockObserver = ClockObserver {},
         )
@@ -695,7 +696,7 @@ class RoomSyncStoreTest {
 
         val restarted = RoomSyncStore(
             database, database.noteDao, database.folderDao, database.sketchDao,
-            database.attachmentDao, database.syncStateDao, account,
+            database.attachmentDao, database.eventDao, database.syncStateDao, account,
             clockObserver = ClockObserver {},
         )
         assertEquals(HaltReason.SERVER_ROLLED_BACK, restarted.halt())

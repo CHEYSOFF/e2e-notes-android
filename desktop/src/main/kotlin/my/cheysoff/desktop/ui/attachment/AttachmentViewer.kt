@@ -61,7 +61,7 @@ private const val MaxScale = 6f
 private const val ScrollZoomStep = 1.08f
 
 /**
- * The full-screen viewer for one attachment, opened by tapping a tile in [AttachmentRail] -- a
+ * The full-screen viewer for one attachment, opened by clicking a picture in the note -- a
  * full-bleed overlay `Box` inside the app's one and only window, not a second OS window. This app
  * has exactly one native `Window` (see `DesktopApp.kt`'s `MananaWindow`); every other full-screen
  * or modal surface, including `SearchPalette`, is an overlay composed straight into that window's
@@ -78,10 +78,10 @@ private const val ScrollZoomStep = 1.08f
  * whatever size the one real window currently is.
  *
  * Mirrors the phone's `AttachmentViewerScreen`: `ContentScale.Fit`, a clamped zoom/pan, and a
- * delete that confirms and says plainly that it is final.
+ * delete that confirms first.
  *
  * [attachment] is the full row the caller already holds -- unlike the phone, there is no async
- * lookup here; see [AttachmentRail]'s KDoc for why the desktop never needs one.
+ * lookup here: `RecordNotesRepository` holds every row decrypted from unlock on.
  *
  * ## Zoom and pan
  * Scroll-to-zoom rather than pinch -- a desktop pointer has no multi-touch surface -- via
@@ -91,7 +91,7 @@ private const val ScrollZoomStep = 1.08f
  * not against the window's own box -- see that function's own KDoc for why the naive box-bound
  * version is wrong above 1x. [panBounds] is this module's own copy of
  * `AttachmentViewerScreen.panBounds` (Android): `:feature-notes` is an Android-only module this one
- * cannot depend on, the same reason [my.cheysoff.desktop.ui.notes.SketchSection] carries its own
+ * cannot depend on, the same reason `SketchCanvas` carries its own
  * copy of the sketch-drawing code rather than sharing `:core-ui`'s.
  *
  * Resizing the window recomputes [panBounds] against the new size in [onSizeChanged] itself and
@@ -101,10 +101,10 @@ private const val ScrollZoomStep = 1.08f
  * visible.
  *
  * ## Delete
- * Confirmed, and worded exactly like the phone's dialog and this module's own
- * [my.cheysoff.desktop.ui.notes.SketchSection] delete confirm: attachments are not in Trash
- * (`TrashEntryKind` is `{NOTE, FOLDER}`), so this delete is final, and a dialog that implied
- * otherwise would be worse than none (`docs/design/image-attachments.md` §8).
+ * Confirmed, and worded exactly like the phone's dialog (`pictureDeleteCopy`). [onDelete] removes
+ * the picture's block from the note through the editor (`deletePictureFromViewer`), an ordinary
+ * editor edit that Undo puts back, so the dialog says it can be undone rather than that it is
+ * final.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -134,7 +134,7 @@ fun AttachmentViewer(
     // decoded. Unlike the phone there is no database read here, because the workspace already
     // holds every open note's bytes; the decode alone is what this is hiding.
     //
-    // Decoded off the composing thread, as AttachmentRail's 64 KiB thumbnails need not be. A
+    // Decoded off the composing thread: these are the full-size bytes, not 64 KiB thumbnails. A
     // failed decode (corrupt or truncated bytes) is a message here, never a crash -- see
     // decodeAttachmentImage's own KDoc.
     LaunchedEffect(attachment.id, ordered) {
@@ -280,15 +280,13 @@ fun AttachmentViewer(
             AlertDialog(
                 containerColor = SurfaceDark,
                 onDismissRequest = { confirmDelete = false },
-                title = { Text("Delete this photo?", color = TitleGrey) },
-                text = {
-                    Text("This can't be undone. Photos aren't kept in Trash.", color = BodyGrey)
-                },
+                title = { Text("Remove this picture from the note?", color = TitleGrey) },
+                text = { Text("You can undo it.", color = BodyGrey) },
                 confirmButton = {
                     TextButton(onClick = {
                         confirmDelete = false
                         onDelete(attachment.id)
-                    }) { Text("Delete", color = AccentIndigo) }
+                    }) { Text("Remove", color = AccentIndigo) }
                 },
                 dismissButton = {
                     TextButton(onClick = { confirmDelete = false }) { Text("Cancel", color = BodyGrey) }

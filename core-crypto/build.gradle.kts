@@ -11,7 +11,7 @@ kotlin {
 
 android {
     namespace = "my.cheysoff.core_crypto"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 24

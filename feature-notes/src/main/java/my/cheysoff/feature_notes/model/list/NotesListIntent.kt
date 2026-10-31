@@ -29,6 +29,17 @@ sealed interface NotesListIntent {
      */
     data class CalendarDaySelected(val day: LocalDate) : NotesListIntent
 
+    /** Save a new or edited event. The ViewModel stamps nothing the repository owns. */
+    data class EventSaved(
+        val id: String?,
+        val title: String,
+        val day: LocalDate,
+        val startMinutes: Int?,
+        val durationMinutes: Int,
+    ) : NotesListIntent
+
+    data class EventDeleted(val id: String) : NotesListIntent
+
     /**
      * The user pulled the notes list down.
      *

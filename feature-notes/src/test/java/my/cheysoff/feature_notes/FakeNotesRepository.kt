@@ -54,6 +54,12 @@ internal class FakeNotesRepository : NotesRepository {
 
     /** The full [Note] handed to each [saveNote], so tests can assert on the columns written. */
     val savedNotes = mutableListOf<Note>()
+
+    /** The `blocksBase` each [saveNote] call passed, index-aligned with [savedNotes]. */
+    val savedBlocksBases = mutableListOf<String?>()
+
+    /** Notes whose [saveNote] ran to the end, past any gate: a cancelled save never gets here. */
+    val completedSaves = mutableListOf<Note>()
     val savedFolders = mutableListOf<Folder>()
 
     /** The `now` [purgeExpiredTrash] was called with, or null if it was never called. */
@@ -95,10 +101,12 @@ internal class FakeNotesRepository : NotesRepository {
 
     override fun getNoteById(id: String): Flow<Note?> = noteById
 
-    override suspend fun saveNote(note: Note) {
+    override suspend fun saveNote(note: Note, blocksBase: String?) {
         calls += "saveNote(${note.id})"
         savedNotes += note
+        savedBlocksBases += blocksBase
         gated("saveNote")
+        completedSaves += note
     }
 
     override suspend fun deleteNote(id: String) {

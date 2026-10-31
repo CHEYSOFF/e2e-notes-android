@@ -205,6 +205,9 @@ fun NotesListScreen(
     var editFolderTarget by remember { mutableStateOf<FolderPreviewUi?>(null) }
     var deleteFolderTarget by remember { mutableStateOf<FolderPreviewUi?>(null) }
     var moveNoteTarget by remember { mutableStateOf<NotePreviewUi?>(null) }
+    // Local, like the folder dialogs above it: opening the composer is not a decision the
+    // ViewModel has to make, and only the save it produces is.
+    var eventComposerFor by remember { mutableStateOf<LocalDate?>(null) }
 
     val folderRefs = remember(state.folderPreviews) {
         state.folderPreviews.map { FolderRef(it.id, it.name, it.colorArgb) }
@@ -298,7 +301,12 @@ fun NotesListScreen(
     
                 // Calendar is a mode too, for the same reasons spelled out above for Search.
                 if (state.selectedBottomBarItem == BottomBarItem.CALENDAR) {
-                    calendarPane(state, onIntent, onLongClick = { moveNoteTarget = it })
+                    calendarPane(
+                        state = state,
+                        onIntent = onIntent,
+                        onLongClick = { moveNoteTarget = it },
+                        onAddEvent = { eventComposerFor = state.calendarSelectedDay },
+                    )
                     return@LazyVerticalStaggeredGrid
                 }
     
@@ -407,6 +415,24 @@ fun NotesListScreen(
             selectedId = note.folderId,
             onDismiss = { moveNoteTarget = null },
             onSelect = { folderId -> onIntent(NotesListIntent.MoveNoteToFolder(note.id, folderId)); moveNoteTarget = null },
+        )
+    }
+    eventComposerFor?.let { day ->
+        EventComposer(
+            day = day,
+            onDismiss = { eventComposerFor = null },
+            onSave = { title, startMinutes, durationMinutes ->
+                onIntent(
+                    NotesListIntent.EventSaved(
+                        id = null,
+                        title = title,
+                        day = day,
+                        startMinutes = startMinutes,
+                        durationMinutes = durationMinutes,
+                    )
+                )
+                eventComposerFor = null
+            },
         )
     }
 }
@@ -1238,6 +1264,7 @@ private fun LazyStaggeredGridScope.calendarPane(
     state: NotesListScreenState,
     onIntent: (NotesListIntent) -> Unit,
     onLongClick: (NotePreviewUi) -> Unit,
+    onAddEvent: () -> Unit,
 ) {
     // The month and day are null only until the ViewModel's first calendar emission, which lands
     // with the rest of the initial state. Drawing nothing for that frame is deliberate: a grid
@@ -1262,21 +1289,49 @@ private fun LazyStaggeredGridScope.calendarPane(
     }
 
     item(span = StaggeredGridItemSpan.FullLine, contentType = "calendar_day_label") {
-        val n = state.calendarDayNotes.size
-        SectionLabel(
-            when {
-                n == 0 -> selectedDayLabel(selected)
-                n == 1 -> "${selectedDayLabel(selected)} · 1 note"
-                else -> "${selectedDayLabel(selected)} · $n notes"
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            val n = state.calendarDayNotes.size
+            Box(modifier = Modifier.weight(1f)) {
+                SectionLabel(
+                    when {
+                        n == 0 -> selectedDayLabel(selected)
+                        n == 1 -> "${selectedDayLabel(selected)} · 1 note"
+                        else -> "${selectedDayLabel(selected)} · $n notes"
+                    }
+                )
             }
-        )
+            // The only way to create an event. It sits on the day label rather than on the FAB
+            // because the FAB is the note button everywhere else in this screen, and a button that
+            // makes a different thing depending on an invisible mode is the kind of surprise this
+            // app keeps removing.
+            TextButton(onClick = onAddEvent) {
+                Text("Add event", color = AccentIndigo, style = MaterialTheme.typography.labelLarge)
+            }
+        }
     }
 
-    if (state.calendarDayNotes.isEmpty()) {
+    if (state.calendarDayEvents.isNotEmpty()) {
+        items(
+            items = state.calendarDayEvents,
+            key = { "event-" + it.id },
+            span = { StaggeredGridItemSpan.FullLine },
+            contentType = { "event" },
+        ) { event ->
+            EventRow(
+                event = event,
+                onDelete = { onIntent(NotesListIntent.EventDeleted(event.id)) },
+            )
+        }
+    }
+
+    if (state.calendarDayNotes.isEmpty() && state.calendarDayEvents.isEmpty()) {
         item(span = StaggeredGridItemSpan.FullLine, contentType = "calendar_message") {
             SearchMessage(
                 headline = "Nothing on this day",
-                detail = "Days with notes carry a dot under the number.",
+                detail = "Days with notes carry a dot under the number; days with events a ring.",
             )
         }
     }

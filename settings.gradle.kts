@@ -78,6 +78,13 @@ include(":core-sync-engine")
 // byte-level disagreement here is a note one device can write and the other cannot open.
 include(":core-sync-codec")
 
+// The BLOCKS note body: the block model and its canonical JSON codec. Pure common code so both
+// apps and the merge layer read and write one byte-identical format.
+include(":core-blocks")
+
+// The shared block-based note editor, written once in Compose Multiplatform and used by both apps.
+include(":core-editor")
+
 // The Compose Desktop app. Plain Kotlin/JVM -- it is the same binary on Windows, macOS and
 // Linux, and jpackage builds whichever installer the host OS supports.
 include(":desktop")

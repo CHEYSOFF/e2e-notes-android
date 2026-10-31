@@ -60,6 +60,10 @@ dependencies {
     implementation(project(":core-sync-codec"))
     implementation(project(":core-sync-engine"))
     implementation(project(":core-sync-net"))
+    // BlockMerge, handed to the sync engine so BLOCKS bodies merge block by block.
+    implementation(project(":core-blocks"))
+    // The shared block editor; Main.kt switches on its styled-text flag before the first window.
+    implementation(project(":core-editor"))
 
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
@@ -67,15 +71,9 @@ dependencies {
     // magnitude larger for the sake of glyphs this UI does not draw; the one icon it wants that
     // the core set lacks is the pin, and that is drawn by hand in PinGlyph.
     implementation(libs.compose.material.icons.core)
-    // 1.2.0, not the 1.1.0 the Android app is pinned to: 1.2.0 is the first release with a
-    // published `richeditor-compose-desktop` variant. The two agree on escaping (both emit a
-    // literal "." and escape only & < >), so HTML written on either platform round-trips. The
-    // version that does NOT agree is the 1.0.0-rc14 this project used to be on, whose
-    // entity-escaped bodies are still on disk; DesktopHtmlText reads those.
-    implementation(libs.richeditor.compose.desktop)
-    // richeditor's own HTML entity codec, declared explicitly because richeditor exposes it at
-    // RUNTIME only. Decoding rc14-era bodies with the library that encoded them is what makes the
-    // decode a guaranteed inverse rather than a hand-maintained entity table.
+    // The HTML entity codec the pre-blocks editor escaped note bodies with. DesktopHtmlText decodes
+    // HTML bodies still on disk (list snippets, search) with the same tables, so the decode is a
+    // guaranteed inverse rather than a hand-maintained entity table; see the toml entry.
     implementation(libs.ksoup.entities)
 
     // The record store. Plain SQLite over JDBC -- not SQLCipher: on desktop the confidentiality of
@@ -95,6 +93,8 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    // Compose UI tests of the editor pane (the picture click), the same harness :core-editor uses.
+    testImplementation(compose.desktop.uiTestJUnit4)
 }
 
 tasks.withType<Test>().configureEach {
@@ -159,6 +159,9 @@ compose.desktop {
                 // the two copies would each have their own Start-menu entry pointing at the same
                 // vault directory.
                 upgradeUuid = "0e4a2f5c-9b1d-4f8e-a3c7-6d2b8f4e1a90"
+                // The Android launcher icon (crescent on the indigo bloom), composed square. The
+                // window's own title-bar/taskbar icon is resources/manana_icon.png, the same art.
+                iconFile.set(project.file("icons/manana.ico"))
             }
 
             macOS {
@@ -177,6 +180,7 @@ compose.desktop {
             }
 
             linux {
+                iconFile.set(project.file("icons/manana.png"))
                 packageName = "manana"
                 menuGroup = "Office"
                 appCategory = "Office"

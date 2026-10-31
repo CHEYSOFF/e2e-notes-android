@@ -10,8 +10,8 @@ import my.cheysoff.core_domain.model.NoteContentFormat
  * The content is chosen to exercise the cases that break layouts rather than to look tidy: a
  * checklist note that is partly done, a note long enough to need truncation, a one-line note, an
  * untitled note, a note in no folder, and folders with wildly different name lengths. The bodies
- * are HTML written the way richeditor writes it, so the preview stripper and the editor's parser
- * are both doing real work in every screenshot.
+ * are HTML in the shape the pre-blocks editor wrote, so the preview stripper and the legacy import
+ * that opens them in the block editor are both doing real work in every screenshot.
  */
 object SampleLibrary {
 

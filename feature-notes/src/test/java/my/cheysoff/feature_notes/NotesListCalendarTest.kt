@@ -40,6 +40,7 @@ class NotesListCalendarTest {
 
     private val notesRepo = FakeNotesRepository()
     private val settingsRepo = FakeSettingsRepository()
+    private val eventsRepo = FakeEventsRepository()
     private val syncController = FakeSyncController()
 
     private val zone: ZoneId get() = ZoneId.systemDefault()
@@ -57,7 +58,7 @@ class NotesListCalendarTest {
         updatedAt = updatedAt,
     )
 
-    private fun viewModel() = NotesListViewModel(notesRepo, settingsRepo, syncController)
+    private fun viewModel() = NotesListViewModel(notesRepo, settingsRepo, syncController, eventsRepo)
 
     private fun currentNotes(vararg notes: Note) {
         notesRepo.notesFor(settingsRepo.notesSortOrder.value).value = notes.toList()
@@ -173,9 +174,10 @@ class NotesListCalendarTest {
             // grid would describe a day that is not on the grid.
             val moved = vm.state.value.calendarSelectedDay!!
             assertEquals(YearMonth.from(moved), vm.state.value.calendarMonth)
+            // Clamped to the shorter month: run on 31 October, the previous month has 30 days.
             assertEquals(
                 "the day-of-month carries across",
-                startDay.dayOfMonth,
+                minOf(startDay.dayOfMonth, startMonth.minusMonths(1).lengthOfMonth()),
                 moved.dayOfMonth,
             )
         }

@@ -1,6 +1,7 @@
 package my.cheysoff.core_sync_engine
 
 import kotlinx.coroutines.sync.Mutex
+import my.cheysoff.core_domain.sync.ContentMerger
 import my.cheysoff.core_domain.sync.Hlc
 import my.cheysoff.core_domain.sync.Merge
 import my.cheysoff.core_domain.sync.MergeResult
@@ -60,6 +61,9 @@ import my.cheysoff.core_domain.sync.SyncRecord
  * @param maxRounds how many pull/push rounds one [runPass] will do. A round happens only when the
  *   push merged something, so the cap is a guard against a pathological peer rather than a normal
  *   limit; §3 puts it at 3.
+ * @param contentMerger handed to `Merge.merge` for note bodies (BLOCKS bodies merge block by
+ *   block). A parameter rather than a dependency because the merger lives in a module this one
+ *   must not depend on. The default keeps plain last-writer-wins.
  */
 class SyncEngine(
     private val store: SyncStore,
@@ -69,6 +73,7 @@ class SyncEngine(
     private val batchLimit: Int = DEFAULT_BATCH_LIMIT,
     private val pageLimit: Int = DEFAULT_PAGE_LIMIT,
     private val maxRounds: Int = DEFAULT_MAX_ROUNDS,
+    private val contentMerger: ContentMerger = ContentMerger.NONE,
 ) {
 
     init {
@@ -517,7 +522,7 @@ class SyncEngine(
         remoteMeta: String?,
     ): Phase {
         val stored = store.load(remote.type, remote.uuid)
-        val result = Merge.merge(stored?.asLocalRecord(), remote)
+        val result = Merge.merge(stored?.asLocalRecord(), remote, contentMerger)
 
         // Fold every clock this device is shown into the generator, and do it before any early
         // return. A generator that has not seen an incoming clock can mint the next local write
@@ -647,15 +652,15 @@ class SyncEngine(
          * pulled under a lower number re-pulls its whole account once, which is cheap for a small
          * library and is not free for a large one.
          *
-         * `3` is `RecordType.ATTACHMENT`. A device on the `2` build sees `recType = "attachment"`,
-         * cannot map it, and skips it as `RecordFault.UNKNOWN_TYPE` -- counted as `ignored`, cursor
-         * still advancing, account not halted. That graceful skip is also what makes the bump
-         * mandatory: the cursor sails past every attachment record while the device is on `2`, so
-         * without a generation change to re-pull from 0 after the upgrade, those attachments would
-         * be invisible on that device permanently. `2` was `RecordType.SKETCH`, for the same
-         * reason.
+         * `4` is `RecordType.EVENT`. A device on the `3` build sees `recType = "event"`, cannot map
+         * it, and skips it as `RecordFault.UNKNOWN_TYPE` -- counted as `ignored`, cursor still
+         * advancing, account not halted. That graceful skip is also what makes the bump mandatory:
+         * the cursor sails past every event record while the device is on `3`, so without a
+         * generation change to re-pull from 0 after the upgrade, those events would be invisible on
+         * that device permanently. `3` was `RecordType.ATTACHMENT` and `2` `RecordType.SKETCH`, for
+         * the same reason each time.
          */
-        const val DATA_VERSION = 3
+        const val DATA_VERSION = 4
 
         /** The server refuses a batch of more than 64 items. */
         const val MAX_BATCH_LIMIT = 64
