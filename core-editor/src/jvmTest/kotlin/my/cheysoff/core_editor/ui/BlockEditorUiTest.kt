@@ -388,6 +388,27 @@ class BlockEditorUiTest {
     }
 
     @Test
+    fun `a picture keeps its height under a text style with a fixed line height, and hugs its shape`() = runComposeUiTest {
+        // The desktop's body style has a line height; it once squashed picture lines to a third.
+        EditorFlags.enable()
+        val controller = BlockEditorController("n1")
+        setContent {
+            BlockEditor(
+                "n1", doc(text, picture, number), {},
+                { _, _ -> Box(Modifier.fillMaxSize()) }, Modifier.width(800.dp), controller,
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 14.sp, lineHeight = 21.sp),
+                pictureHeight = 400.dp,
+                pictureAspect = { _, _ -> 1.5f },
+            )
+        }
+        waitForIdle()
+        val box = onNodeWithTag("picture-pic:r1").getBoundsInRoot()
+        val h = box.bottom - box.top
+        assertTrue(h.value in 360f..480f, "about the 400dp asked for: $h")
+        assertClose(h * 1.5f, box.right - box.left, "as wide as the photo's shape at that height")
+    }
+
+    @Test
     fun `the size buttons resize a selected picture`() = runComposeUiTest {
         EditorFlags.enable()
         val changes = mutableListOf<List<Block>>()

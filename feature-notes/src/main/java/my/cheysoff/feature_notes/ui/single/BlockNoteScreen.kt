@@ -448,6 +448,11 @@ private fun BlockNoteBody(
                 textStyle = bodyStyle.copy(color = Color(0xFFB9B9BD)),
                 placeholder = { Text("Start writing…", style = bodyStyle, color = Color(0xFF4A4A50)) },
                 pictureSizing = PictureSizing.Presets,
+                pictureAspect = { recordId, kind ->
+                    if (kind != BlockType.PICTURE) null
+                    else state.attachments.firstOrNull { it.id == recordId }
+                        ?.takeIf { it.width > 0 && it.height > 0 }?.let { it.width.toFloat() / it.height }
+                },
             )
         }
 

@@ -108,6 +108,10 @@ internal fun BlockNoteBody(
         selectionAccent = accent,
         textStyle = MaterialTheme.typography.bodyMedium.copy(color = EditorBodyGrey),
         pictureHeight = 400.dp,
+        pictureAspect = { recordId, kind ->
+            if (kind != BlockType.PICTURE) null
+            else attachments.firstOrNull { it.id == recordId }?.takeIf { it.width > 0 && it.height > 0 }?.let { it.width.toFloat() / it.height }
+        },
         placeholder = { Text("Start writing…", style = MaterialTheme.typography.bodyMedium, color = PlaceholderGrey) },
     )
 }

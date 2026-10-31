@@ -23,6 +23,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.isUnspecified
 import androidx.compose.ui.unit.sp
@@ -60,6 +61,9 @@ val DefaultEditorAccent = Color(0xFF7C5CFF)
  * - [pictureContent] draws a picture or drawing record into the space its line takes. It must
  *   cope with a record it cannot resolve (not synced yet, failed to decode) by drawing a
  *   placeholder; the block itself stays and is saved as it is.
+ * - [pictureAspect] gives a record's shape, width over height, or null when unknown. A picture's
+ *   box takes that shape, as large as fits the field's width and [pictureHeight], so the frame and
+ *   resize controls sit on the picture; an unknown shape takes the whole width.
  * - [pictureSizing] is how a selected picture or drawing is resized: a corner handle to drag
  *   (mouse) or a row of size buttons (touch). Either way the size syncs as part of the block.
  * - [selectionAccent] colours the selection handles and cursor, and at 30 % alpha the selection
@@ -83,6 +87,7 @@ fun BlockEditor(
     pictureHeight: Dp = 200.dp,
     placeholder: (@Composable () -> Unit)? = null,
     pictureSizing: PictureSizing = PictureSizing.Handle,
+    pictureAspect: (recordId: String, kind: BlockType) -> Float? = { _, _ -> null },
 ) {
     SideEffect { controller.onChange = onChange }
 
@@ -116,11 +121,19 @@ fun BlockEditor(
     val density = LocalDensity.current
     val textColor = textStyle.color.takeIf { it != Color.Unspecified } ?: Color.Black
     val bodySize = if (textStyle.fontSize.isUnspecified) 16.sp else textStyle.fontSize
-    // Keyed on the sizes, so a resize lays the field out again with the picture's line resized.
+    // Keyed on sizes, shapes and the field's width, so a resize (or a photo arriving) lays the
+    // field out again with the picture's line at its new height. The width is the last layout's:
+    // until there is one, a picture line takes the full height.
     val sizes = controller.model.pictureSizes
-    val styling = remember(bodySize, pictureHeight, density.fontScale, textColor, sizes) {
+    val refs = controller.model.refs
+    val aspects = controller.model.ids.filter { it.startsWith("pic:") || it.startsWith("drw:") }.associateWith { id ->
+        pictureAspect(refs[id] ?: id.substringAfter(':'), if (id.startsWith("drw:")) BlockType.DRAWING else BlockType.PICTURE)
+    }
+    val fieldWidth = controller.laidOut?.layout?.size?.width?.let { with(density) { it.toDp().value } } ?: 0f
+    val styling = remember(bodySize, pictureHeight, density.fontScale, textColor, sizes, aspects, fieldWidth) {
         EditorStyling(bodySize, pictureHeight, density.fontScale, textColor.copy(alpha = 0.45f)) { k ->
-            pictureScale(controller.model.ids.getOrNull(k)?.let(sizes::get))
+            val id = controller.model.ids.getOrNull(k)
+            pictureBox(fieldWidth, pictureHeight.value, aspects[id], sizes[id]).second.dp
         }
     }
     val input = remember(controller) { EditingRules(controller.model).then(ReportLocalEdits(controller)) }
@@ -147,7 +160,9 @@ fun BlockEditor(
                     .testTag(BlockEditorFieldTag),
                 inputTransformation = input,
                 outputTransformation = styling,
-                textStyle = textStyle,
+                // No fixed line height: it would squash a picture's line to a text line's height.
+                // Lines are spaced by EditorStyling's line-break gap instead.
+                textStyle = textStyle.copy(lineHeight = TextUnit.Unspecified),
                 cursorBrush = SolidColor(selectionAccent),
                 onTextLayout = { result -> controller.laidOut(result()) },
                 decorator = { inner ->
@@ -159,7 +174,7 @@ fun BlockEditor(
                 },
             )
             controller.laidOut?.let { view ->
-                BlockOverlays(controller, view, drag, selectionAccent, textColor, pictureSizing, pictureContent)
+                BlockOverlays(controller, view, drag, selectionAccent, textColor, pictureSizing, aspects, pictureContent)
             }
             drag.slot?.let { DropIndicator(it, selectionAccent) }
         }

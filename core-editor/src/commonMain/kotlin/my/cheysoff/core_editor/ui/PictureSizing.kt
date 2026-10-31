@@ -56,6 +56,20 @@ val LocalPictureSelected = compositionLocalOf { false }
 /** A picture's scale from its [size] (see `Block.size`): 1 at full size. */
 internal fun pictureScale(size: Int?): Float = (size ?: 100) / 100f
 
+/**
+ * The box a picture is drawn in, in dp, and so its line's height. At full size: the picture's own
+ * shape ([aspect], width over height) as large as fits [fieldWidth] x [maxHeight], or the whole
+ * [fieldWidth] x [maxHeight] when the shape is not known (a drawing, a record not synced yet).
+ * Then scaled by [size]. The box hugs the picture, so the selection frame and the resize handle
+ * sit on the picture itself.
+ */
+internal fun pictureBox(fieldWidth: Float, maxHeight: Float, aspect: Float?, size: Int?): Pair<Float, Float> {
+    val scale = pictureScale(size)
+    if (aspect == null || aspect <= 0f || fieldWidth <= 0f) return fieldWidth * scale to maxHeight * scale
+    val h = minOf(maxHeight, fieldWidth / aspect)
+    return h * aspect * scale to h * scale
+}
+
 /** The S/M/L/Full sizes, in percent (null is full). */
 internal val PresetSizes: List<Pair<String, Int?>> = listOf("S" to 25, "M" to 50, "L" to 75, "Full" to null)
 
@@ -63,8 +77,8 @@ internal val PresetSizes: List<Pair<String, Int?>> = listOf("S" to 25, "M" to 50
 private const val SNAP = 3
 
 /**
- * The size a drag to [right] (the picture's new right edge, in px) over a field [width] px wide
- * makes: in percent, at least [MIN_PICTURE_SIZE], null at full size, and snapped to the nearest
+ * The size a drag to [right] (the picture's new right edge, in px) makes for a picture [width] px
+ * wide at full size: in percent, at least [MIN_PICTURE_SIZE], null at full size, and snapped to the nearest
  * quarter when close to one.
  */
 internal fun draggedSize(right: Float, width: Float): Int? {
