@@ -148,6 +148,7 @@ fun MananaWindow(
         },
         state = windowState,
         title = "Mañana",
+        icon = MananaIcon,
         // Preview, not `onKeyEvent`: these have to fire while a text field has focus, and a
         // focused field consumes the ordinary event before the window ever sees it.
         onPreviewKeyEvent = { event ->

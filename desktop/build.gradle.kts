@@ -159,6 +159,9 @@ compose.desktop {
                 // the two copies would each have their own Start-menu entry pointing at the same
                 // vault directory.
                 upgradeUuid = "0e4a2f5c-9b1d-4f8e-a3c7-6d2b8f4e1a90"
+                // The Android launcher icon (crescent on the indigo bloom), composed square. The
+                // window's own title-bar/taskbar icon is resources/manana_icon.png, the same art.
+                iconFile.set(project.file("icons/manana.ico"))
             }
 
             macOS {
@@ -177,6 +180,7 @@ compose.desktop {
             }
 
             linux {
+                iconFile.set(project.file("icons/manana.png"))
                 packageName = "manana"
                 menuGroup = "Office"
                 appCategory = "Office"

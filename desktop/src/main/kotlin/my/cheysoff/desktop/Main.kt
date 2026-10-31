@@ -19,6 +19,7 @@ import my.cheysoff.desktop.platform.HostOs
 import my.cheysoff.desktop.ui.AccountInviteScreen
 import my.cheysoff.desktop.ui.CreatePassphraseScreen
 import my.cheysoff.desktop.ui.DamagedScreen
+import my.cheysoff.desktop.ui.MananaIcon
 import my.cheysoff.desktop.ui.FirstRunScreen
 import my.cheysoff.desktop.ui.MananaColors
 import my.cheysoff.desktop.ui.NameServerScreen
@@ -109,6 +110,7 @@ fun main(args: Array<String>) {
             Window(
                 onCloseRequest = ::exitApplication,
                 title = "Manana",
+                icon = MananaIcon,
                 state = rememberWindowState(width = 1100.dp, height = 760.dp),
             ) {
                 MananaTheme {
